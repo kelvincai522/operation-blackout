@@ -64,6 +64,38 @@ def local_stat(gray, k=9):
     return mean.astype(np.float32), np.sqrt(var).astype(np.float32)
 
 
+def dead_regions(gray, grid=8, thresh=0.045):
+    """Fraction of the frame that carries no legible content.
+
+    Mean luminance hides this completely: a frame whose bottom half is an empty
+    void and whose top half is bright fog averages out to a perfectly healthy
+    number. This splits the image into a grid and asks, per cell, whether even
+    its 95th percentile is below a visibility floor -- i.e. whether there is
+    anything in that cell a player could actually see.
+
+    Also reports the vertical split, because "the ground is missing" is the
+    specific failure this exists to catch.
+    """
+    h, w = gray.shape
+    ch, cw = h // grid, w // grid
+    dead = 0
+    for r in range(grid):
+        for c in range(grid):
+            cell = gray[r * ch:(r + 1) * ch, c * cw:(c + 1) * cw]
+            if cell.size and np.percentile(cell, 95) < thresh:
+                dead += 1
+    top = gray[: h // 2]
+    bottom = gray[h // 2:]
+    return {
+        "dead_cell_pct": round(100.0 * dead / (grid * grid), 2),
+        "top_half_mean": round(float(top.mean()), 4),
+        "bottom_half_mean": round(float(bottom.mean()), 4),
+        # >1 means the lower half is much darker than the upper half, which for
+        # a ground-level camera almost always means the floor is unlit or absent
+        "vertical_imbalance": round(float(top.mean() / max(bottom.mean(), 1e-4)), 3),
+    }
+
+
 def tiling_score(gray):
     """Detect repeating structure via horizontal/vertical autocorrelation.
 
@@ -176,6 +208,7 @@ def analyze(path):
             "grade_split": round(grade_split, 4),
         },
         "repetition": {k: round(v, 4) for k, v in tiling_score(lum).items()},
+        "coverage": dead_regions(lum),
         "histogram_32": hist,
     }
 
@@ -190,6 +223,8 @@ VERDICTS = [
     ("detail.flat_area_pct", ">", 45.0, "huge untextured areas - missing detail/normal/roughness variation"),
     ("detail.edge_energy", "<", 0.020, "very little edge detail - geometry and textures are too simple"),
     ("colour.grade_split", "<", 0.004, "no meaningful colour grade (shadows/highlights share a tint)"),
+    ("coverage.dead_cell_pct", ">", 18.0, "large areas of the frame contain nothing visible (unlit or missing geometry)"),
+    ("coverage.vertical_imbalance", ">", 3.0, "lower half far darker than upper - ground plane likely unlit or absent"),
     ("colour.mean_saturation", "<", 0.04, "nearly monochrome"),
     ("colour.mean_saturation", ">", 0.55, "oversaturated - breaks the photographic look"),
     # NOTE: the repetition metric collapses each image row to a single mean, so

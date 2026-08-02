@@ -26,11 +26,22 @@ import serving  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SHOTS = ROOT / "shots"
 
-SCENARIOS = [
-    "overview", "street", "interior", "alley", "rooftop",
-    "ads", "weapon_closeup", "muzzleflash", "firefight",
-    "enemy_closeup", "explosion", "dusk", "night", "materials",
-]
+# Scenario sets per level. --all renders the set matching --level, because a
+# market framing pointed at the harbor (or vice versa) just photographs a wall.
+SCENARIOS_BY_LEVEL = {
+    "market": [
+        "overview", "street", "interior", "alley", "rooftop",
+        "ads", "weapon_closeup", "muzzleflash", "firefight",
+        "enemy_closeup", "explosion", "dusk", "night", "materials",
+    ],
+    "harbor": [
+        "harbor_overview", "quay", "containers", "warehouse", "crane",
+        "gangway", "lightning", "rain_closeup",
+        "ads", "weapon_closeup", "muzzleflash", "firefight",
+        "enemy_closeup", "explosion",
+    ],
+}
+SCENARIOS = SCENARIOS_BY_LEVEL["market"]
 
 CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -51,11 +62,12 @@ def find_chrome():
     sys.exit("No Chrome/Edge found for headless capture.")
 
 
-def capture(chrome, base, scenario, out_path, w, h, t, seed, hud, quality, extra, timeout):
+def capture(chrome, base, scenario, out_path, w, h, t, seed, hud, quality, extra,
+            timeout, level="market"):
     url = (
         base + "/index.html"
-        + "?scenario=%s&t=%s&w=%d&h=%d&seed=%d&hud=%d&quality=%s"
-        % (scenario, t, w, h, seed, 1 if hud else 0, quality)
+        + "?scenario=%s&level=%s&t=%s&w=%d&h=%d&seed=%d&hud=%d&quality=%s"
+        % (scenario, level, t, w, h, seed, 1 if hud else 0, quality)
     )
     if extra:
         url += "&" + extra
@@ -133,9 +145,11 @@ def main():
     ap.add_argument("--extra", default="", help="extra URL query params")
     ap.add_argument("--timeout", type=int, default=300)
     ap.add_argument("--outdir", default=str(SHOTS))
+    ap.add_argument("--level", default="market", choices=sorted(SCENARIOS_BY_LEVEL))
     args = ap.parse_args()
 
-    names = SCENARIOS if args.all or not args.scenarios else args.scenarios
+    default_set = SCENARIOS_BY_LEVEL[args.level]
+    names = default_set if args.all or not args.scenarios else args.scenarios
     outdir = pathlib.Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     chrome = find_chrome()
@@ -147,7 +161,7 @@ def main():
             fname = "%s%s.png" % (name, ("_" + args.tag) if args.tag else "")
             out = outdir / fname
             r = capture(chrome, base, name, out, args.w, args.h, args.t, args.seed,
-                        args.hud, args.quality, args.extra, args.timeout)
+                        args.hud, args.quality, args.extra, args.timeout, args.level)
             results.append(r)
 
             rep = r.get("report") or {}

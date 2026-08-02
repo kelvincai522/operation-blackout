@@ -187,6 +187,26 @@
       bodyF: 380, bodyQ: 0.5, bodyDec: 0.07, bodyG: 0.55,
       clickF: 1400, clickQ: 1.0, clickG: 0.04, clickDec: 0.02,
       grains: 0, partials: null, rustle: 0.20
+    },
+    // ---- LEVEL 2 additions -------------------------------------------------
+    // Soaked concrete is still concrete underneath, but the boot displaces a
+    // film of standing water: brighter click, and a shower of fine droplet
+    // grains that dry concrete does not have. This is the single loudest cue
+    // that the harbor is wet.
+    wet_concrete: {
+      level: 0.98, subF: 104, subDec: 0.050, subG: 0.40,
+      bodyF: 760, bodyQ: 0.80, bodyDec: 0.058, bodyG: 0.78,
+      clickF: 3600, clickQ: 2.4, clickG: 0.30, clickDec: 0.014,
+      grains: 6, grainLo: 2600, grainHi: 9000, grainG: 0.26, rustle: 0.14
+    },
+    // Open steel grating: almost no body, all ring and rattle.
+    grate: {
+      level: 1.00, subF: 128, subDec: 0.035, subG: 0.26,
+      bodyF: 1500, bodyQ: 1.5, bodyDec: 0.045, bodyG: 0.55,
+      clickF: 5600, clickQ: 4.2, clickG: 0.46, clickDec: 0.011,
+      grains: 3, grainLo: 3000, grainHi: 9000, grainG: 0.16,
+      partials: [640, 1310, 2480, 3970, 5820], partialDec: 0.32, partialG: 0.24,
+      rustle: 0.13
     }
   };
   // Aliases so a level that reports material names straight from the collider
@@ -196,7 +216,16 @@
     stone: 'concrete', rock: 'gravel', painted_metal: 'metal',
     rusted_metal: 'metal', corrugated_metal: 'metal', wood_plank: 'wood',
     plank: 'wood', foliage: 'dirt', grass: 'dirt', fabric: 'carpet',
-    rubber: 'carpet', sandbag: 'sand', debris: 'rubble', road: 'asphalt'
+    rubber: 'carpet', sandbag: 'sand', debris: 'rubble', road: 'asphalt',
+    // ---- LEVEL 2 (Cold Harbor) material names -----------------------------
+    container_steel: 'metal', container_red: 'metal', container_blue: 'metal',
+    container_green: 'metal', reefer_panel: 'metal', ship_hull: 'metal',
+    deck_plate: 'metal', corrugated_roof: 'metal', chainlink: 'metal',
+    steel_grate: 'grate',
+    dock_concrete: 'wet_concrete', painted_line: 'wet_concrete',
+    puddle: 'wet_concrete', apron: 'wet_concrete',
+    sea_water: 'water', tarpaulin: 'carpet', rope: 'carpet',
+    rubber_fender: 'carpet'
   };
 
   // --------------------------------------------------------------------------
@@ -271,6 +300,16 @@
       bodyF0: 1200, bodyF1: 400, bodyQ: 0.6, bodyDec: 0.075, bodyG: 0.55,
       subF0: 170, subF1: 90, subDec: 0.05, subG: 0.20,
       grains: 3, grainLo: 1800, grainHi: 5200, grainG: 0.14, span: 0.10
+    },
+    // A shipping container is a 12m steel drum. A round through the flank is
+    // not a "ting" - it is a bright strike on top of a long, low, hollow BOOM
+    // as the whole box rings. Level 2 lives or dies on this sound.
+    hollow_metal: {
+      level: 1.12, crackF: 4200, crackQ: 1.9, crackDec: 0.022, crackG: 1.00,
+      bodyF0: 2200, bodyF1: 480, bodyQ: 1.1, bodyDec: 0.10, bodyG: 0.72,
+      subF0: 120, subF1: 62, subDec: 0.14, subG: 0.55,
+      partials: [148, 337, 692, 1245, 2310, 3880], partialDec: 0.85,
+      partialG: 0.34, grains: 0, span: 0.05
     }
   };
   var IMPACT_ALIAS = {
@@ -280,7 +319,16 @@
     painted_metal: 'metal', rusted_metal: 'metal', corrugated_metal: 'metal',
     steel: 'metal', wood_plank: 'wood', plank: 'wood', crate: 'wood',
     body: 'flesh', head: 'flesh', blood: 'flesh', enemy: 'flesh',
-    rubber: 'fabric', carpet: 'fabric', cloth: 'fabric', canopy: 'fabric'
+    rubber: 'fabric', carpet: 'fabric', cloth: 'fabric', canopy: 'fabric',
+    // ---- LEVEL 2 (Cold Harbor) material names -----------------------------
+    container_steel: 'hollow_metal', container_red: 'hollow_metal',
+    container_blue: 'hollow_metal', container_green: 'hollow_metal',
+    reefer_panel: 'hollow_metal', ship_hull: 'hollow_metal',
+    corrugated_roof: 'hollow_metal',
+    deck_plate: 'metal', steel_grate: 'metal', chainlink: 'metal',
+    wet_concrete: 'concrete', dock_concrete: 'concrete',
+    painted_line: 'concrete', puddle: 'water', sea_water: 'water',
+    tarpaulin: 'fabric', rope: 'fabric', rubber_fender: 'fabric'
   };
 
   // --------------------------------------------------------------------------
@@ -314,6 +362,41 @@
       hf0: 7800, hfDecay: 1.55, diffuse: 1.0, wet: 0.48,
       er: [[0.019, 0.50], [0.031, 0.42], [0.046, 0.36], [0.067, 0.30],
            [0.094, 0.24], [0.128, 0.19], [0.171, 0.14], [0.229, 0.10]]
+    },
+
+    // ---- LEVEL 2: COLD HARBOR ----------------------------------------------
+    // The open terminal. Enormous, hard, and WET - soaked steel and standing
+    // water absorb almost nothing, so the high end survives far longer than it
+    // does in the dusty market and the tail runs out past half a second of
+    // discrete slap-back off container walls and the freighter hull across the
+    // water. Sparse, late, LOUD reflections: this is what makes a gunshot here
+    // sound like it is happening in a place the size of a car park.
+    harbor: {
+      len: 3.10, predelay: 0.022, build: 0.010, decay: 2.05,
+      hf0: 8600, hfDecay: 1.30, diffuse: 0.62, wet: 0.46,
+      er: [[0.034, 0.62], [0.061, 0.50], [0.089, 0.55], [0.128, 0.40],
+           [0.171, 0.34], [0.223, 0.28], [0.287, 0.22], [0.361, 0.17],
+           [0.447, 0.13], [0.552, 0.095]]
+    },
+    // Inside the container canyons. Two parallel corrugated steel walls ~5m
+    // apart: a flutter echo like the alley but tighter, brighter and far more
+    // metallic, because steel reflects the top octave that plaster eats.
+    container: {
+      len: 1.70, predelay: 0.004, build: 0.002, decay: 4.0,
+      hf0: 9800, hfDecay: 1.90, diffuse: 0.80, wet: 0.52,
+      er: [[0.0148, 0.72], [0.0296, 0.60], [0.0444, 0.50], [0.0592, 0.42],
+           [0.0740, 0.35], [0.0888, 0.29], [0.1036, 0.24], [0.1184, 0.19],
+           [0.1332, 0.15], [0.1480, 0.12]]
+    },
+    // The warehouse interior: big volume, concrete floor, steel roof deck,
+    // racking breaking up the diffusion. Darker than the open quay - a roof
+    // and a back wall do absorb something.
+    warehouse: {
+      len: 2.30, predelay: 0.009, build: 0.006, decay: 3.0,
+      hf0: 5400, hfDecay: 2.30, diffuse: 1.0, wet: 0.50,
+      er: [[0.0092, 0.58], [0.0171, 0.50], [0.0263, 0.44], [0.0374, 0.38],
+           [0.0508, 0.32], [0.0669, 0.26], [0.0862, 0.21], [0.1093, 0.16],
+           [0.1368, 0.12]]
     }
   };
 
@@ -334,7 +417,58 @@
     hall: {
       times: [0.062, 0.121, 0.203, 0.334], gains: [0.30, 0.24, 0.175, 0.115],
       cuts: [3800, 2700, 1900, 1200], pans: [-0.65, 0.58, -0.34, 0.26], fb: 0.30
+    },
+    // Long, wide, and only gently darkened: 0.13s is a container stack 22m
+    // away, 0.61s is the freighter hull across 100m of black water.
+    harbor: {
+      times: [0.132, 0.238, 0.394, 0.611], gains: [0.42, 0.32, 0.21, 0.13],
+      cuts: [4200, 3000, 2100, 1300], pans: [-0.78, 0.70, -0.44, 0.30], fb: 0.10
+    },
+    container: {
+      times: [0.0154, 0.0301, 0.0468, 0.0951], gains: [0.48, 0.38, 0.30, 0.18],
+      cuts: [7600, 6000, 4400, 2900], pans: [-0.88, 0.84, -0.56, 0.38], fb: 0.50
+    },
+    warehouse: {
+      times: [0.0246, 0.0472, 0.0783, 0.1364], gains: [0.34, 0.27, 0.20, 0.12],
+      cuts: [4800, 3400, 2400, 1600], pans: [-0.62, 0.55, -0.34, 0.24], fb: 0.28
     }
+  };
+
+  // --------------------------------------------------------------------------
+  // LEVEL 2 positional anchors.
+  //
+  // level_harbor.js owns the layout and is authored in parallel with this file,
+  // so nothing here may *depend* on a field it publishes. Each anchor resolves
+  // in three steps: an explicit level.audioAnchors entry, else an offset from
+  // a published camera pose (the harbor level is contractually required to
+  // publish quay/containers/warehouse/crane/gangway/overview), else a hardcoded
+  // fallback consistent with the art bible - the apron runs along -Z, the
+  // player spawns at the landward south end, so the water is at negative Z.
+  // --------------------------------------------------------------------------
+  var HARBOR_ANCHORS = {
+    quay:      { pose: 'quay',       off: [0, -1.0, -8],   def: [0, 0.6, -26] },
+    water:     { pose: 'quay',       off: [0, -2.2, -15],  def: [0, -0.6, -34] },
+    hull:      { pose: 'gangway',    off: [0, 3.0, -11],   def: [6, 6.0, -42] },
+    reefer:    { pose: 'containers', off: [11, 0.6, 7],    def: [16, 1.4, -6] },
+    crane:     { pose: 'crane',      off: [0, 7.0, -6],    def: [-4, 12.0, -22] },
+    machinery: { pose: 'overview',   off: [-26, -8, 28],   def: [-38, 2.0, 22] },
+    horn:      { pose: 'quay',       off: [-22, 5, -66],   def: [-24, 6.0, -95] },
+    fence:     { pose: 'overview',   off: [22, -9, 20],    def: [30, 1.6, 20] }
+  };
+
+  // Which of the harbor material names read as "rain drumming on steel" versus
+  // "rain hissing into water and concrete". Drives the surface-dependent rain
+  // layers - the whole point of the requirement that rain on metal differs.
+  var RAIN_METAL = {
+    container_steel: 1, container_red: 1, container_blue: 1, container_green: 1,
+    reefer_panel: 1, ship_hull: 1, corrugated_roof: 1, deck_plate: 1,
+    steel_grate: 0.8, chainlink: 0.6, corrugated_metal: 1, rusted_metal: 0.9,
+    painted_metal: 0.9, metal: 1, steel: 1
+  };
+  var RAIN_DULL = {
+    wet_concrete: 1, dock_concrete: 1, painted_line: 1, concrete: 1,
+    concrete_wall: 0.8, sea_water: 1, water: 1, puddle: 1, asphalt: 0.9,
+    tarpaulin: 0.7, rubber_fender: 0.6, rope: 0.5
   };
 
   // Formant tables (F1,F2,F3) for abstract shouting. Real vowels, no words.
@@ -483,6 +617,33 @@
     this._ambTimers = [];
     this._boundUnlock = null;
     this._suspendedWarned = false;
+
+    // ---- LEVEL 2 (Cold Harbor) state ---------------------------------------
+    // `_env` is the ambience/reverb family, resolved from ctx.levelId unless an
+    // explicit preset was forced through setAmbience(). Level 1 must resolve to
+    // 'street' and take exactly the code path it always did, so every harbor
+    // behaviour in this file is gated on this one flag.
+    this._ambiencePreset = null;   // null = derive from ctx.levelId
+    this._env = 'street';
+    this._harbor = false;
+    this._rain = null;             // rain sub-graph, built with harbor ambience
+    this._rainLevel = 0;
+    this._covered = 0;             // 0..1 overhead occlusion (under a roof)
+    this._coverTarget = 0;
+    this._metalNear = 0;           // 0..1 how much steel is around us
+    this._dullNear = 0.5;          // 0..1 how much concrete/water is around us
+    this._probeTimer = 0.2;
+    this._windGains = null;
+    this._fenceGain = null;
+    this._thunderQueue = [];
+    this._thunderConv = [];
+    this._thunderIRs = [];
+    this._thunderIdx = 0;
+    this._lastStrike = -1e9;
+    this._prevFlash = 0;
+    this._windPan = 0;
+    this._anchors = null;
+    this._reefer = null;
 
     try { this._createContext(); }
     catch (e) { this.available = false; GAME.logError('audio.ctor', e); }
@@ -781,6 +942,146 @@
     return buf;
   };
 
+  // Rain. NOT noise: a dense field of individual droplet impacts, each a very
+  // short decaying burst with its own amplitude. Filtered white noise is
+  // spectrally similar but perceptually wrong - the ear resolves the leading
+  // edges of nearby drops, and a source without them reads as hiss forever,
+  // however cleverly it is EQ'd. `drops` is impacts per second per channel;
+  // 2600 is heavy rain on a hard surface, 9000 is the fine sheet in the air.
+  Audio.prototype._makeRainPatter = function (seconds, channels, drops) {
+    var sr = this.sampleRate, n = Math.floor(sr * seconds);
+    channels = channels || 2;
+    var buf = this.actx.createBuffer(channels, n, sr);
+    var rng = this.rng;
+    var count = Math.floor(seconds * drops);
+    for (var c = 0; c < channels; c++) {
+      var d = buf.getChannelData(c);
+      for (var k = 0; k < count; k++) {
+        var i = (rng.next() * (n - 96)) | 0;
+        // Squared amplitude distribution: a lot of faint distant drops, a few
+        // loud close ones. Uniform amplitudes sound like applause.
+        var u = rng.next();
+        var amp = u * u * rng.range(0.6, 1.0);
+        var len = 6 + ((rng.next() * rng.next() * 90) | 0);
+        var inv = 1 / len;
+        for (var j = 0; j < len; j++) {
+          // Each drop is its own micro burst of noise under a linear decay.
+          d[i + j] += rng.range(-1, 1) * amp * (1 - j * inv);
+        }
+      }
+      // Normalise so layer gains mean the same thing at any density.
+      var peak = 0;
+      for (var s = 0; s < n; s++) { var v = d[s] < 0 ? -d[s] : d[s]; if (v > peak) peak = v; }
+      if (peak > 1e-6) {
+        var g = 0.72 / peak;
+        for (var q = 0; q < n; q++) d[q] *= g;
+      }
+    }
+    return buf;
+  };
+
+  // Thunder impulse response.
+  //
+  // Thunder is not one event. The channel is kilometres of turbulent, layered
+  // air, and the report of a discharge several kilometres long arrives as a
+  // smeared train of arrivals from different parts of the bolt at different
+  // distances - which is why real thunder ROLLS: it swells, dies back, swells
+  // again, and finally trails off. Modelling that as an envelope on a noise
+  // burst never works, because the swells have to be applied to the *channel*,
+  // not to the source. So: build a long IR with irregular gaussian swells and
+  // a handful of discrete arrivals, then push a short excitation through it.
+  // Excite it with a bright burst and you get a close crack that decays into a
+  // roll; excite it with a dark, soft one and you get distant rumble.
+  Audio.prototype._makeThunderIR = function (seconds, variant) {
+    var sr = this.sampleRate;
+    var n = Math.floor(sr * seconds);
+    var buf = this.actx.createBuffer(2, n, sr);
+    // Deterministic per variant so two runs produce identical thunder.
+    var rng = new GAME.RNG((0x7B0DE7 ^ hashStr('thunder' + variant)) >>> 0);
+
+    // 4-8 swells: the audible "roll". Centres are biased early but the widest
+    // ones sit late, which is what makes thunder trail rather than stop.
+    var nSw = 4 + (variant % 3) + rng.int(0, 2);
+    var sw = [];
+    for (var s = 0; s < nSw; s++) {
+      var frac = Math.pow(rng.next(), 0.75);
+      sw.push({
+        c: frac * seconds,
+        w: rng.range(0.18, 0.55) + frac * rng.range(0.4, 1.5),
+        g: rng.range(0.35, 1.35) * (1 - frac * 0.45)
+      });
+    }
+    // Discrete arrivals - separate branches of the bolt, or a reflection off
+    // the cloud base. These are what give a strike its "cracks within cracks".
+    var nAr = 2 + rng.int(0, 3);
+    var ar = [];
+    for (var b = 0; b < nAr; b++) {
+      ar.push({ t: rng.range(0.01, seconds * 0.55), g: rng.range(0.25, 0.9) });
+    }
+
+    // Precompute the swell x decay envelope at 64-sample (~1.3ms) resolution.
+    // Evaluating nine gaussians per sample for half a million samples is the
+    // whole cost of this function, and the envelope is smooth on a scale
+    // thousands of times coarser than that.
+    var STEP = 64;
+    var nb = ((n / STEP) | 0) + 2;
+    var ampTab = new Float32Array(nb);
+    for (var e0 = 0; e0 < nb; e0++) {
+      var te = (e0 * STEP) / sr;
+      var acc = 0.16;
+      for (var q0 = 0; q0 < sw.length; q0++) {
+        var du = (te - sw[q0].c) / sw[q0].w;
+        acc += sw[q0].g * Math.exp(-du * du);
+      }
+      ampTab[e0] = acc * Math.exp(-te * 0.30);
+    }
+
+    var total = 0;
+    for (var ch = 0; ch < 2; ch++) {
+      var d = buf.getChannelData(ch);
+      var lp = 0, lp2 = 0, hp = 0, hpPrev = 0;
+      // Decorrelate the ears: the two paths through the air are not identical.
+      var jitter = ch ? 1.06 : 0.95;
+      // Two cascaded one-poles whose corner collapses with time: distance eats
+      // the top end, and it keeps eating it as the roll goes on. Tabled at the
+      // same coarse resolution as the envelope for the same reason.
+      var kTab = new Float32Array(nb);
+      for (var k0 = 0; k0 < nb; k0++) {
+        var tk = (k0 * STEP) / sr;
+        var cut = (1400 * Math.exp(-tk * 0.55) + 55) * jitter;
+        kTab[k0] = 1 - Math.exp(-2 * Math.PI * Math.min(cut, sr * 0.45) / sr);
+      }
+      for (var i = 0; i < n; i++) {
+        var b0 = i / STEP | 0;
+        var w = rng.range(-1, 1);
+        var k = kTab[b0];
+        lp += (w - lp) * k;
+        lp2 += (lp - lp2) * k;
+        // Kill DC so the limiter is not fighting an offset.
+        hp = 0.9975 * (hp + lp2 - hpPrev);
+        hpPrev = lp2;
+        d[i] = hp * ampTab[b0];
+      }
+      for (var a2 = 0; a2 < ar.length; a2++) {
+        var idx = Math.floor((ar[a2].t + (ch ? 0.004 : -0.004)) * sr);
+        if (idx < 2 || idx >= n - 400) continue;
+        // Smeared arrival, not a click: 8ms of decaying noise.
+        var alen = Math.floor(sr * 0.008);
+        for (var m = 0; m < alen; m++) {
+          d[idx + m] += rng.range(-1, 1) * ar[a2].g * (1 - m / alen) * 0.55;
+        }
+      }
+      for (var e = 0; e < n; e++) total += d[e] * d[e];
+    }
+    // Constant-energy normalisation so all three variants sit at one level.
+    var norm = total > 1e-9 ? (1.0 / Math.sqrt(total)) * 26 : 0;
+    for (var cc = 0; cc < 2; cc++) {
+      var dd = buf.getChannelData(cc);
+      for (var z = 0; z < n; z++) dd[z] *= norm;
+    }
+    return buf;
+  };
+
   // Crossfade a buffer's tail into its head so a looping source has no seam.
   Audio.prototype._sealLoop = function (buffer, fadeSec) {
     var sr = this.sampleRate;
@@ -870,6 +1171,8 @@
   Audio.prototype.build = async function () {
     if (!this.available) return;
     try {
+      this._resolveEnv();
+
       this.buffers.white = this._makeWhite(2.5);
       this.buffers.grain = this._makeGrain(1.2);
       await GAME.yieldFrame();
@@ -883,13 +1186,44 @@
       // In a headless capture there is no audio device and nothing is ever
       // unlocked, so skip ~700k samples of convolution data we would never use.
       if (!GAME.headless) {
-        var names = ['outdoor', 'interior', 'alley', 'hall'];
+        var names = this._harbor
+          ? ['harbor', 'container', 'warehouse', 'outdoor', 'interior']
+          : ['outdoor', 'interior', 'alley', 'hall'];
         for (var i = 0; i < names.length; i++) {
           this.irs[names[i]] = this._makeIR(names[i]);
           await GAME.yieldFrame();
         }
-        this.convA.buffer = this.irs.outdoor;
-        this.convB.buffer = this.irs.outdoor;
+        if (this._harbor) {
+          this.reverbPreset = 'harbor';
+          this.convA.buffer = this.irs.harbor;
+          this.convB.buffer = this.irs.harbor;
+          this._applyEchoPreset('harbor', 0);
+        } else {
+          this.convA.buffer = this.irs.outdoor;
+          this.convB.buffer = this.irs.outdoor;
+        }
+      }
+
+      // Storm-only material. None of this is generated for level 1, so the
+      // market's boot cost and its buffer table are byte-for-byte unchanged.
+      if (this._harbor && !GAME.headless) {
+        // Individually resolvable drop impacts, not a hiss. Rain that is only
+        // filtered noise reads as tape hiss no matter how it is EQ'd.
+        this.buffers.rainPatter =
+          this._sealLoop(this._makeRainPatter(5.0, 2, 2600), 0.35);
+        await GAME.yieldFrame();
+        this.buffers.rainFine =
+          this._sealLoop(this._makeRainPatter(4.0, 2, 9000), 0.30);
+        await GAME.yieldFrame();
+
+        // Three thunder impulse responses. A single decaying blob does not
+        // sound like thunder; these carry irregular amplitude swells so the
+        // rumble rolls, doubles back and dies unevenly like the real thing.
+        var tLens = [5.2, 7.4, 9.6];
+        for (var k = 0; k < tLens.length; k++) {
+          this._thunderIRs.push(this._makeThunderIR(tLens[k], k));
+          await GAME.yieldFrame();
+        }
       }
 
       this._driveCurve = driveCurve(1.0);
@@ -899,6 +1233,65 @@
       GAME.logError('audio.build', e);
       this.available = false;
     }
+  };
+
+  // Which ambience/reverb family we are in. Called from build(), from _arm()
+  // and from setAmbience(); never per frame, because flipping it after the
+  // ambience graph exists would require a teardown.
+  Audio.prototype._resolveEnv = function () {
+    var id = this.ctx && this.ctx.levelId;
+    var def = this.ctx && this.ctx.levelDef;
+    // levelId is authoritative and is only 'harbor' once GAME.LevelHarbor has
+    // actually loaded - when the harbor module is missing, main.js falls back
+    // to the market and reports 'market'. That fallback still runs weather.js,
+    // so a market-id scene CAN be visibly raining; deliberately keep the
+    // street ambience there rather than risk level 1's mix on a broken boot.
+    // levelDef.weather is only consulted when levelId is absent entirely.
+    var storm = (id === 'harbor') ||
+                (!id && def && def.weather === 'storm');
+    var preset = this._ambiencePreset || (storm ? 'harbor' : 'street');
+    this._env = preset;
+    this._harbor = (preset === 'harbor');
+    return preset;
+  };
+
+  // Public: force an ambience family regardless of ctx.levelId. Safe to call
+  // before or after the ambience graph is built - it tears down and rebuilds.
+  Audio.prototype.setAmbience = function (name) {
+    try {
+      if (name !== 'harbor' && name !== 'street') return;
+      if (this._ambiencePreset === name) return;
+      this._ambiencePreset = name;
+      var was = this._ambBuilt;
+      this._resolveEnv();
+      this._resetAmbienceSchedule();
+      if (was) {
+        this._teardownAmbience();
+        this._buildAmbience();
+      }
+      this.setReverb(this._harbor ? 'harbor' : 'outdoor');
+    } catch (e) {
+      GAME.logError('audio.setAmbience', e);
+    }
+  };
+
+  // Stop and detach every persistent ambience node. Looping BufferSources keep
+  // running after a disconnect, so they must be stopped explicitly or they
+  // burn CPU forever behind a silent gain.
+  Audio.prototype._teardownAmbience = function () {
+    for (var i = 0; i < this._ambNodes.length; i++) {
+      var n = this._ambNodes[i];
+      try { if (n.stop) n.stop(); } catch (e) { /* not a source, or not started */ }
+      try { n.disconnect(); } catch (e2) { /* already detached */ }
+    }
+    this._ambNodes.length = 0;
+    this._ambBuilt = false;
+    this._rain = null;
+    this._reefer = null;
+    this._thunderConv.length = 0;
+    this._thunderQueue.length = 0;
+    this._windGains = null;
+    this._fenceGain = null;
   };
 
   Audio.prototype._ensureIR = function (name) {
@@ -955,9 +1348,11 @@
     if (this.actx.state !== 'running') return;   // no device: remain silent
     this.armed = true;
     this._unbindGestureUnlock();
+    this._resolveEnv();
     try {
       // Make sure the reverb has a buffer even if build() skipped IR generation.
       if (!this.convA.buffer) {
+        if (this._harbor && this.reverbPreset === 'outdoor') this.reverbPreset = 'harbor';
         var ir = this._ensureIR(this.reverbPreset) || this._ensureIR('outdoor');
         if (ir) { this.convA.buffer = ir; this.convB.buffer = ir; }
       }
@@ -1359,14 +1754,19 @@
     // and the ear reads that delay as distance more reliably than volume does.
     var delay = (opts.delay || 0) + (firstPerson ? 0 : dist / SPEED_OF_SOUND);
 
+    // The harbor is a bigger, harder, colder room than the market and the tail
+    // is most of what makes it read that way. `envTail` is exactly 1 on level
+    // 1, so the market's send/slap arithmetic is bit-identical to before.
+    var envTail = this._harbor ? 1.32 : 1.0;
+
     var h = this._open('weapon', {
       position: firstPerson ? null : pos,
       volume: lvl,
       delay: delay,
       refDistance: 9,
       rolloff: 0.85,
-      send: firstPerson ? 0.26 * P.tail : 0.34 * P.tail,
-      slap: firstPerson ? 0.55 * P.tail : 0.34 * P.tail,
+      send: (firstPerson ? 0.26 * P.tail : 0.34 * P.tail) * envTail,
+      slap: (firstPerson ? 0.55 * P.tail : 0.34 * P.tail) * envTail,
       occlude: !firstPerson
     });
     if (!h) return;
@@ -1431,6 +1831,35 @@
       end = Math.max(end, this._partials(h, {
         t: bt + 0.004, partials: [1180, 2670, 4210], dec: 0.075,
         g: P.boltG * 0.20, pitch: rng.range(0.94, 1.07)
+      }));
+    }
+
+    // ---- 5. LEVEL 2 only: the terminal answering ---------------------------
+    // A rifle report inside a container yard does something the market never
+    // did: it dumps energy into acres of thin steel plate, and the boxes ring.
+    // The reverb and slap-back presets carry the size; these two layers carry
+    // the METAL, which is what makes the same weapon unmistakably a different
+    // gun here. Gated so level 1 never sees a single extra node.
+    if (this._harbor) {
+      end = Math.max(end, this._partials(h, {
+        t: t + rng.range(0.010, 0.026),
+        partials: [172, 396, 745, 1290, 2180, 3560],
+        dec: 0.62 * P.tail, g: 0.085 * P.level * rng.range(0.8, 1.25),
+        pitch: rng.range(0.90, 1.12)
+      }));
+      // The cold, boxy return off a container flank a dozen metres away. Long
+      // decay, no transient - the transient was eaten by the trip out and back.
+      end = Math.max(end, this._burst(h, {
+        t: t + rng.range(0.055, 0.105), type: 'bandpass',
+        f0: 780 * rng.range(0.85, 1.2), f1: 300, q: 1.15,
+        g: 0.30 * P.tail, atk: 0.010, dec: 0.34 * rng.range(0.8, 1.3),
+        sweepDur: 0.28
+      }));
+      // Wet air: the top octave survives over water far better than it did in
+      // the market's dust, so put a little of the crack back on the tail.
+      end = Math.max(end, this._burst(h, {
+        t: t + rng.range(0.030, 0.070), type: 'highpass',
+        f0: 4200, q: 0.6, g: 0.10 * P.crackG, atk: 0.006, dec: 0.14
       }));
     }
 
@@ -2295,7 +2724,7 @@
   // static loop reads as cheap - so this is three modulated noise layers plus
   // sparse randomised one-shots that never repeat on a fixed period.
   // --------------------------------------------------------------------------
-  Audio.prototype._loopSource = function (name, out, gainVal) {
+  Audio.prototype._loopSource = function (name, out, gainVal, rate) {
     var a = this.actx, buf = this.buffers[name];
     if (!buf) return null;
     var s = a.createBufferSource();
@@ -2304,6 +2733,7 @@
     s.loopStart = 0;
     // _sealLoop crossfaded the tail into the head; loop before the dead zone.
     s.loopEnd = buf._loopEnd || buf.duration;
+    if (rate && rate !== 1) s.playbackRate.value = rate;
     var g = a.createGain();
     g.gain.value = gainVal;
     s.connect(g);
@@ -2334,6 +2764,7 @@
     if (this._ambBuilt || !this.armed || GAME.headless) return;
     if (!this.buffers.pink || !this.buffers.brown) return;
     this._ambBuilt = true;
+    if (this._harbor) { this._buildHarborAmbience(); return; }
     var a = this.actx, bus = this.buses.ambient;
 
     // ---- layer 1: wind through the street, two decorrelated halves ---------
@@ -2398,8 +2829,1080 @@
     this._lfo(0.017, 0.008, hg.gain);
   };
 
+  // ==========================================================================
+  // LEVEL 2: COLD HARBOR
+  //
+  // Everything from here to the end of the harbor section is reached only when
+  // _harbor is true. The market's ambience graph, schedule, reverb mapping and
+  // gunshot layering above are untouched.
+  // ==========================================================================
+
+  // Resolve a world position for a named ambience source. Three fallbacks deep
+  // so a level that publishes nothing still puts the foghorn out over the water
+  // instead of inside the player's head.
+  Audio.prototype._harborAnchor = function (key) {
+    var D = HARBOR_ANCHORS[key];
+    if (!D) return { x: 0, y: 2, z: -20 };
+    try {
+      var lvl = this.ctx && this.ctx.level;
+      var pts = lvl && (lvl.audioAnchors || lvl.soundAnchors);
+      var v = pts && pts[key];
+      if (v && typeof v.x === 'number') return { x: v.x, y: v.y, z: v.z };
+      var poses = lvl && lvl.cameraPoses;
+      var p = poses && poses[D.pose] && poses[D.pose].position;
+      if (p && typeof p.x === 'number') {
+        return { x: p.x + D.off[0], y: p.y + D.off[1], z: p.z + D.off[2] };
+      }
+    } catch (e) { /* level still building - use the fallback */ }
+    return { x: D.def[0], y: D.def[1], z: D.def[2] };
+  };
+
+  // A persistent (non-pooled) panner for a continuous positional bed.
+  Audio.prototype._ambPanner = function (p, refDist, rolloff, dest) {
+    var a = this.actx;
+    var pan = a.createPanner();
+    // equalpower, not HRTF: these run forever and never need pinpoint imaging.
+    pan.panningModel = 'equalpower';
+    pan.distanceModel = 'inverse';
+    pan.refDistance = refDist;
+    pan.maxDistance = 400;
+    pan.rolloffFactor = rolloff;
+    pan.coneInnerAngle = 360; pan.coneOuterAngle = 360; pan.coneOuterGain = 1;
+    pos3(pan, p.x, p.y, p.z, a.currentTime);
+    pan.connect(dest || this.buses.ambient);
+    this._ambNodes.push(pan);
+    return pan;
+  };
+
+  // A persistent tonal oscillator for a continuous bed (reefer hum).
+  Audio.prototype._ambOsc = function (type, freq, gainVal, dest) {
+    var a = this.actx;
+    var o = a.createOscillator();
+    o.type = type || 'sine';
+    o.frequency.value = freq;
+    var g = a.createGain();
+    g.gain.value = gainVal;
+    o.connect(g); g.connect(dest);
+    try { o.start(a.currentTime + 0.02); } catch (e) { return null; }
+    this._ambNodes.push(o, g);
+    return { osc: o, gain: g };
+  };
+
+  Audio.prototype._buildHarborAmbience = function () {
+    var a = this.actx, bus = this.buses.ambient;
+    var i;
+
+    // Thunder gets its own bus. It must NOT be pulled down by the ambience
+    // duck that gunfire applies to the wind, because a strike landing during a
+    // firefight is the one moment the storm should win.
+    if (!this.buses.thunder) {
+      var tb = a.createGain();
+      tb.gain.value = 0.95;
+      tb.connect(this.preMaster);
+      var tsend = a.createGain();
+      tsend.gain.value = 0.34;
+      tb.connect(tsend); tsend.connect(this.reverbIn);
+      this.buses.thunder = tb;
+      this.busTrim.thunder = 0.95;
+      this.busSend.thunder = tsend;
+    }
+
+    // ---- layer 1: storm wind, two decorrelated halves ----------------------
+    this._windGains = [];
+    for (var side = 0; side < 2; side++) {
+      var lp = a.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 520;
+      lp.Q.value = 0.55;
+      var pan = a.createStereoPanner ? a.createStereoPanner() : null;
+      var g = a.createGain();
+      g.gain.value = 0.40;
+      lp.connect(g);
+      if (pan) { pan.pan.value = side ? 0.74 : -0.74; g.connect(pan); pan.connect(bus); this._ambNodes.push(pan); }
+      else { g.connect(bus); }
+      this._ambNodes.push(lp, g);
+      this._loopSource('pink', lp, 1.0);
+      // Incommensurate rates: the gusting must never fall into a pattern.
+      this._lfo(0.061 + side * 0.023, 300, lp.frequency);
+      this._lfo(0.017 + side * 0.008, 170, lp.frequency);
+      // Depth stays under the smallest base the weather can drive this to, so
+      // the gust never modulates the gain through zero and flips polarity.
+      this._lfo(0.047 + side * 0.029, 0.13, g.gain);
+      this._windGains.push(g);
+    }
+
+    // ---- layer 2: wind IN THE CHAIN-LINK FENCE -----------------------------
+    // A wire mesh is a comb of resonators. What you actually hear in a gale is
+    // not the wind, it is those resonances being excited and dropped as the
+    // gust front moves through - which is why one bandpass sounds like a kazoo
+    // and five sound like a fence.
+    var fenceIn = a.createGain(); fenceIn.gain.value = 1;
+    var fenceOut = a.createGain(); fenceOut.gain.value = 0.30;
+    var fencePan = a.createStereoPanner ? a.createStereoPanner() : null;
+    if (fencePan) { fencePan.pan.value = 0.35; fenceOut.connect(fencePan); fencePan.connect(bus); this._ambNodes.push(fencePan); }
+    else { fenceOut.connect(bus); }
+    this._ambNodes.push(fenceIn, fenceOut);
+    var fq = [420, 880, 1620, 2950, 4380];
+    var fQ = [8, 11, 9, 13, 7];
+    var fg = [1.00, 0.80, 0.62, 0.40, 0.24];
+    for (i = 0; i < fq.length; i++) {
+      var fb = a.createBiquadFilter();
+      fb.type = 'bandpass'; fb.frequency.value = fq[i]; fb.Q.value = fQ[i];
+      var fgn = a.createGain();
+      // Narrowband make-up: a Q=11 band passes ~1/11th of the noise energy.
+      fgn.gain.value = fg[i] * NB * 0.085;
+      fenceIn.connect(fb); fb.connect(fgn); fgn.connect(fenceOut);
+      this._ambNodes.push(fb, fgn);
+      this._lfo(0.021 + i * 0.013, fq[i] * 0.035, fb.frequency);
+      this._lfo(0.033 + i * 0.017, fg[i] * NB * 0.045, fgn.gain);
+    }
+    this._loopSource('pink', fenceIn, 1.0);
+    this._lfo(0.083, 0.13, fenceOut.gain);
+    this._lfo(0.031, 0.08, fenceOut.gain);
+    this._fenceGain = fenceOut;
+
+    // ---- layer 3: rigging and crane cables ---------------------------------
+    // Vortex shedding off a taut cable: a narrow, drifting whine. Very quiet,
+    // but it is the difference between "a storm" and "a storm in a shipyard".
+    var rigOut = a.createGain(); rigOut.gain.value = 0.16;
+    rigOut.connect(bus);
+    this._ambNodes.push(rigOut);
+    var rigF = [640, 1490, 2360];
+    for (i = 0; i < rigF.length; i++) {
+      var rb = a.createBiquadFilter();
+      rb.type = 'bandpass'; rb.frequency.value = rigF[i]; rb.Q.value = 24 - i * 4;
+      var rg2 = a.createGain(); rg2.gain.value = NB * (0.14 - i * 0.035);
+      rb.connect(rg2); rg2.connect(rigOut);
+      this._ambNodes.push(rb, rg2);
+      this._loopSource('pink', rb, 1.0);
+      // The whine slides as the wind speed over the cable changes.
+      this._lfo(0.013 + i * 0.007, rigF[i] * 0.13, rb.frequency);
+      this._lfo(0.029 + i * 0.011, NB * 0.06, rg2.gain);
+    }
+
+    // ---- layer 4: the low roar of the storm --------------------------------
+    var rl = a.createBiquadFilter();
+    rl.type = 'lowpass'; rl.frequency.value = 175; rl.Q.value = 0.7;
+    var rhp = a.createBiquadFilter();
+    rhp.type = 'highpass'; rhp.frequency.value = 28;
+    var rg = a.createGain(); rg.gain.value = 0.50;
+    rl.connect(rhp); rhp.connect(rg); rg.connect(bus);
+    this._ambNodes.push(rl, rhp, rg);
+    this._loopSource('brown', rl, 1.0);
+    this._lfo(0.019, 0.16, rg.gain);
+    this._lfo(0.007, 48, rl.frequency);
+
+    // ---- layer 5: water working against the quay ---------------------------
+    var quay = this._harborAnchor('quay');
+    var qPan = this._ambPanner(quay, 11, 0.85, bus);
+    var wl = a.createBiquadFilter();
+    wl.type = 'lowpass'; wl.frequency.value = 640; wl.Q.value = 0.8;
+    var wg = a.createGain(); wg.gain.value = 0.46;
+    wl.connect(wg); wg.connect(qPan);
+    this._ambNodes.push(wl, wg);
+    this._loopSource('pink', wl, 1.0);
+    // Three swell rates that never line up = the irregular set of a chop.
+    this._lfo(0.113, 0.20, wg.gain);
+    this._lfo(0.191, 0.13, wg.gain);
+    this._lfo(0.071, 0.16, wg.gain);
+    this._lfo(0.087, 260, wl.frequency);
+    // Fizz: entrained air coming back out of the water after each slap.
+    var wf = a.createBiquadFilter();
+    wf.type = 'bandpass'; wf.frequency.value = 2600; wf.Q.value = 0.8;
+    var wfg = a.createGain(); wfg.gain.value = 0.055;
+    wf.connect(wfg); wfg.connect(qPan);
+    this._ambNodes.push(wf, wfg);
+    this._loopSource('rainFine', wf, 1.0, 0.8);
+    this._lfo(0.137, 0.035, wfg.gain);
+
+    // ---- layer 6: the reefer stack -----------------------------------------
+    // The only TONAL source in the level. Refrigeration units run off mains,
+    // so the hum is at twice line frequency and its harmonics, not at some
+    // arbitrary pitch - and two units running slightly out of step beat
+    // against each other. Tight rolloff so it is a local landmark you can
+    // navigate by, not a wash over the whole terminal.
+    var reef = this._harborAnchor('reefer');
+    var rPan = this._ambPanner(reef, 4.5, 1.35, bus);
+    var reefGain = a.createGain(); reefGain.gain.value = 0.80;
+    reefGain.connect(rPan);
+    this._ambNodes.push(reefGain);
+    this._reefer = { gain: reefGain, pan: rPan };
+    this._ambOsc('sine', 100.0, 0.42, reefGain);
+    this._ambOsc('sine', 100.31, 0.30, reefGain);   // second unit, beating
+    this._ambOsc('sine', 200.0, 0.20, reefGain);
+    this._ambOsc('triangle', 300.0, 0.085, reefGain);
+    this._ambOsc('sine', 400.6, 0.038, reefGain);
+    // Compressor whine and the condenser fan.
+    var cw = this._ambOsc('triangle', 1183, 0.020, reefGain);
+    if (cw) this._lfo(0.09, 6, cw.osc.frequency);
+    var fanBp = a.createBiquadFilter();
+    fanBp.type = 'bandpass'; fanBp.frequency.value = 720; fanBp.Q.value = 1.1;
+    var fanG = a.createGain(); fanG.gain.value = 0.14;
+    fanBp.connect(fanG); fanG.connect(reefGain);
+    this._ambNodes.push(fanBp, fanG);
+    this._loopSource('pink', fanBp, 1.0);
+    this._lfo(0.011, 0.10, reefGain.gain);
+
+    // ---- layer 7: the rain itself, and the thunder channel -----------------
+    this._buildRain();
+    this._buildThunderChain();
+  };
+
+  // --------------------------------------------------------------------------
+  // RAIN BED
+  //
+  // Six layers on their own path to the master. Rain is not one sound: it is
+  // the sheet of drops still in the air (fine, bright, continuous), the drops
+  // landing near you (mid-band, individually resolvable), what they land ON
+  // (hard bright ticks off steel, a dull wash off concrete and water), and the
+  // low roar of the whole downpour. The surface-dependent layers are driven by
+  // what the level actually reports around the player, so walking from the
+  // apron into the container canyon audibly changes the rain.
+  // --------------------------------------------------------------------------
+  Audio.prototype._buildRain = function () {
+    var a = this.actx;
+    if (!this.buffers.rainPatter || !this.buffers.rainFine) return;
+
+    // Own path to preMaster rather than the ambient bus: rain must duck only
+    // slightly under gunfire (the wind ducks hard), and the overhead-occlusion
+    // lowpass must not touch anything else in the mix.
+    var out = a.createGain(); out.gain.value = 0.0001;
+    var lp = a.createBiquadFilter();
+    lp.type = 'lowpass'; lp.Q.value = 0.4;
+    lp.frequency.value = 19000;
+    var send = a.createGain(); send.gain.value = 0.10;
+    out.connect(lp);
+    lp.connect(this.preMaster);
+    lp.connect(send); send.connect(this.reverbIn);
+    this._ambNodes.push(out, lp, send);
+
+    var R = this._rain = { out: out, lp: lp, layers: {} };
+    var self = this;
+
+    function layer(name, gainVal) {
+      var g = a.createGain();
+      g.gain.value = gainVal;
+      g.connect(out);
+      self._ambNodes.push(g);
+      R.layers[name] = g;
+      return g;
+    }
+
+    // 1. the sheet in the air - fine, bright, wide.
+    for (var side = 0; side < 2; side++) {
+      var sg = a.createGain(); sg.gain.value = 0.30;
+      var sp = a.createStereoPanner ? a.createStereoPanner() : null;
+      var shp = a.createBiquadFilter();
+      shp.type = 'highpass'; shp.frequency.value = 2400; shp.Q.value = 0.5;
+      shp.connect(sg);
+      if (sp) { sp.pan.value = side ? 0.8 : -0.8; sg.connect(sp); sp.connect(out); this._ambNodes.push(sp); }
+      else { sg.connect(out); }
+      this._ambNodes.push(shp, sg);
+      this._loopSource('rainFine', shp, 1.0, side ? 1.07 : 0.94);
+      this._lfo(0.053 + side * 0.019, 0.07, sg.gain);
+      this._lfo(0.029 + side * 0.013, 520, shp.frequency);
+    }
+
+    // 2. the patter - individual drops landing within a few metres of you.
+    var pg = layer('patter', 0.44);
+    var pbp = a.createBiquadFilter();
+    pbp.type = 'bandpass'; pbp.frequency.value = 1450; pbp.Q.value = 0.85;
+    pbp.connect(pg);
+    this._ambNodes.push(pbp);
+    this._loopSource('rainPatter', pbp, 1.0);
+    this._lfo(0.037, 0.09, pg.gain);
+    this._lfo(0.023, 380, pbp.frequency);
+
+    // 3. rain on STEEL - harder, brighter, with real transient edges. Rides up
+    //    when the probe finds container flanks or a metal roof nearby.
+    var mg = layer('metal', 0.10);
+    var mhp = a.createBiquadFilter();
+    mhp.type = 'highpass'; mhp.frequency.value = 3400; mhp.Q.value = 0.6;
+    var mpk = a.createBiquadFilter();
+    mpk.type = 'peaking'; mpk.frequency.value = 5600; mpk.Q.value = 1.3; mpk.gain.value = 7;
+    mhp.connect(mpk); mpk.connect(mg);
+    this._ambNodes.push(mhp, mpk);
+    // Sped up: shorter, snappier impacts than the same drops on concrete.
+    this._loopSource('rainPatter', mhp, 1.0, 1.45);
+    this._lfo(0.041, 0.03, mg.gain);
+
+    // 4. rain on WATER and CONCRETE - duller, no edge, more wash.
+    var dg = layer('dull', 0.30);
+    var dlp = a.createBiquadFilter();
+    dlp.type = 'lowpass'; dlp.frequency.value = 880; dlp.Q.value = 0.7;
+    dlp.connect(dg);
+    this._ambNodes.push(dlp);
+    this._loopSource('rainPatter', dlp, 1.0, 0.72);
+    this._lfo(0.031, 0.07, dg.gain);
+    this._lfo(0.017, 190, dlp.frequency);
+
+    // 5. rain DRUMMING ON A ROOF overhead - silent until you are under one.
+    //    No LFO on this gain: its base is driven to near zero when you are in
+    //    the open, and a modulator around zero would leak the layer out.
+    var rg = layer('roof', 0.0001);
+    var rbp = a.createBiquadFilter();
+    rbp.type = 'bandpass'; rbp.frequency.value = 340; rbp.Q.value = 1.5;
+    var rlp = a.createBiquadFilter();
+    rlp.type = 'lowpass'; rlp.frequency.value = 1600; rlp.Q.value = 0.6;
+    rbp.connect(rlp); rlp.connect(rg);
+    this._ambNodes.push(rbp, rlp);
+    this._loopSource('rainPatter', rbp, 1.0, 0.88);
+    this._lfo(0.047, 55, rbp.frequency);
+
+    // 6. the roar of the whole downpour.
+    var og = layer('roar', 0.18);
+    var olp = a.createBiquadFilter();
+    olp.type = 'lowpass'; olp.frequency.value = 215; olp.Q.value = 0.7;
+    var ohp = a.createBiquadFilter();
+    ohp.type = 'highpass'; ohp.frequency.value = 30;
+    olp.connect(ohp); ohp.connect(og);
+    this._ambNodes.push(olp, ohp);
+    this._loopSource('brown', olp, 1.0);
+    this._lfo(0.013, 0.05, og.gain);
+  };
+
+  // --------------------------------------------------------------------------
+  // THUNDER
+  //
+  // The rumble is generated by pushing a noise excitation through a long
+  // generated impulse response (see _makeThunderIR) with irregular amplitude
+  // swells, so it rolls instead of decaying smoothly. Close strikes add direct,
+  // unconvolved layers in front of it: a sub-millisecond crack, a tearing rip,
+  // and a sub. Distant ones get no transient at all - all that survives four
+  // kilometres of air is the low end.
+  // --------------------------------------------------------------------------
+  Audio.prototype._buildThunderChain = function () {
+    var a = this.actx;
+    if (!this._thunderIRs.length) return;
+    var dest = this.buses.thunder || this.preMaster;
+    for (var i = 0; i < this._thunderIRs.length; i++) {
+      var conv = a.createConvolver();
+      conv.normalize = false;
+      try { conv.buffer = this._thunderIRs[i]; }
+      catch (e) { continue; }
+      var inG = a.createGain(); inG.gain.value = 1;
+      var outG = a.createGain(); outG.gain.value = 1;
+      var pan = a.createStereoPanner ? a.createStereoPanner() : null;
+      inG.connect(conv); conv.connect(outG);
+      if (pan) { outG.connect(pan); pan.connect(dest); this._ambNodes.push(pan); }
+      else { outG.connect(dest); }
+      this._ambNodes.push(inG, conv, outG);
+      this._thunderConv.push({
+        inp: inG, out: outG, pan: pan, free: 0,
+        dur: this._thunderIRs[i].duration
+      });
+    }
+  };
+
+  // Public: queue thunder for a strike. weather.js drives this through the
+  // lightning event, but scenarios or a debug key may call it directly.
+  //   opts: {distance (m) | km, delay (s, overrides propagation), flash 0..1}
+  Audio.prototype.thunder = function (opts) {
+    if (!this.armed) return;
+    try {
+      opts = opts || EMPTY;
+      var dist = opts.distance;
+      if (typeof opts.km === 'number' && opts.km > 0) dist = opts.km * 1000;
+      if (typeof dist !== 'number' || !(dist > 0)) {
+        var w = this.ctx && this.ctx.weather;
+        var flash = opts.flash;
+        if (typeof flash !== 'number') {
+          flash = (w && typeof w.flash === 'number') ? w.flash : 0;
+        }
+        // A bright flash is a close strike. Deriving distance from the flash
+        // keeps the ear and the eye telling the same story about the storm.
+        dist = M.lerp(4400, 280, M.saturate(flash)) * this.rng.range(0.75, 1.30);
+      }
+      dist = M.clamp(dist, 60, 12000);
+      var delay = (typeof opts.delay === 'number') ? opts.delay : dist / SPEED_OF_SOUND;
+      if (this._thunderQueue.length >= 5) return;
+      this._thunderQueue.push({ at: this.actx.currentTime + Math.max(0, delay), dist: dist });
+    } catch (e) {
+      GAME.logError('audio.thunder', e);
+    }
+  };
+
+  Audio.prototype._onLightning = function (payload) {
+    if (!this.armed || !this._harbor) return;
+    try {
+      var now = this.actx.currentTime;
+      // weather.js may emit an event AND raise weather.flash; both routes land
+      // here, so collapse anything within a third of a second into one strike.
+      if (now - this._lastStrike < 0.33) return;
+      this._lastStrike = now;
+      var o = (payload && typeof payload === 'object') ? payload : EMPTY;
+      var f = (typeof o.flash === 'number') ? o.flash
+            : (typeof o.intensity === 'number') ? o.intensity
+            : (typeof o.strength === 'number') ? o.strength : undefined;
+      this.thunder({
+        distance: o.distance || o.dist || 0,
+        km: o.km || 0,
+        flash: f
+      });
+    } catch (e) {
+      GAME.logError('audio.lightning', e);
+    }
+  };
+
+  Audio.prototype._fireThunder = function (dist) {
+    if (!this.armed) return;
+    var a = this.actx, rng = this.rng;
+    var km = M.clamp(dist / 1000, 0.05, 12);
+    // far: 0 = overhead, 1 = the far side of the storm.
+    var far = M.saturate((km - 0.30) / 4.2);
+    var close = 1 - far;
+    var lvl = M.clamp(1.30 - km * 0.085, 0.34, 1.30);
+
+    // Where it came from, so the roll is not dead centre.
+    var panv = 0;
+    try {
+      var w = this.ctx && this.ctx.weather;
+      var d = w && w.flashDir;
+      var cam = this.ctx && this.ctx.camera;
+      if (d && cam && cam.matrixWorld) {
+        var e = cam.matrixWorld.elements;
+        panv = M.clamp(-(d.x * e[0] + d.y * e[1] + d.z * e[2]), -0.85, 0.85);
+      }
+    } catch (e2) { panv = 0; }
+    if (panv === 0) panv = rng.range(-0.6, 0.6);
+
+    var t0 = a.currentTime + LOOKAHEAD;
+
+    // ---- the roll: excitation through the generated thunder IR -------------
+    var chain = null, oldest = null;
+    for (var i = 0; i < this._thunderConv.length; i++) {
+      var c = this._thunderConv[(this._thunderIdx + i) % this._thunderConv.length];
+      if (!oldest || c.free < oldest.free) oldest = c;
+      if (c.free <= a.currentTime) { chain = c; break; }
+    }
+    if (!chain) chain = oldest;
+    if (chain) {
+      this._thunderIdx = (this._thunderIdx + 1) % this._thunderConv.length;
+      var rec = this._pending.acquire();
+      // A far strike is excited by a long, dark, soft push; a close one by a
+      // short bright slap. Same IR, completely different character.
+      var exDur = M.lerp(0.085, 0.60, far);
+      var src = a.createBufferSource();
+      src.buffer = (far > 0.45 ? this.buffers.brown : this.buffers.white) || this.buffers.white;
+      if (src.buffer) {
+        src.playbackRate.value = rng.range(0.85, 1.15);
+        var f = a.createBiquadFilter();
+        f.type = 'lowpass'; f.Q.value = 0.6;
+        f.frequency.setValueAtTime(M.lerp(5400, 430, far), t0);
+        f.frequency.exponentialRampToValueAtTime(M.lerp(1100, 145, far), t0 + exDur + 0.05);
+        var hp = a.createBiquadFilter();
+        hp.type = 'highpass'; hp.frequency.value = 24;
+        var g = a.createGain(); g.gain.value = 0;
+        src.connect(f); f.connect(hp); hp.connect(g); g.connect(chain.inp);
+        envAHD(g.gain, t0, 1.0, M.lerp(0.0015, 0.19, far), exDur * 0.30, exDur * 0.75);
+        var maxOff = Math.max(0, src.buffer.duration - exDur - 0.4);
+        try { src.start(t0, maxOff > 0 ? rng.range(0, maxOff) : 0); } catch (e3) { /* ignore */ }
+        try { src.stop(t0 + exDur + 0.35); } catch (e4) { /* ignore */ }
+        rec.nodes.push(src, f, hp, g);
+      }
+      var oT = a.currentTime;
+      chain.out.gain.cancelScheduledValues(oT);
+      chain.out.gain.setValueAtTime(lvl * M.lerp(0.85, 1.25, far), oT);
+      if (chain.pan) chain.pan.pan.setValueAtTime(panv * 0.7, oT);
+      chain.free = t0 + chain.dur + 0.25;
+      rec.t = t0 + exDur + 0.6;
+      if (this._pending.active.length > MAX_PENDING) this._reapOldest(24);
+    }
+
+    // ---- direct layers -----------------------------------------------------
+    var h = this._open('thunder', {
+      volume: lvl, send: 0.40 + far * 0.25, slap: 0.30 + close * 0.35
+    });
+    if (h) {
+      var t = h.t0, end = t;
+      if (close > 0.22) {
+        // The crack. Sub-millisecond attack, and gone almost immediately -
+        // everything after it is the channel, not the source.
+        end = Math.max(end, this._burst(h, {
+          t: t, type: 'highpass', f0: 3200 * rng.range(0.9, 1.15), q: 0.7,
+          g: 1.15 * close, atk: 0.0004, dec: 0.055 * rng.range(0.8, 1.3)
+        }));
+        end = Math.max(end, this._burst(h, {
+          t: t + 0.0006, type: 'highpass', f0: 8200, q: 0.6,
+          g: 0.55 * close * close, atk: 0.0003, dec: 0.014
+        }));
+        // The rip: the discharge channel tearing open, sweeping down and
+        // stuttering as different segments arrive microseconds apart.
+        var ripDur = rng.range(0.28, 0.55);
+        var rs = this._src(h, 'white', t + 0.004, ripDur + 0.05, rng.range(0.9, 1.1));
+        if (rs) {
+          var rbp = this._filter(h, 'bandpass', 5200, 1.1);
+          var rgn = this._gain(h, 0);
+          rs.connect(rbp); rbp.connect(rgn); rgn.connect(h.dest);
+          rbp.frequency.setValueAtTime(5200 * rng.range(0.85, 1.2), t + 0.004);
+          rbp.frequency.exponentialRampToValueAtTime(620, t + 0.004 + ripDur);
+          var tt = t + 0.004, amp = 0.95 * close;
+          rgn.gain.setValueAtTime(FLOOR, tt);
+          while (tt < t + 0.004 + ripDur) {
+            var seg = rng.range(0.012, 0.055);
+            rgn.gain.linearRampToValueAtTime(
+              Math.max(FLOOR * 2, amp * rng.range(0.25, 1.0)), tt + seg * 0.45);
+            rgn.gain.linearRampToValueAtTime(
+              Math.max(FLOOR * 2, amp * rng.range(0.06, 0.55)), tt + seg);
+            tt += seg;
+            amp *= 0.90;
+          }
+          rgn.gain.exponentialRampToValueAtTime(FLOOR, tt + 0.12);
+          rgn.gain.setValueAtTime(0, tt + 0.14);
+          end = Math.max(end, tt + 0.16);
+        }
+      }
+      // The sub. Present at every distance - it is the only part of a strike
+      // eight kilometres away that still reaches you.
+      end = Math.max(end, this._tone(h, {
+        t: t + M.lerp(0.004, 0.09, far), type: 'sine',
+        f0: M.lerp(62, 33, far) * rng.range(0.92, 1.10),
+        f1: M.lerp(27, 19, far),
+        glide: M.lerp(0.6, 1.9, far), g: M.lerp(1.05, 0.75, far),
+        atk: M.lerp(0.006, 0.22, far), dec: M.lerp(0.95, 2.6, far),
+        drive: 0.6
+      }));
+      h.end = end;
+      this._close(h, 0.2);
+    }
+
+    // A strike displaces the whole mix for a moment.
+    this._duck = Math.min(1, Math.max(this._duck, 0.20 + close * 0.55));
+  };
+
+  // --------------------------------------------------------------------------
+  // Harbor one-shots
+  // --------------------------------------------------------------------------
+
+  // Jittered point near a named anchor.
+  Audio.prototype._nearAnchor = function (key, spread, ySpread) {
+    var p = this._harborAnchor(key), r = this.rng;
+    return {
+      x: p.x + r.range(-spread, spread),
+      y: p.y + r.range(-(ySpread || 0), ySpread || 0),
+      z: p.z + r.range(-spread, spread)
+    };
+  };
+
+  // Water slapping the quay wall: a broadband surge, a hollow thump as the
+  // trapped air under the coping is compressed, then the fizz of it escaping.
+  Audio.prototype._ambWaterSlap = function () {
+    var r = this.rng;
+    var h = this._open('ambient', {
+      position: this._nearAnchor('quay', 9, 0.6),
+      volume: r.range(0.45, 0.95), refDistance: 9, rolloff: 1.1,
+      send: 0.35, slap: 0.12, occlude: false
+    });
+    if (!h) return;
+    var t = h.t0, end = t;
+    end = Math.max(end, this._burst(h, {
+      t: t, type: 'lowpass', f0: r.range(1400, 2400), f1: r.range(280, 460),
+      q: 0.7, g: 0.85, atk: r.range(0.010, 0.035), dec: r.range(0.22, 0.48),
+      sweepDur: 0.3, rate: r.range(0.85, 1.15)
+    }));
+    end = Math.max(end, this._tone(h, {
+      t: t + 0.008, type: 'sine', f0: r.range(78, 140), f1: r.range(40, 62),
+      glide: 0.12, g: 0.38, atk: 0.008, dec: r.range(0.16, 0.30)
+    }));
+    end = Math.max(end, this._grains(h, {
+      t: t + r.range(0.04, 0.10), count: 9 + r.int(0, 7), span: r.range(0.3, 0.7),
+      fLo: 2400, fHi: 9500, g: 0.22, q: 2.0
+    }));
+    h.end = end;
+    this._close(h, 0.1);
+  };
+
+  // The freighter working against her fenders. Steel plate under load: a very
+  // low stick-slip groan with a sub under it, nothing like the market's tin.
+  Audio.prototype._ambHullGroan = function () {
+    var r = this.rng;
+    var h = this._open('ambient', {
+      position: this._nearAnchor('hull', 7, 3),
+      volume: r.range(0.4, 0.85), refDistance: 14, rolloff: 0.8,
+      send: 0.5, slap: 0.30, occlude: false
+    });
+    if (!h) return;
+    var t = h.t0;
+    var dur = r.range(1.3, 3.4);
+    var f = r.range(38, 88);
+    var o = this._osc(h, 'sawtooth', t, dur + 0.28);
+    var end = t + dur + 0.2;
+    if (o) {
+      o.frequency.setValueAtTime(f, t);
+      o.frequency.linearRampToValueAtTime(f * r.range(1.15, 1.75), t + dur * 0.62);
+      o.frequency.linearRampToValueAtTime(f * r.range(0.75, 1.02), t + dur);
+      var bp = this._filter(h, 'bandpass', r.range(190, 460), 16);
+      var g = this._gain(h, 0);
+      o.connect(bp); bp.connect(g); g.connect(h.dest);
+      // Stick-slip: the plate grips, releases, grips again. Without the
+      // stutter this is a foghorn, not a groan.
+      g.gain.setValueAtTime(FLOOR, t);
+      var tt = t, amp = 0.34 * NB * 0.55;
+      while (tt < t + dur) {
+        var seg = r.range(0.03, 0.14);
+        g.gain.linearRampToValueAtTime(Math.max(FLOOR * 2, amp * r.range(0.18, 1.0)), tt + seg * 0.5);
+        g.gain.linearRampToValueAtTime(Math.max(FLOOR * 2, amp * r.range(0.05, 0.55)), tt + seg);
+        tt += seg;
+      }
+      g.gain.exponentialRampToValueAtTime(FLOOR, t + dur + 0.12);
+      g.gain.setValueAtTime(0, t + dur + 0.15);
+    }
+    // Mass. A 20,000 tonne hull moving is felt before it is heard.
+    end = Math.max(end, this._tone(h, {
+      t: t + r.range(0, 0.3), type: 'sine', f0: r.range(34, 52), f1: r.range(24, 33),
+      glide: dur * 0.7, g: 0.42, atk: 0.25, dec: dur * 0.8
+    }));
+    if (r.bool(0.45)) {
+      // A plate letting go with a bang somewhere down the hull.
+      end = Math.max(end, this._partials(h, {
+        t: t + dur * r.range(0.4, 0.9), partials: [118, 268, 545, 980, 1760],
+        dec: 0.9, g: 0.22, pitch: r.range(0.9, 1.15)
+      }));
+    }
+    h.end = end;
+    this._close(h, 0.2);
+  };
+
+  // Mooring rope under load. Polyester hawser stretching: a fibrous creak that
+  // rises in pitch as it takes the strain, punctuated by fibres letting go.
+  Audio.prototype._ambRopeStrain = function () {
+    var r = this.rng;
+    var h = this._open('ambient', {
+      position: this._nearAnchor('quay', 6, 1.2),
+      volume: r.range(0.3, 0.6), refDistance: 7, rolloff: 1.2,
+      send: 0.30, slap: 0.12, occlude: false
+    });
+    if (!h) return;
+    var t = h.t0;
+    var dur = r.range(0.8, 2.1);
+    var f0 = r.range(320, 620);
+    var s = this._src(h, 'white', t, dur + 0.06, r.range(0.9, 1.1));
+    var end = t + dur + 0.2;
+    if (s) {
+      var bp = this._filter(h, 'bandpass', f0, 20);
+      var bp2 = this._filter(h, 'bandpass', f0 * 2.4, 14);
+      var g = this._gain(h, 0);
+      s.connect(bp); bp.connect(g);
+      s.connect(bp2); bp2.connect(g);
+      g.connect(h.dest);
+      bp.frequency.setValueAtTime(f0, t);
+      bp.frequency.exponentialRampToValueAtTime(f0 * r.range(1.3, 2.0), t + dur);
+      bp2.frequency.setValueAtTime(f0 * 2.4, t);
+      bp2.frequency.exponentialRampToValueAtTime(f0 * 2.4 * r.range(1.25, 1.9), t + dur);
+      g.gain.setValueAtTime(FLOOR, t);
+      var tt = t, amp = 0.30 * NB * 0.42;
+      while (tt < t + dur) {
+        var seg = r.range(0.012, 0.06);
+        g.gain.linearRampToValueAtTime(Math.max(FLOOR * 2, amp * r.range(0.1, 1.0)), tt + seg * 0.45);
+        g.gain.linearRampToValueAtTime(Math.max(FLOOR * 2, amp * r.range(0.03, 0.5)), tt + seg);
+        tt += seg;
+      }
+      g.gain.exponentialRampToValueAtTime(FLOOR, t + dur + 0.06);
+      g.gain.setValueAtTime(0, t + dur + 0.09);
+    }
+    // Individual fibres going.
+    end = Math.max(end, this._grains(h, {
+      t: t + dur * 0.35, count: 2 + r.int(0, 3), span: dur * 0.6,
+      fLo: 900, fHi: 3600, g: 0.14, q: 4
+    }));
+    h.end = end;
+    this._close(h, 0.1);
+  };
+
+  // A ship's horn out in the channel. Two detuned low reeds through a
+  // resonant horn body, slow attack, very long tail, and a second short blast
+  // on maybe a third of them. Deliberately irregular interval.
+  Audio.prototype._ambFoghorn = function () {
+    var r = this.rng;
+    var h = this._open('ambient', {
+      position: this._nearAnchor('horn', 22, 3),
+      volume: r.range(0.55, 0.95), refDistance: 60, rolloff: 0.35,
+      send: 0.70, slap: 0.45, occlude: false
+    });
+    if (!h) return;
+    var base = r.range(58, 82);
+    var blasts = r.bool(0.34) ? 2 : 1;
+    var t = h.t0, end = t;
+    for (var b = 0; b < blasts; b++) {
+      var dur = b === 0 ? r.range(2.6, 4.8) : r.range(0.9, 1.6);
+      var body = this._gain(h, 1);
+      var lp = this._filter(h, 'lowpass', r.range(520, 820), 1.4);
+      var pk = this._filter(h, 'peaking', base * 3, 2.0);
+      pk.gain.value = 6;
+      body.connect(pk); pk.connect(lp);
+      var og = this._gain(h, 0);
+      lp.connect(og); og.connect(h.dest);
+      // Two reeds a few cents apart give the horn its characteristic beat.
+      var f = [base, base * r.range(1.006, 1.016), base * 1.5];
+      var amps = [0.55, 0.42, 0.14];
+      // The oscillators must outlive the envelope or the long tail - the whole
+      // point of a foghorn - gets cut off mid-decay.
+      var oscDur = dur * 1.4 + 1.35;
+      for (var i = 0; i < f.length; i++) {
+        var o = this._osc(h, i === 2 ? 'triangle' : 'sawtooth', t, oscDur);
+        if (!o) continue;
+        o.frequency.setValueAtTime(f[i] * 0.985, t);
+        o.frequency.linearRampToValueAtTime(f[i], t + 0.22);
+        o.frequency.linearRampToValueAtTime(f[i] * 0.988, t + dur + 0.5);
+        var ag = this._gain(h, amps[i]);
+        o.connect(ag); ag.connect(body);
+      }
+      // Air noise through the horn throat. Capped to the white buffer's own
+      // length - _src does not loop, so asking for more yields silence.
+      var nz = this._src(h, 'white', t, 2.2, 1);
+      if (nz) {
+        var nbp = this._filter(h, 'bandpass', r.range(700, 1300), 1.6);
+        var ng = this._gain(h, 0.05);
+        nz.connect(nbp); nbp.connect(ng); ng.connect(body);
+      }
+      end = Math.max(end, envAHD(og.gain, t, 0.95, 0.22, dur, dur * 0.28 + 0.75));
+      t += dur + r.range(0.55, 1.1);
+    }
+    h.end = end;
+    this._close(h, 0.4);
+  };
+
+  // Harbour gulls. Harsh, not pretty: a rasping glottal source through a
+  // wide-open tract, falling in pitch, two to five cries.
+  Audio.prototype._ambGulls = function () {
+    var r = this.rng;
+    var p = this._ambPoint(12, 45, 4, 16);
+    var h = this._open('ambient', {
+      position: p, volume: r.range(0.25, 0.55), refDistance: 18, rolloff: 0.9,
+      send: 0.45, slap: 0.20, occlude: false
+    });
+    if (!h) return;
+    var t = h.t0, end = t;
+    var n = 2 + r.int(0, 3);
+    var base = r.range(680, 1150);
+    for (var i = 0; i < n; i++) {
+      var dur = r.range(0.16, 0.34);
+      var f = base * r.range(0.88, 1.14);
+      var o = this._osc(h, 'sawtooth', t, dur + 0.04);
+      var mix = this._gain(h, 1);
+      if (o) {
+        o.frequency.setValueAtTime(f * 1.28, t);
+        o.frequency.exponentialRampToValueAtTime(f, t + dur * 0.22);
+        o.frequency.exponentialRampToValueAtTime(f * 0.66, t + dur);
+        var og = this._gain(h, 0.8);
+        o.connect(og); og.connect(mix);
+      }
+      var nz = this._src(h, 'white', t, dur + 0.04, 1);
+      if (nz) {
+        var ng = this._gain(h, 0.34);
+        nz.connect(ng); ng.connect(mix);
+      }
+      var out = this._gain(h, 0);
+      var fr = [900, 2100, 3400];
+      for (var k = 0; k < 3; k++) {
+        var bp = this._filter(h, 'bandpass', fr[k] * r.range(0.9, 1.12), 7);
+        var ag = this._gain(h, [1, 0.55, 0.25][k]);
+        mix.connect(bp); bp.connect(ag); ag.connect(out);
+      }
+      out.connect(h.dest);
+      end = Math.max(end, envAHD(out.gain, t, 0.85, 0.012, dur * 0.30, dur * 0.65));
+      t += r.range(0.20, 0.48);
+    }
+    h.end = end;
+    this._close(h);
+  };
+
+  // Water running off a container lip and hitting a puddle. The signature
+  // "plink" is a pitch that RISES as the cavity the drop punched closes.
+  Audio.prototype._ambDrip = function () {
+    var r = this.rng;
+    var h = this._open('ambient', {
+      position: this._ambPoint(1.6, 9, -1.2, 2.4),
+      volume: r.range(0.25, 0.6), refDistance: 3.5, rolloff: 1.5,
+      send: 0.28, slap: 0.10, occlude: false
+    });
+    if (!h) return;
+    var t = h.t0, end = t;
+    var n = 2 + r.int(0, 4);
+    for (var i = 0; i < n; i++) {
+      var f = r.range(680, 2400);
+      end = Math.max(end, this._tone(h, {
+        t: t, type: 'sine', f0: f * 0.62, f1: f, glide: r.range(0.014, 0.032),
+        g: r.range(0.22, 0.48), atk: 0.0008, dec: r.range(0.030, 0.075)
+      }));
+      end = Math.max(end, this._burst(h, {
+        t: t, type: 'bandpass', f0: f * 2.4, q: 4, g: 0.10,
+        atk: 0.0004, dec: 0.008
+      }));
+      t += r.range(0.14, 0.62);
+    }
+    h.end = end;
+    this._close(h);
+  };
+
+  // Chain-link slapping its posts in a gust front.
+  Audio.prototype._ambFenceRattle = function () {
+    var r = this.rng;
+    var h = this._open('ambient', {
+      position: this._nearAnchor('fence', 12, 1.5),
+      volume: r.range(0.22, 0.5), refDistance: 9, rolloff: 1.1,
+      send: 0.30, slap: 0.14, occlude: false
+    });
+    if (!h) return;
+    var t = h.t0;
+    var e1 = this._grains(h, {
+      t: t, count: 14 + r.int(0, 10), span: r.range(0.5, 1.3),
+      fLo: 2200, fHi: 9000, g: 0.26, q: 5
+    });
+    var e2 = this._burst(h, {
+      t: t, type: 'bandpass', f0: r.range(2400, 4200), f1: r.range(1200, 2000),
+      q: 1.0, g: 0.16, atk: 0.09, dec: r.range(0.5, 1.1), sweepDur: 0.7
+    });
+    var e3 = this._partials(h, {
+      t: t + r.range(0.05, 0.4), partials: [780, 1690, 3120], dec: 0.22,
+      g: 0.09, pitch: r.range(0.9, 1.2)
+    });
+    h.end = Math.max(e1, e2, e3);
+    this._close(h, 0.1);
+  };
+
+  // Something big and diesel working at the far end of the terminal, with the
+  // irregular clank of a container being landed.
+  Audio.prototype._ambMachinery = function () {
+    var r = this.rng;
+    var h = this._open('ambient', {
+      position: this._nearAnchor('machinery', 14, 3),
+      volume: r.range(0.30, 0.62), refDistance: 34, rolloff: 0.45,
+      send: 0.45, slap: 0.25, occlude: false
+    });
+    if (!h) return;
+    var t = h.t0;
+    // Capped under the brown buffer's 7s so the drone does not run off the
+    // end of its own source before the envelope has finished.
+    var dur = r.range(3.5, 6.4);
+    var end = t + dur + 0.2;
+    var s = this._src(h, 'brown', t, dur + 0.1, r.range(0.8, 1.2));
+    if (s) {
+      var lp = this._filter(h, 'lowpass', 260, 0.9);
+      var g = this._gain(h, 0);
+      s.connect(lp); lp.connect(g); g.connect(h.dest);
+      lp.frequency.setValueAtTime(150, t);
+      lp.frequency.linearRampToValueAtTime(r.range(320, 520), t + dur * 0.45);
+      lp.frequency.linearRampToValueAtTime(140, t + dur);
+      g.gain.setValueAtTime(FLOOR, t);
+      g.gain.linearRampToValueAtTime(1.0, t + dur * 0.4);
+      g.gain.exponentialRampToValueAtTime(FLOOR, t + dur);
+      g.gain.setValueAtTime(0, t + dur + 0.02);
+    }
+    // Engine order under it.
+    var o = this._osc(h, 'sawtooth', t, dur + 0.05);
+    if (o) {
+      var f = r.range(38, 62);
+      o.frequency.setValueAtTime(f, t);
+      o.frequency.linearRampToValueAtTime(f * r.range(1.2, 1.5), t + dur * 0.45);
+      o.frequency.linearRampToValueAtTime(f * 0.88, t + dur);
+      var olp = this._filter(h, 'lowpass', 220, 1.3);
+      var og = this._gain(h, 0);
+      o.connect(olp); olp.connect(og); og.connect(h.dest);
+      og.gain.setValueAtTime(FLOOR, t);
+      og.gain.linearRampToValueAtTime(0.20, t + dur * 0.45);
+      og.gain.exponentialRampToValueAtTime(FLOOR, t + dur);
+      og.gain.setValueAtTime(0, t + dur + 0.02);
+    }
+    // Twistlocks and steel landing on steel.
+    var clanks = 1 + r.int(0, 3);
+    var ct = t + r.range(0.4, 1.4);
+    for (var i = 0; i < clanks; i++) {
+      end = Math.max(end, this._partials(h, {
+        t: ct, partials: [162, 388, 740, 1420, 2610], dec: r.range(0.5, 1.1),
+        g: r.range(0.14, 0.26), pitch: r.range(0.88, 1.18)
+      }));
+      end = Math.max(end, this._burst(h, {
+        t: ct, type: 'lowpass', f0: 1800, f1: 420, q: 1.0,
+        g: 0.22, atk: 0.001, dec: 0.09
+      }));
+      ct += r.range(0.5, 1.8);
+    }
+    h.end = end;
+    this._close(h, 0.2);
+  };
+
+  // A strike far enough away that there is no flash to see - just the storm
+  // grumbling somewhere over the water.
+  Audio.prototype._ambDistantThunder = function () {
+    var w = this.ctx && this.ctx.weather;
+    // Only in real weather. In a drizzle or a clear preset this would be a lie.
+    if (w && typeof w.rainIntensity === 'number' && w.rainIntensity < 0.25) return;
+    this._fireThunder(this.rng.range(6200, 11500));
+  };
+
+  // The reefer compressor cycling. A relay clunk, then the hum swells back up.
+  Audio.prototype._ambReeferCycle = function () {
+    var r = this.rng;
+    var R = this._reefer;
+    var h = this._open('ambient', {
+      position: this._harborAnchor('reefer'),
+      volume: r.range(0.3, 0.55), refDistance: 5, rolloff: 1.4,
+      send: 0.22, slap: 0.10, occlude: false
+    });
+    if (h) {
+      var t = h.t0;
+      var e1 = this._burst(h, {
+        t: t, type: 'bandpass', f0: r.range(1600, 2600), q: 4.5,
+        g: 0.42, atk: 0.0005, dec: 0.022
+      });
+      var e2 = this._partials(h, {
+        t: t, partials: [242, 590, 1180], dec: 0.16, g: 0.20, pitch: r.range(0.9, 1.1)
+      });
+      var e3 = this._burst(h, {
+        t: t + 0.02, type: 'lowpass', f0: 900, f1: 260, q: 0.9,
+        g: 0.24, atk: 0.002, dec: 0.10
+      });
+      h.end = Math.max(e1, e2, e3);
+      this._close(h);
+    }
+    if (R && R.gain) {
+      // The unit loads up: hum dips as the motor starts, then settles louder.
+      var a = this.actx, tt = a.currentTime;
+      R.gain.gain.cancelScheduledValues(tt);
+      R.gain.gain.setValueAtTime(R.gain.gain.value, tt);
+      R.gain.gain.linearRampToValueAtTime(0.42, tt + 0.20);
+      R.gain.gain.linearRampToValueAtTime(r.range(0.72, 1.0), tt + r.range(2.0, 4.5));
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // Harbor per-frame mix: rain level, surface colour, overhead occlusion.
+  // --------------------------------------------------------------------------
+  Audio.prototype._harborProbe = function () {
+    var lvl = this.ctx && this.ctx.level;
+    if (!lvl || !lvl.raycast) { this._coverTarget = 0; return; }
+    var o = this._listener;
+    var org = { x: o.x, y: o.y, z: o.z };
+    var metal = 0, dull = 0, n = 0, cov = 0;
+    try {
+      // Straight up: are we under the warehouse roof or a container overhang?
+      var up = lvl.raycast(org, { x: 0, y: 1, z: 0 }, 14);
+      if (up && up.hit) {
+        cov = 1;
+        var um = up.material ? String(up.material).toLowerCase() : '';
+        // A steel roof does not just block the rain, it AMPLIFIES it.
+        if (RAIN_METAL[um]) { metal += RAIN_METAL[um] * 2.0; n += 2; }
+        else { dull += 0.8; n += 1; }
+      }
+      var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      for (var i = 0; i < 4; i++) {
+        var r = lvl.raycast(org, { x: dirs[i][0], y: 0, z: dirs[i][1] }, 7);
+        if (r && r.hit) {
+          var mm = r.material ? String(r.material).toLowerCase() : '';
+          var w = 1 - M.saturate((r.distance || 0) / 9);
+          if (RAIN_METAL[mm]) metal += RAIN_METAL[mm] * w;
+          else if (RAIN_DULL[mm] !== undefined) dull += RAIN_DULL[mm] * w;
+          else dull += 0.5 * w;
+          n++;
+        }
+      }
+      // Whatever is underfoot is always contributing.
+      var dn = lvl.raycast(org, { x: 0, y: -1, z: 0 }, 4);
+      if (dn && dn.hit) {
+        var dm = dn.material ? String(dn.material).toLowerCase() : '';
+        if (RAIN_METAL[dm]) metal += RAIN_METAL[dm];
+        else dull += (RAIN_DULL[dm] !== undefined ? RAIN_DULL[dm] : 0.8);
+        n++;
+      }
+    } catch (e) { return; }      // level still building - keep the last read
+    var inv = 1 / Math.max(2, n);
+    this._metalNear = M.saturate(metal * inv * 1.7);
+    this._dullNear = M.saturate(0.30 + dull * inv * 1.3);
+    this._coverTarget = cov;
+  };
+
+  Audio.prototype._updateHarborMix = function (dt) {
+    var a = this.actx, t = a.currentTime;
+    var w = this.ctx && this.ctx.weather;
+    var intensity = (w && typeof w.rainIntensity === 'number')
+      ? M.saturate(w.rainIntensity) : 0.85;
+    var windSpeed = (w && typeof w.windSpeed === 'number') ? w.windSpeed : 12;
+
+    if (this._coverTarget === undefined) this._coverTarget = 0;
+    this._covered += (this._coverTarget - this._covered) * Math.min(1, dt * 3.0);
+    this._rainLevel = intensity;
+
+    var R = this._rain;
+    if (R) {
+      // Loudness of rain is not linear in drop count.
+      var lvl = Math.pow(intensity, 0.75) * 0.70;
+      lvl *= (1 - this._duck * 0.25);              // ducks slightly under fire
+      lvl *= M.lerp(1, 0.40, this._covered);       // muffled under a roof
+      R.out.gain.setTargetAtTime(Math.max(0.0001, lvl), t, 0.20);
+      R.lp.frequency.setTargetAtTime(M.lerp(19000, 740, this._covered), t, 0.30);
+      var L = R.layers;
+      if (L.metal) L.metal.gain.setTargetAtTime(
+        Math.max(0.0001, intensity * (0.09 + this._metalNear * 0.62)), t, 0.5);
+      if (L.dull) L.dull.gain.setTargetAtTime(
+        Math.max(0.0001, intensity * (0.18 + this._dullNear * 0.40)), t, 0.5);
+      if (L.roof) L.roof.gain.setTargetAtTime(
+        Math.max(0.0001, intensity * this._covered * 0.85), t, 0.35);
+      if (L.roar) L.roar.gain.setTargetAtTime(
+        Math.max(0.0001, 0.10 + intensity * 0.14), t, 0.6);
+    }
+
+    // Wind gusting tracks the weather's wind speed. The lower clamp keeps the
+    // base above the LFO depths so a gust cannot drive a gain negative.
+    var wg = M.clamp(windSpeed / 15, 0.55, 1.6);
+    if (this._windGains) {
+      for (var i = 0; i < this._windGains.length; i++) {
+        this._windGains[i].gain.setTargetAtTime(0.38 * wg, t, 0.9);
+      }
+    }
+    if (this._fenceGain) this._fenceGain.gain.setTargetAtTime(0.30 * wg, t, 0.9);
+
+    // Thunder scheduled by earlier strikes.
+    if (this._thunderQueue.length) {
+      for (var q = this._thunderQueue.length - 1; q >= 0; q--) {
+        if (this._thunderQueue[q].at <= t) {
+          var item = this._thunderQueue[q];
+          this._thunderQueue.splice(q, 1);
+          try { this._fireThunder(item.dist); }
+          catch (e) { GAME.logError('audio.thunderFire', e); }
+        }
+      }
+    }
+
+    // Rising edge on weather.flash, in case weather.js publishes state without
+    // emitting an event. Guarded exactly as the contract demands.
+    if (w && typeof w.flash === 'number') {
+      if (w.flash > 0.12 && this._prevFlash <= 0.12) this._onLightning({ flash: w.flash });
+      this._prevFlash = w.flash;
+    }
+
+    // Surface/occlusion probe, at 2Hz.
+    this._probeTimer -= dt;
+    if (this._probeTimer <= 0) {
+      this._probeTimer = 0.5;
+      this._harborProbe();
+    }
+  };
+
+  // ==========================================================================
+  // End of the Cold Harbor section.
+  // ==========================================================================
+
   Audio.prototype._resetAmbienceSchedule = function () {
     var r = this.rng;
+    if (this._harbor) {
+      // A working terminal at 02:00 in a gale. Intervals are deliberately
+      // co-prime-ish so no two events ever settle into a rhythm.
+      this._ambTimers = [
+        { t: r.range(3.0, 9.0), lo: 7.0, hi: 19.0, fn: '_ambWaterSlap' },
+        { t: r.range(5.0, 14.0), lo: 9.0, hi: 26.0, fn: '_ambHullGroan' },
+        { t: r.range(8.0, 20.0), lo: 14.0, hi: 38.0, fn: '_ambRopeStrain' },
+        { t: r.range(12.0, 34.0), lo: 26.0, hi: 62.0, fn: '_ambFoghorn' },
+        { t: r.range(6.0, 18.0), lo: 18.0, hi: 55.0, fn: '_ambGulls' },
+        { t: r.range(4.0, 11.0), lo: 6.0, hi: 17.0, fn: '_ambDrip' },
+        { t: r.range(9.0, 22.0), lo: 15.0, hi: 42.0, fn: '_ambFenceRattle' },
+        { t: r.range(16.0, 40.0), lo: 30.0, hi: 78.0, fn: '_ambMachinery' },
+        { t: r.range(20.0, 50.0), lo: 34.0, hi: 90.0, fn: '_ambDistantThunder' },
+        { t: r.range(25.0, 60.0), lo: 45.0, hi: 120.0, fn: '_ambReeferCycle' },
+        { t: r.range(11.0, 26.0), lo: 20.0, hi: 48.0, fn: '_ambDistantGunfire' }
+      ];
+      return;
+    }
     // {timer, min, max, method}
     this._ambTimers = [
       { t: r.range(2.0, 6.0), lo: 5.5, hi: 15.0, fn: '_ambBirds' },
@@ -2740,7 +4243,25 @@
     lowammo: function (o) { this.playUI('lowammo', o); },
     lowhealth: function (o) { this.playUI('lowhealth', o); },
     damage: function (o) { this.playUI('damage', o); },
-    ui_click: function (o) { this.playUI('ui_click', o); }
+    ui_click: function (o) { this.playUI('ui_click', o); },
+
+    // ---- LEVEL 2: COLD HARBOR ---------------------------------------------
+    // Every one of these degrades to silence rather than throwing if the
+    // harbor ambience graph was never built (level 1, or a headless run).
+    thunder: function (o) { this.thunder(o); },
+    lightning: function (o) { this._onLightning(o); },
+    foghorn: function (o) { this._ambFoghorn(); },
+    gull: function (o) { this._ambGulls(); },
+    gulls: function (o) { this._ambGulls(); },
+    hull_groan: function (o) { this._ambHullGroan(); },
+    creak_hull: function (o) { this._ambHullGroan(); },
+    rope: function (o) { this._ambRopeStrain(); },
+    rope_strain: function (o) { this._ambRopeStrain(); },
+    water_slap: function (o) { this._ambWaterSlap(); },
+    drip: function (o) { this._ambDrip(); },
+    fence_rattle: function (o) { this._ambFenceRattle(); },
+    machinery: function (o) { this._ambMachinery(); },
+    reefer: function (o) { this._ambReeferCycle(); }
   };
 
   Audio.prototype.play = function (name, opts) {
@@ -2873,7 +4394,35 @@
 
     // ---- environment -------------------------------------------------------
     on('audio:reverb', function (a) { self.setReverb(strOf(a, ['preset', 'name'], 'outdoor')); });
+    on('audio:ambience', function (a) { self.setAmbience(strOf(a, ['preset', 'name'], null)); });
     on('game:start', function () { self.unlock(); });
+
+    // ---- weather (LEVEL 2) -------------------------------------------------
+    // weather.js is authored in parallel with this file and the event name is
+    // not pinned by the contract, so subscribe to every plausible spelling.
+    // _onLightning de-duplicates within a third of a second, and update() also
+    // watches weather.flash for a rising edge, so a strike produces exactly
+    // one thunder however weather.js chooses to announce it.
+    function strike(a) { self._onLightning(a); }
+    on('weather:lightning', strike);
+    on('weather:strike', strike);
+    on('weather:flash', strike);
+    on('lightning', strike);
+    on('lightning:strike', strike);
+    on('thunder', function (a) {
+      var o = (a && typeof a === 'object') ? a : EMPTY;
+      self.thunder(o);
+    });
+    on('weather:preset', function (a) {
+      // A preset change does not move us between levels; it only tells us how
+      // hard it is raining, which update() already reads from ctx.weather.
+      var n = strOf(a, ['preset', 'name'], null);
+      if (n === 'clear' && self._rain && self.armed) {
+        try {
+          self._rain.out.gain.setTargetAtTime(0.0001, self.actx.currentTime, 1.2);
+        } catch (e) { /* ignore */ }
+      }
+    });
   };
 
   // --------------------------------------------------------------------------
@@ -2915,21 +4464,31 @@
     var lvl = this.ctx && this.ctx.level;
     if (!lvl || !lvl.raycast) return;
     var o = this._listener;
-    var preset = 'outdoor';
+    var harbor = this._harbor;
+    var preset = harbor ? 'harbor' : 'outdoor';
     try {
       var up = lvl.raycast({ x: o.x, y: o.y, z: o.z }, { x: 0, y: 1, z: 0 }, 9);
       if (up && up.hit) {
         // Roofed. Big volume overhead reads as a hall, low ceiling as a room.
-        preset = (up.distance !== undefined && up.distance > 6.0) ? 'hall' : 'interior';
+        // In the harbor the only real interior is the warehouse; a low roof is
+        // a container overhang, which is still a hard steel box.
+        if (harbor) {
+          preset = (up.distance !== undefined && up.distance > 4.5) ? 'warehouse' : 'container';
+        } else {
+          preset = (up.distance !== undefined && up.distance > 6.0) ? 'hall' : 'interior';
+        }
       } else {
-        // Open above: check for two close parallel walls -> alley flutter.
+        // Open above: check for two close parallel walls -> flutter echo.
+        // The container canyons are wider than the market's alleys, so the
+        // harbor probes further before deciding it is in one.
+        var reach = harbor ? 4.6 : 3.4;
         var near = 0, side = [[1, 0], [-1, 0], [0, 1], [0, -1]];
         for (var i = 0; i < 4; i++) {
           var r = lvl.raycast({ x: o.x, y: o.y, z: o.z },
-            { x: side[i][0], y: 0, z: side[i][1] }, 3.4);
+            { x: side[i][0], y: 0, z: side[i][1] }, reach);
           if (r && r.hit) near++;
         }
-        if (near >= 2) preset = 'alley';
+        if (near >= 2) preset = harbor ? 'container' : 'alley';
       }
     } catch (e) { return; }         // level not ready: keep the current preset
     if (preset !== this.reverbPreset) this.setReverb(preset);
@@ -2976,6 +4535,16 @@
           1 - this._ringLevel * 0.35, this.actx.currentTime, 0.06);
       }
 
+      // --- storm mix (LEVEL 2 only) ----------------------------------------
+      if (this._harbor && this._ambBuilt) this._updateHarborMix(dt);
+
+      // A gesture can arm the context before build() finished generating the
+      // noise beds, in which case _buildAmbience bailed out with nothing built.
+      // Retry rather than leaving the world silent for the whole session.
+      if (!this._ambBuilt && this.buffers.pink && this.buffers.brown) {
+        this._buildAmbience();
+      }
+
       // --- sparse ambience events ------------------------------------------
       if (this._ambBuilt) {
         for (var i = 0; i < this._ambTimers.length; i++) {
@@ -3010,7 +4579,12 @@
       live: this._pending ? this._pending.active.length : 0,
       reverb: this.reverbPreset,
       duck: this._duck,
-      ring: this._ringLevel
+      ring: this._ringLevel,
+      env: this._env,
+      rain: this._rain ? this._rainLevel : 0,
+      covered: this._covered,
+      metalNear: this._metalNear,
+      thunderPending: this._thunderQueue.length
     };
   };
 

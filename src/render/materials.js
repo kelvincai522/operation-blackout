@@ -33,6 +33,9 @@
 //                           it needs no extra vertex attributes; plus the
 //                           per-vertex grime/wet/edge-wear channel that
 //                           level.js and props.js can paint.
+//   7. WET SURFACES       - LEVEL 2 ONLY. Soak, standing water, rain ripples
+//                           and rivulets running down vertical faces, driven
+//                           by ctx.weather. See the COLD HARBOR block below.
 //
 // Plus per-material roughness/metalness *ranges* (remapping whatever the
 // texture library hands us into a physically sensible window), MEASURED ALBEDO
@@ -85,6 +88,57 @@
 //                               transition can be painted instead of butted.
 //   glass(opts), foliage(opts), emissive(hex, i, opts), wearable(name, opts)
 //   uvScaleFor(name, texelsPerM), setEnvIntensity(scale), setQuality(level)
+//
+// ----------------------------------------------------------------------------
+// COLD HARBOR (level 2) - additions. Everything here is inert on the market:
+// `wetEnabled` is false there, so F.wet is never set, so not one line of the
+// wet layer is compiled and every level-1 program cache key is unchanged. That
+// is asserted, not assumed - the emitted vertex source, fragment source, cache
+// key and every material property were compared against the shipped file
+// across 140 material/alias/helper/opts variants and are byte-identical.
+//
+//   MATERIALS (17, exactly the contracted names)
+//     container_steel, container_red, container_blue, container_green,
+//     ship_hull, wet_concrete, dock_concrete, chainlink, tarpaulin, rope,
+//     rubber_fender, steel_grate, corrugated_roof, deck_plate, sea_water,
+//     painted_line, reefer_panel
+//     get('sea_water') is answered by water() - see below.
+//
+//   setWetness(v)            0..1 global soak, on TOP of the per-vertex
+//                            wetness channel. Driven from ctx.weather.wetness
+//                            every frame; call it directly only to override.
+//   setRainIntensity(v)      0..1. Ripple amplitude and streak density.
+//   setWind(dirX, dirZ, mps) shears the rivulets, drives the sea.
+//   water(opts)              the harbour surface: two-scale animated wave
+//                            normals, Beer-Lambert absorption down the view
+//                            path, water Fresnel, quay-edge foam.
+//   setWaterFoamEdges(segs)  [[x0,z0,x1,z1], ...] world lines the sea foams
+//                            against (the quay face, the hull waterline).
+//   rippleTexture()          the packed rain-ripple field, so weather.js can
+//                            drive its splash decals off the same impacts the
+//                            puddles ripple with.
+//   auditTextures(names)     which recipe each name actually got served, and
+//                            whether any two names silently share one map.
+//                            Level 1 shipped with five that did.
+//   missingNames             every name that FAILED to resolve, deduplicated.
+//                            Non-empty is a bug: on this level get() also logs
+//                            it through GAME.logError and returns an emissive
+//                            magenta checker rather than a plausible grey, so a
+//                            missing material can no longer ship unnoticed
+//                            behind clean coverage metrics. See get().
+//   wetContract(name)        the live values GAME.MaterialLibrary.WET_GLSL
+//                            needs, PLUS `flat` (the up-facing window this file
+//                            uses), `ground` (the yard slab and the height band
+//                            above which standing water may not form) and
+//                            `cfgFor(name)`. A screen-space consumer that
+//                            applies the apron's cfg to every up-facing pixel
+//                            paints the apron's water onto tarpaulins, deck
+//                            plate and crate lids - measured, and it is what
+//                            the pale flat-shaded mound in the enemy_closeup
+//                            foreground actually is.
+//
+//   Per-material knobs, all optional in DEFS and in opts:
+//     wetDark, wetRough, wetAmt, wetFlat, puddle, streak, wet (force on/off)
 // ----------------------------------------------------------------------------
 // ============================================================================
 (function (GAME, THREE) {
@@ -586,6 +640,383 @@
       detail: 0.85, detailCm: 5, wdet: true, macro: 0.26, tri: true, triSharp: 9.0, pom: 0,
       detailKind: 'mineral', polish: 0.36, triWarp: [0.50, 0.50, 0.50],
       stoch: true, dir: true, flat: 0.92, meso: 1.0, ground: true
+    },
+
+    // ========================================================================
+    // LEVEL 2 - COLD HARBOR.  Container terminal, 02:00, driving rain.
+    //
+    // EVERYTHING BELOW IS ADDITIVE. No market def, alias, fallback style or
+    // tuning value above is touched, and none of the wet-surface shader code
+    // these entries enable is compiled into a market material - see
+    // `this.wetEnabled` in the constructor and the F.wet gate in _features.
+    //
+    // Extra fields the harbor surfaces use. Every one of them is optional and
+    // absent on every market def, so the market path is byte-identical:
+    //
+    //   texels  : target texels per world METRE. Only meaningful on triplanar
+    //             defs, where `repeat` IS tiles-per-metre. The tile size the
+    //             texture library hands back depends on its quality tier
+    //             (1024 / 512 / 256), so hard-coding `repeat` bakes in an
+    //             assumption about someone else's preset - the apron would
+    //             carry half the grain at 'medium' that it does at 'high'.
+    //             Solved against the real tile size in _maps().
+    //   texAlt  : recipe to use while textures.js does not implement `tex`
+    //             yet. Chosen so the surface still reads as the right FAMILY
+    //             (containers fall back to corrugated sheet, not flat paint -
+    //             "flat-coloured boxes with no corrugation" is on the harbor
+    //             instant-fail list), and the palette anchor does the colour.
+    //   local   : no market recipe is a sane stand-in, so synthesise locally
+    //             rather than let textures.js answer with concrete plus a
+    //             loud missingRecipe error in everyone else's capture report.
+    //             Only the two alpha-cut meshes and the sea use this.
+    //   alphaTest / poly : flags a consumer would otherwise have to re-state
+    //             at every call site (and forget at one of them).
+    //
+    //   wetDark : diffuse multiplier at FULL wetness. This is the physical
+    //             heart of the look: a water film fills the surface's pores
+    //             and traps light by total internal reflection, so a POROUS
+    //             surface goes dramatically darker (concrete 0.42, rope 0.55)
+    //             while a SEALED one barely darkens and simply turns glossy
+    //             (rubber 0.80, reefer panel 0.86).
+    //   wetRough: roughness target at full wetness.
+    //   wetAmt  : susceptibility 0..1. Bare rope and jute soak through;
+    //             enamel and stainless shed.
+    //   wetFlat : how far the micro-normal flattens as water fills the
+    //             relief. THIS is what separates convincing wet from a
+    //             glossy overlay - a soaked surface is smoother in shape as
+    //             well as in gloss.
+    //   puddle  : 0..1, can standing water form here at all. Non-zero only
+    //             for up-facing horizontal surfaces water can actually lie on.
+    //   streak  : 0..1, rain running down a vertical face.
+    // ========================================================================
+
+    // Bare / galvanised container steel: corrugated flank, weathered zinc,
+    // rust weeping from every weld. metal is high but roughness is wide - a
+    // container is not a mirror, it is 30 years of salt spray.
+    container_steel: {
+      color: 0x6e7276, alb: null, hue: 0.50, tex: 'container_steel', texAlt: 'corrugated_metal',
+      rough: [0.26, 0.86], roughFlat: 0.58, metal: 0.86,
+      ns: 1.15, ao: 0.9, env: 1.10, repeat: 1.5,
+      detail: 0.65, detailCm: 4, wdet: true, macro: 0.18, tri: false, pom: 0,
+      detailKind: 'metal', polish: 0.58,
+      // Corrugation ribs are a lattice and rust weeps DOWNWARD: quantise the
+      // offset to the rib and mirror rather than rotate, exactly as the
+      // market's corrugated_metal does.
+      stoch: true, dir: true, stochQ: [6, 0], flat: 0.6, meso: 0.55,
+      wetDark: 0.70, wetRough: 0.085, wetAmt: 0.95, wetFlat: 0.42, streak: 1.0
+    },
+    // The three painted container lots. Enamel over steel is a DIELECTRIC and
+    // only the chipped areas conduct, which is why metal sits at 0.5 rather
+    // than 0.86 and why - unlike the bare-steel entry - these get a diffuse
+    // anchor. alb is solved from each palette entry's own luminance, so the
+    // three lots differ in hue without one of them being brighter than the
+    // others for no reason.
+    container_red: {
+      color: 0x7a2f28, alb: 0.075, hue: 0.90, tex: 'container_red', texAlt: 'corrugated_metal',
+      rough: [0.24, 0.82], roughFlat: 0.52, metal: 0.50,
+      ns: 1.05, ao: 0.9, env: 1.05, repeat: 1.5,
+      detail: 0.55, detailCm: 4, wdet: true, macro: 0.20, tri: false, pom: 0,
+      detailKind: 'metal', polish: 0.56,
+      stoch: true, dir: true, stochQ: [6, 0], flat: 0.6, meso: 0.5,
+      wetDark: 0.66, wetRough: 0.075, wetAmt: 0.9, wetFlat: 0.45, streak: 1.0
+    },
+    container_blue: {
+      color: 0x1f4a6b, alb: 0.070, hue: 0.90, tex: 'container_blue', texAlt: 'corrugated_metal',
+      rough: [0.24, 0.82], roughFlat: 0.52, metal: 0.50,
+      ns: 1.05, ao: 0.9, env: 1.05, repeat: 1.5,
+      detail: 0.55, detailCm: 4, wdet: true, macro: 0.20, tri: false, pom: 0,
+      detailKind: 'metal', polish: 0.56,
+      stoch: true, dir: true, stochQ: [6, 0], flat: 0.6, meso: 0.5,
+      wetDark: 0.66, wetRough: 0.075, wetAmt: 0.9, wetFlat: 0.45, streak: 1.0
+    },
+    container_green: {
+      color: 0x2c5040, alb: 0.072, hue: 0.90, tex: 'container_green', texAlt: 'corrugated_metal',
+      rough: [0.24, 0.82], roughFlat: 0.52, metal: 0.50,
+      ns: 1.05, ao: 0.9, env: 1.05, repeat: 1.5,
+      detail: 0.55, detailCm: 4, wdet: true, macro: 0.20, tri: false, pom: 0,
+      detailKind: 'metal', polish: 0.56,
+      stoch: true, dir: true, stochQ: [6, 0], flat: 0.6, meso: 0.5,
+      wetDark: 0.66, wetRough: 0.075, wetAmt: 0.9, wetFlat: 0.45, streak: 1.0
+    },
+    // The moored freighter. A hull is a WALL in this level - tens of metres of
+    // it - so the map density is deliberately coarse (a 1024 tile over 3 m)
+    // and the meso band carries the plate seams and the streaking instead.
+    // Very dark: a boot-topping black hull under sodium light is almost pure
+    // specular.
+    // NORMAL AMPLITUDE, not tiling density. The obvious read of "96 texels per
+    // metre against a 500 standard" is to raise `repeat`, and that is measurably
+    // the WRONG lever here: genShipHull's finest octave is 150 cycles per TILE,
+    // so at repeat 0.36 x uv 0.52 (a 5.3 m tile) it is already a 3.6 cm feature
+    // - about one screen pixel at the 8-10 m the player stands from the hull in
+    // quay / gangway / rain_closeup. Raising the density makes that octave
+    // FINER, i.e. more sub-pixel, which is exactly the "crushed foil" read; and
+    // because the recipe maps its boot topping, waterline and antifouling bands
+    // to the tile's own V, every extra repeat lands another set of paint bands
+    // up the hull. Re-authoring genShipHull for a ~1.9 m footprint (weld beads
+    // as proud ridges, rivet lines, drips off the scuppers, the paint bands
+    // moved to a second tap) is the real fix and it lives in textures.js.
+    //
+    // What this file can do is stop the existing octave shattering the lobe:
+    // ns drops from 1.20 to 0.80, the meso band that authors PLATE-scale relief
+    // comes up, and the texel-density normal schedule (gbNrmW) takes the base
+    // map down as the footprint shrinks below a pixel instead of leaving it at
+    // full strength at 60 m.
+    ship_hull: {
+      color: 0x2b3239, alb: 0.048, hue: 0.60, tex: 'ship_hull', texAlt: 'rusted_metal',
+      rough: [0.26, 0.88], roughFlat: 0.58, metal: 0.55,
+      ns: 0.80, ao: 0.9, env: 1.05, repeat: 0.36,
+      detail: 0.72, detailCm: 4, wdet: true, macro: 0.22, tri: false, pom: 0,
+      detailKind: 'metal', polish: 0.52,
+      stoch: true, dir: true, flat: 0.65, meso: 1.15,
+      wetDark: 0.62, wetRough: 0.08, wetAmt: 1.0, wetFlat: 0.62, streak: 1.0
+    },
+    // ---- the apron ---------------------------------------------------------
+    // The single largest surface in the level and the one the whole look hangs
+    // on: "the concrete apron is a black mirror holding stretched reflections
+    // of every lamp". `color` is the DRY chromaticity (a cool grey, never the
+    // market's warm tan) and alb the DRY reflectance - the near-black
+    // #16191c the art direction quotes is the WET result, and it is the
+    // wetness path that gets it there (x0.42, roughness -> 0.055) rather than
+    // a black albedo, so the same material still reads as concrete indoors
+    // under the warehouse roof where the rain does not reach.
+    //
+    // MICRO RELIEF IS DELIBERATELY LOW HERE. A 5 cm detail period at strength
+    // 0.85 on a surface driven to roughness 0.055 is a field of ~5 cm blobs each
+    // catching its own full specular - "a bed of wet pebbles", measured at 1.2%
+    // isolated over-bright pixels on the warehouse floor. The reflecting
+    // interface on a sheeted slab is the WATER, not the concrete: the substrate
+    // relief survives in the albedo cavity and the AO (which are not gated by
+    // gbWetND) but must not survive into the shading normal. Hence detail 0.45
+    // at a 10 cm period, ns 0.95, and wetFlat right up at 0.94.
+    wet_concrete: {
+      color: 0x8d949a, alb: 0.17, hue: 0.88, tex: 'wet_concrete', texAlt: 'concrete',
+      rough: [0.40, 0.96], roughFlat: 0.91, metal: 0.0,
+      ns: 0.95, ao: 0.9, env: 1.05, texels: 500, repeat: 0.5,
+      detail: 0.45, detailCm: 10, wdet: true, macro: 0.22, tri: true, pom: 0.012,
+      detailKind: 'mineral', polish: 0.62, triWarp: [0.40, 0.40, 0.40], chroma: 0.76,
+      meso: 1.0, ground: true, groundAmt: 0.34, dust: 0x6d7278,
+      wetDark: 0.42, wetRough: 0.055, wetAmt: 1.0, wetFlat: 0.88, puddle: 1.0, streak: 0.5
+    },
+    // Precast kerbs, bollard plinths, the crane rails and the warehouse slab -
+    // the same family, drier and coarser, and it does not pond nearly as much
+    // because it is either sloped, sheltered or above the standing water.
+    // Same argument as wet_concrete: a 5 cm detail period at 0.9 read as a
+    // uniform field of pebbles at the SAME apparent size at 3 m and at 20 m,
+    // which is the signature of a layer whose world period is too coarse to
+    // minify and too strong to ignore. 12 cm at 0.35 puts it back in the band
+    // where it reads as a float-finished slab.
+    dock_concrete: {
+      color: 0x8a9096, alb: 0.19, hue: 0.82, tex: 'dock_concrete', texAlt: 'concrete_wall',
+      rough: [0.44, 0.97], roughFlat: 0.93, metal: 0.0,
+      ns: 1.05, ao: 0.9, env: 1.0, texels: 500, repeat: 0.5,
+      detail: 0.35, detailCm: 12, wdet: true, macro: 0.24, tri: true, triSharp: 9.0, pom: 0,
+      detailKind: 'mineral', polish: 0.46, triWarp: [0.46, 0.46, 0.46], chroma: 0.72,
+      meso: 0.7, ground: true, dust: 0x6d7278,
+      wetDark: 0.48, wetRough: 0.085, wetAmt: 1.0, wetFlat: 0.86, puddle: 0.45, streak: 0.7
+    },
+    // ---- alpha-cut meshes --------------------------------------------------
+    // Both are two-sided and alpha TESTED, never blended: a blended fence does
+    // not write depth, needs sorting, and drops out of the shadow map - and a
+    // perimeter fence that casts no shadow through a sodium lamp cone is the
+    // single most obvious way to lose the "pools of light" read.
+    //
+    // Neither gets stochastic tiling or POM. Blending two offset taps of an
+    // ALPHA map lands the blend band on half coverage, which alphaTest then
+    // cuts into a ragged fringe along every cell boundary.
+    //
+    // NEITHER IS A RAW CONDUCTOR. Thirty years of salt on galvanising is a zinc
+    // OXIDE film - a dielectric with a real diffuse albedo - and that is exactly
+    // why you can see a fence against a night sky at all. At metal 0.90 the mesh
+    // had zero diffuse response and could only return direct specular plus an
+    // environment probe that is near-black by design at 02:00, so the whole
+    // perimeter was carried by a handful of glinting wires.
+    //
+    // Both also get `alphaCov`: their alpha mip chain is rebuilt on the CPU so
+    // each level's coverage above alphaTest matches level 0's (Castano). The
+    // driver's box filter converges every level on the MEAN alpha, which for a
+    // mesh either fills the apertures in solid or dissolves the wire entirely,
+    // depending on which side of alphaTest the mean falls - and a fence that
+    // goes opaque blocks the sightline it exists to shoot through and casts a
+    // solid slab of shadow through the sodium cone.
+    chainlink: {
+      color: 0x8a9096, alb: 0.14, hue: 0.45, tex: 'chainlink', local: true,
+      rough: [0.34, 0.84], roughFlat: 0.56, metal: 0.25,
+      ns: 0.85, ao: 0.85, env: 1.10, repeat: 2.4, side: 2, alphaTest: 0.42,
+      alphaCov: true,
+      detail: 0.35, detailTile: 24, macro: 0.10, tri: false, pom: 0,
+      detailKind: 'metal', polish: 0.50,
+      wetDark: 0.82, wetRough: 0.10, wetAmt: 0.85, wetFlat: 0.35, streak: 0.35
+    },
+    steel_grate: {
+      color: 0x5c6165, alb: 0.095, hue: 0.45, tex: 'steel_grate', local: true,
+      rough: [0.34, 0.88], roughFlat: 0.60, metal: 0.35,
+      ns: 1.0, ao: 0.9, env: 1.05, repeat: 1.6, side: 2, alphaTest: 0.5,
+      alphaCov: true,
+      detail: 0.5, detailTile: 20, macro: 0.12, tri: false, pom: 0,
+      detailKind: 'metal', polish: 0.56,
+      wetDark: 0.74, wetRough: 0.09, wetAmt: 0.95, wetFlat: 0.40, puddle: 0.0, streak: 0.6
+    },
+    // ---- soft goods --------------------------------------------------------
+    // PVC tarpaulin over stacked pallets. A dielectric with a real sheen lobe;
+    // it SHEDS water rather than absorbing it, so wetDark is high - but it is
+    // still a sheet of coated fabric under tension, not a pond.
+    //
+    // puddle WAS 0.65 AND wetRough 0.070, AND BOTH WERE WRONG. A lashed sheet
+    // is DOMED: it is pitched in every direction, water leaves it, and the one
+    // thing that cannot happen on it is 65% standing-water coverage at
+    // roughness 0.070 - which is a horizontal mirror, and a horizontal mirror
+    // under a sodium head returns the lamp at full strength. props_harbor.js
+    // diagnosed exactly that and passed puddle 0.16 / wetRough 0.170 by hand at
+    // its two tarpaulin call sites, with a nine-line comment explaining why -
+    // and then the SAME def served two more call sites (the shrink-wrapped
+    // bales and the warehouse unit loads) that did NOT override it, so half the
+    // tarpaulins in the level kept the mirror. A number a consumer has to
+    // correct at every call site is a wrong number, not a default; this is the
+    // library agreeing with the surface it authored.
+    //
+    // It also matters to a pass this file does not own: postfx's SSR
+    // reconstructs "is there standing water here" from DEPTH plus the wet
+    // contract, so a def that claims a domed sheet ponds is an invitation to
+    // paint an environment reflection over the whole crown. See wetContract().
+    tarpaulin: {
+      color: 0x46504e, alb: 0.10, hue: 0.40, tex: 'tarpaulin', texAlt: 'cloth_canvas',
+      rough: [0.40, 0.92], roughFlat: 0.80, metal: 0.0,
+      ns: 1.10, ao: 0.85, env: 0.95, repeat: 1.0, side: 2,
+      detail: 0.6, detailTile: 30, macro: 0.18, tri: false, pom: 0,
+      detailKind: 'woven', polish: 0.30, sheen: 0.30, sheenColor: 0x9aa8a4,
+      stoch: true, dir: true, flat: 0.6,
+      wetDark: 0.72, wetRough: 0.150, wetAmt: 1.0, wetFlat: 0.55, puddle: 0.14, streak: 1.0
+    },
+    // Mooring line under tension. Jute/polyprop lay, and the one surface here
+    // that SOAKS: a wet rope goes dark and stays matte, it does not gloss up.
+    // Getting that wrong is what makes wet weather read as a varnish pass.
+    rope: {
+      color: 0x6d6250, alb: 0.11, hue: 0.35, tex: 'rope', texAlt: 'sandbag',
+      rough: [0.62, 1.0], roughFlat: 0.94, metal: 0.0,
+      ns: 1.30, ao: 0.95, env: 0.85, repeat: 3.0,
+      detail: 0.75, detailTile: 26, macro: 0.16, tri: false, pom: 0,
+      detailKind: 'woven', polish: 0.12,
+      stoch: true, dir: true, flat: 0.6,
+      wetDark: 0.55, wetRough: 0.44, wetAmt: 0.9, wetFlat: 0.15, streak: 0.25
+    },
+    // Cylindrical dock fender. Near-black rubber: the lowest albedo in the
+    // library after asphalt, and it gets essentially all of its read from the
+    // wet specular.
+    rubber_fender: {
+      color: 0x1d1f21, alb: 0.028, hue: 0.55, tex: 'rubber_fender', texAlt: 'rubber',
+      rough: [0.42, 0.92], roughFlat: 0.85, metal: 0.0,
+      ns: 1.0, ao: 0.9, env: 0.90, repeat: 1.2,
+      detail: 0.7, detailTile: 22, macro: 0.10, tri: false, pom: 0,
+      detailKind: 'mineral', polish: 0.34,
+      wetDark: 0.80, wetRough: 0.095, wetAmt: 0.9, wetFlat: 0.40, streak: 0.9
+    },
+    // ---- structures --------------------------------------------------------
+    // Warehouse roof sheeting. Same profile logic as the market's corrugated
+    // sheet (6 ribs per tile, quantised offsets) but a longer pitch and a much
+    // wider roughness window, because a rusted roof under rain is patchy.
+    corrugated_roof: {
+      color: 0x5f6461, alb: null, hue: 0.50, tex: 'corrugated_roof', texAlt: 'corrugated_metal',
+      rough: [0.28, 0.88], roughFlat: 0.62, metal: 0.85,
+      ns: 1.05, ao: 0.9, env: 1.05, repeat: 1.5,
+      detail: 0.6, detailCm: 4, wdet: true, macro: 0.18, tri: false, pom: 0,
+      detailKind: 'metal', polish: 0.55,
+      stoch: true, dir: true, stochQ: [6, 0], flat: 0.6, meso: 0.5,
+      wetDark: 0.72, wetRough: 0.085, wetAmt: 0.95, wetFlat: 0.42, puddle: 0.35, streak: 1.0
+    },
+    // Ship deck / crane walkway / gantry platform, AND - because level_harbor.js
+    // builds the whole gantry, the warehouse portal frame, the purlins, the
+    // handrails, the bollard tops and the catenary cables out of it - the
+    // level's structural steel. See `structural_steel` below for the properly
+    // named entry; this one had to stop being a raw conductor either way.
+    //
+    // PAINTED, NOT BARE. metal was 0.90 with alb null (and genDeckPlate authors
+    // a metalness map around 0.85, so the effective value was ~0.77). A
+    // conductor has no diffuse response at all: it can return direct specular
+    // and the environment probe, and at 02:00 under storm cloud that probe is
+    // near-black BY DESIGN - so the crane, which is most of crane.png, was made
+    // of a material physically incapable of receiving ambient light and the
+    // frame measured 0.098 mean luminance against a 0.10 floor. Real ship-to-
+    // shore cranes and warehouse steel are primed and painted, i.e. a dielectric
+    // with a genuine albedo, which is exactly why you can see one against a
+    // night sky. This lifts the frame by making the crane a LIT OBJECT rather
+    // than by pushing exposure, which is the only fix that does not blow out the
+    // sodium pools in the same frame.
+    deck_plate: {
+      // The palette entry is a WARM primer grey, not the cool 0x4e5358 the raw
+      // conductor carried. It matters more than it looks: at metal 0.90 the
+      // diffuse response was zero, so `color` only ever tinted an F0 nobody
+      // could see. As a dielectric it is now the dominant term on every crane
+      // member, mast and portal frame in the level - and a cool grey there
+      // measurably inverted the grade in the two ship-side framings (gangway
+      // -0.038, rain_closeup +0.001 against +0.028 / +0.152 with the surface
+      // neutralised), because the crane fills those frames and it was returning
+      // the cold mercury floods with no warmth of its own. Yard enamel over
+      // red-oxide primer with thirty years of rust weeping through it is warm.
+      color: 0x5e574d, alb: 0.090, hue: 0.62, tex: 'deck_plate', texAlt: 'rusted_metal',
+      rough: [0.32, 0.90], roughFlat: 0.64, metal: 0.22,
+      ns: 1.00, ao: 0.9, env: 1.0, repeat: 1.3,
+      detail: 0.6, detailCm: 4, wdet: true, macro: 0.18, tri: false, pom: 0,
+      detailKind: 'metal', polish: 0.50,
+      stoch: true, dir: true, flat: 0.65, meso: 0.5,
+      wetDark: 0.68, wetRough: 0.075, wetAmt: 1.0, wetFlat: 0.62, puddle: 0.55, streak: 0.8
+    },
+    // Primer-over-plate structural steel: the box girders, the lattice, the
+    // portal frame, the stiffener seams and the bolt flanges. A dielectric with
+    // a real diffuse albedo and a wide, spatially spread roughness, so it reads
+    // against a black sky the way painted steel actually does. The wear channel
+    // (see get()'s vertex convention) still breaks edges and impact points
+    // through to bare metal, which is where the conductor belongs.
+    //
+    // It exists as its own name so a consumer does not have to spell structural
+    // steel `deck_plate` and get diamond tread on a box girder; `deck_plate` is
+    // reserved for the walkways and gratings it was authored for. Alias it
+    // through `crane`, `gantry`, `girder`, `structure`, `beam` or `handrail`.
+    structural_steel: {
+      color: 0x605950, alb: 0.095, hue: 0.62, tex: 'structural_steel', texAlt: 'deck_plate',
+      rough: [0.32, 0.90], roughFlat: 0.66, metal: 0.06,
+      ns: 0.95, ao: 0.9, env: 1.0, repeat: 1.1,
+      detail: 0.6, detailCm: 4, wdet: true, macro: 0.24, tri: false, pom: 0,
+      detailKind: 'metal', polish: 0.42,
+      stoch: true, dir: true, flat: 0.65, meso: 0.6,
+      wetDark: 0.66, wetRough: 0.080, wetAmt: 1.0, wetFlat: 0.60, puddle: 0.35, streak: 0.9
+    },
+    // Worn lane markings on the apron. Thermoplastic paint is BRIGHT - it is
+    // the only high-reflectance surface in a level built out of near-blacks,
+    // and it is what gives the apron its leading lines. polyOffset because it
+    // is laid coplanar on the slab.
+    painted_line: {
+      color: 0xd8c65a, alb: 0.30, hue: 0.55, tex: 'painted_line', texAlt: 'concrete',
+      rough: [0.30, 0.90], roughFlat: 0.70, metal: 0.0,
+      ns: 0.80, ao: 0.8, env: 1.0, repeat: 1.0,
+      detail: 0.5, detailCm: 4, wdet: true, macro: 0.16, tri: false, pom: 0,
+      detailKind: 'mineral', polish: 0.55, poly: [-3, -6],
+      wetDark: 0.46, wetRough: 0.055, wetAmt: 1.0, wetFlat: 0.80, puddle: 0.9, streak: 0.3
+    },
+    // Reefer end panel: louvred stainless over an insulated box, with the
+    // condensation the humming plant leaves on it. The tightest roughness
+    // window in the library - this is the surface that throws a hard, small
+    // highlight back at a mercury flood.
+    reefer_panel: {
+      color: 0x9aa3a8, alb: null, hue: 0.45, tex: 'reefer_panel', texAlt: 'painted_metal',
+      rough: [0.14, 0.64], roughFlat: 0.34, metal: 0.92,
+      ns: 0.85, ao: 0.85, env: 1.20, repeat: 1.4,
+      detail: 0.5, detailCm: 3, wdet: true, macro: 0.10, tri: false, pom: 0,
+      detailKind: 'metal', polish: 0.72,
+      stoch: true, dir: true, flat: 0.7, meso: 0.35,
+      wetDark: 0.86, wetRough: 0.065, wetAmt: 0.8, wetFlat: 0.35, streak: 1.0
+    },
+    // The harbour water. get('sea_water') does NOT come through _create - it
+    // is intercepted and answered by MaterialLibrary.water(), which has its
+    // own wave/absorption/foam shader. This entry exists so has('sea_water')
+    // is true, so maps('sea_water') works for anyone who wants the raw set,
+    // and so the name audit has something to check.
+    sea_water: {
+      color: 0x0d1a20, alb: 0.020, hue: 0.85, tex: 'sea_water', local: true,
+      rough: [0.02, 0.30], roughFlat: 0.045, metal: 0.0,
+      ns: 0.7, ao: 0.5, env: 1.6, repeat: 0.25,
+      detail: 0, macro: 0.14, tri: false, pom: 0,
+      detailKind: 'mineral', polish: 0.0,
+      wetDark: 1.0, wetRough: 0.03, wetAmt: 0.0, wetFlat: 0.0
     }
   };
 
@@ -621,7 +1052,51 @@
     skyline: 'far_facade',
     distant: 'far_facade',
     far: 'far_facade',
-    default: 'concrete'
+    default: 'concrete',
+
+    // ---- COLD HARBOR ------------------------------------------------------
+    // Purely additive: not one existing key is redefined, so `ground`, `road`,
+    // `street`, `metal`, `tarp` and friends still resolve exactly where the
+    // market level expects them to. These only add NEW spellings the harbor
+    // modules are likely to guess.
+    container: 'container_steel',
+    corten: 'container_steel',
+    hull: 'ship_hull',
+    freighter: 'ship_hull',
+    apron: 'wet_concrete',
+    quay: 'dock_concrete',
+    dock: 'dock_concrete',
+    wharf: 'dock_concrete',
+    fence: 'chainlink',
+    wire_fence: 'chainlink',
+    mesh: 'chainlink',
+    grate: 'steel_grate',
+    grating: 'steel_grate',
+    walkway: 'steel_grate',
+    tarpaulin_sheet: 'tarpaulin',
+    mooring: 'rope',
+    hawser: 'rope',
+    fender: 'rubber_fender',
+    bumper: 'rubber_fender',
+    roof_sheet: 'corrugated_roof',
+    roofing: 'corrugated_roof',
+    deck: 'deck_plate',
+    checker_plate: 'deck_plate',
+    crane: 'structural_steel',
+    gantry: 'structural_steel',
+    girder: 'structural_steel',
+    beam: 'structural_steel',
+    structure: 'structural_steel',
+    handrail: 'structural_steel',
+    portal_frame: 'structural_steel',
+    lane: 'painted_line',
+    marking: 'painted_line',
+    markings: 'painted_line',
+    reefer: 'reefer_panel',
+    water: 'sea_water',
+    sea: 'sea_water',
+    ocean: 'sea_water',
+    harbour: 'sea_water'
   };
 
   // Fallback palette used when ctx.textures cannot supply a map set. Values
@@ -657,7 +1132,51 @@
     far_facade: [0x9a9184, 0x6d665c, 14, 3, 0.15],
     paint_blue: [0x4d6b78, 0x2c3f47, 16, 3, 0.18],
     paint_green: [0x566b4e, 0x323f2e, 16, 3, 0.18],
-    lime_wash: [0xc4cbcb, 0x8e9797, 26, 4, 0.3]
+    lime_wash: [0xc4cbcb, 0x8e9797, 26, 4, 0.3],
+    // ---- COLD HARBOR ------------------------------------------------------
+    container_steel: [0x6e7276, 0x3c4043, 20, 3, 0.30],
+    container_red: [0x7a2f28, 0x431a16, 20, 3, 0.30],
+    container_blue: [0x1f4a6b, 0x122a3d, 20, 3, 0.30],
+    container_green: [0x2c5040, 0x192e25, 20, 3, 0.30],
+    ship_hull: [0x2b3239, 0x171b1f, 24, 4, 0.28],
+    wet_concrete: [0x8d949a, 0x5a5f64, 34, 5, 0.55],
+    dock_concrete: [0x8a9096, 0x585d61, 30, 4, 0.50],
+    chainlink: [0x8a9096, 0x4d5256, 18, 2, 0.15],
+    steel_grate: [0x5c6165, 0x33373a, 18, 2, 0.15],
+    tarpaulin: [0x46504e, 0x28302e, 64, 3, 0.25],
+    rope: [0x6d6250, 0x433c30, 70, 4, 0.30],
+    rubber_fender: [0x1d1f21, 0x0f1011, 52, 5, 0.35],
+    corrugated_roof: [0x5f6461, 0x353937, 18, 3, 0.25],
+    deck_plate: [0x5e574d, 0x2f2c26, 20, 3, 0.25],
+    structural_steel: [0x605950, 0x35312a, 22, 3, 0.28],
+    painted_line: [0xd8c65a, 0x8e8137, 26, 4, 0.30],
+    reefer_panel: [0x9aa3a8, 0x5f6669, 14, 3, 0.14],
+    sea_water: [0x0d1a20, 0x050a0d, 10, 2, 0.05]
+  };
+
+  // The two surfaces with no plausible market stand-in. `local:true` in DEFS
+  // routes them here instead of asking textures.js for a recipe it may not
+  // implement (which answers with concrete AND a loud missingRecipe error in
+  // every other agent's capture report). The alpha channel IS the material,
+  // so a solid-albedo fallback would turn the perimeter fence into a wall and
+  // the crane walkway into a plate - and a wall where a fence should be
+  // changes the level's sightlines, not just its look.
+  //
+  //   wire   : bar half-width, in tile fractions
+  //   pitchU/pitchV : cells across the tile
+  //   kind   : 'diamond' (chainlink) | 'bar' (bearing bars + cross rods)
+  //
+  // WIRE THICKNESS IS A COVERAGE BUDGET, not a look. `wire` is a half-width in
+  // TILE fractions and the cell is 1/pitch wide, so 0.055 against a 6-cell pitch
+  // put the wire across two thirds of the aperture - real 50 mm mesh in 3 mm
+  // wire is about 6%. That is a fence you cannot see through even before the mip
+  // chain gets involved, and it is what made the perimeter photograph as a
+  // slatted screen. 0.012 is a ~14% aperture-to-wire ratio, which reads as mesh
+  // and still survives alphaTest at close range because the chain is rebuilt
+  // coverage-preserving (see _alphaCoverageMips).
+  var FALLBACK_CUT = {
+    chainlink: { kind: 'diamond', pitchU: 6, pitchV: 6, wire: 0.012, base: 0x8a9096, tip: 0xb6bfc4 },
+    steel_grate: { kind: 'bar', pitchU: 7, pitchV: 2, wire: 0.040, base: 0x5c6165, tip: 0x878e92 }
   };
 
   // ==========================================================================
@@ -790,7 +1309,7 @@
   ].join('\n');
 
   var G_TRI_DETAIL = [
-    '  float dsc = gbDetailStrength * gbDetailFade;',
+    '  float dsc = gbDetailStrength * gbDetailFadeGB_WND;',
     '  vec3 dx = gbDetN( uvX * gbDetailTile, dsc );',
     '  vec3 dy = gbDetN( uvY * gbDetailTile, dsc );',
     '  vec3 dz = gbDetN( uvZ * gbDetailTile, dsc );',
@@ -1088,6 +1607,329 @@
   ].join('\n');
 
   // ==========================================================================
+  // COLD HARBOR - the wet-surface layer.
+  //
+  // None of this is compiled into a market material: the whole block is gated
+  // on F.wet, which is false unless ctx.levelId is 'harbor' (or a caller opts
+  // in explicitly), and the program cache key only grows when it is on - so
+  // level 1's shaders are byte-identical to what shipped.
+  //
+  // The model is deliberately four separable layers rather than one "wetness"
+  // multiplier, because they behave differently and a single dial gets each
+  // of them wrong:
+  //
+  //   1. SOAK       - a water film fills the surface's pores and traps light
+  //                   by total internal reflection. Porous things go a LOT
+  //                   darker (concrete x0.42); sealed things barely darken and
+  //                   simply turn glossy (rubber x0.80). It also FLATTENS the
+  //                   micro-normal, because the film literally fills the
+  //                   relief - that flattening is what separates convincing
+  //                   wet from a gloss pass, and it is the part everybody
+  //                   leaves out.
+  //   2. PUDDLE     - standing water on up-facing surfaces: a flat mirror with
+  //                   roughness near zero, the normal collapsed to the
+  //                   geometric surface, and a Fresnel-weighted reflective
+  //                   layer over the substrate. Edges are feathered, with a
+  //                   DAMP RING one shade darker outside the water line, which
+  //                   is what stops a puddle reading as a decal.
+  //   3. RIPPLE     - impact rings from the downpour, perturbing the puddle
+  //                   normal. "Puddles that do not ripple in the rain" is on
+  //                   the harbor instant-fail list.
+  //   4. STREAK     - water running DOWN vertical faces: container flanks,
+  //                   hull plate, glass. A scrolling rivulet mask modulating
+  //                   roughness and normal. Subtle, but it is the only thing
+  //                   that makes a vertical surface read as wet rather than
+  //                   merely dark.
+  // ==========================================================================
+
+  // Impact ripples. The source tile is a jittered-grid Voronoi that stores,
+  // per texel: R = normalised distance to its emitter, G = that emitter's
+  // hashed birth phase, BA = the unit radial direction. The travelling ring is
+  // then evaluated analytically, so ONE fetch animates forever with no flipbook
+  // and no per-frame CPU work - and because the envelope goes to zero exactly
+  // at the cell boundary, the bilinear blend across the Voronoi seam (where
+  // direction and phase are discontinuous) is multiplied by nothing.
+  var G_RIPPLE = [
+    '// ONE WAVEFRONT PER CELL PER PERIOD, at a radius set only by the cell size,',
+    '// with a (1-d)^2 (1-ph) envelope, is a field of identical annuli with a thin',
+    '// hard rim on a lattice: washers lying on the ground, not rain. Three things',
+    '// fix it and all three are free, because the cell already carries a unique',
+    '// hash in G and the envelope already goes to zero at the boundary:',
+    '//',
+    '//   * each drop gets its OWN radius scale, rate and amplitude, taken from',
+    '//     two more values folded out of that same hash (r.g is bilinear across',
+    '//     the Voronoi seam, but the envelope there is zero, so the derived',
+    '//     values may be discontinuous without showing);',
+    '//   * a rising CENTRE - the first thing a raindrop makes is a hole, not a',
+    '//     ring - which collapses in the first 16% of the life;',
+    '//   * the outer fifth of the envelope is FEATHERED, so the ring has no hard',
+    '//     terminus and no visible cell boundary.',
+    '//',
+    '// `gen` decorrelates the phase between the overlapping generations below, so',
+    '// several radii are live at once instead of the whole apron pulsing together.',
+    'vec2 gbRippleTap( vec2 p, float rate, float scale, vec2 ofs, float gen ) {',
+    '  vec4 r = texture2D( gbRippleMap, p * scale + ofs );',
+    '  float d = r.r;',
+    '  vec2 dir = r.ba * 2.0 - 1.0;',
+    '  float hB = fract( r.g * 37.13 + gen );',
+    '  float hC = fract( r.g * 91.71 + gen * 2.31 );',
+    '  float rs = 0.58 + hB * 0.82;',            // this drop's radius, in cell radii
+    '  float ph = fract( gbTime * rate * ( 0.70 + hC * 0.70 ) + r.g + gen * 0.37 );',
+    '  float dr = d / rs;',
+    '  float w = dr - ph;',                      // signed distance to the wavefront
+    '  float ring = sin( w * 26.0 ) * exp( - w * w * 58.0 );',
+    '  // The crown: a dimple at the impact point that fills back in. Negative,',
+    '  // because dir points radially OUTWARD from the emitter.',
+    '  float crown = - 1.5 * exp( - dr * dr * 24.0 ) * ( 1.0 - smoothstep( 0.0, 0.16, ph ) );',
+    '  float env = ( 1.0 - smoothstep( 0.62, 1.0, d ) ) * ( 1.0 - ph ) * ( 1.0 - ph );',
+    '  return dir * ( ring + crown ) * env * ( 0.55 + hB * 0.80 );',
+    '}',
+    '// gbRipCfg: x = tiles per metre, y = strength, z = SOURCE MODE.',
+    '//',
+    '// Mode 1 is weather.js\'s field, and it is the one we want whenever it',
+    '// exists: weather.js owns the rain, and it re-renders that map every frame',
+    '// from the SAME pool of impact points that spawns the splash particles -',
+    '// so a drop that visibly lands makes the ring the puddle shows. It arrives',
+    '// as a plain tangent-space normal map, which decodes completely',
+    '// differently from our own packing, so the two share one sampler and',
+    '// branch on the mode rather than costing a second texture unit and a',
+    '// second shader permutation.',
+    '//',
+    '// Mode 0 is ours: two decorrelated densities of an analytic travelling',
+    '// ring, so the puddles still move if weather.js is missing, still building,',
+    '// or has failed. Static puddles in driving rain are an instant fail, and',
+    '// "another module will provide it" is not a plan.',
+    'vec2 gbRipples( vec2 p, float amt ) {',
+    '  if ( amt < 0.004 ) return vec2( 0.0 );',
+    '  if ( gbRipCfg.z > 0.5 ) {',
+    '    vec3 n = texture2D( gbRippleMap, p * gbRipCfg.x ).xyz * 2.0 - 1.0;',
+    '    return n.xy * ( amt * gbRipCfg.y );',
+    '  }',
+    '  // 1.13 / 2.67 / 1.79, NOT 1.15 / 2.30. Densities an octave apart share a',
+    '  // lattice, and the sum of two aligned Voronoi grids is a third, very',
+    '  // visible grid - the ripples photographed as a regular field of dents.',
+    '  // THREE overlapping generations at decorrelated phases, so at any instant',
+    '  // several radii are live and the apron is never all at one visual phase.',
+    '  vec2 a = gbRippleTap( p, 1.55, 1.13, vec2( 0.0 ), 0.0 );',
+    '  vec2 b = gbRippleTap( p, 1.13, 2.67, vec2( 0.41, 0.73 ), 0.53 );',
+    '  vec2 c = gbRippleTap( p, 0.86, 1.79, vec2( 0.77, 0.19 ), 0.19 );',
+    '  return ( a + b * 0.72 + c * 0.58 ) * amt;',
+    '}'
+  ].join('\n');
+
+  // Rivulets running down a vertical face. Fully analytic - a texture would
+  // have to scroll, and a scrolling texture on a world-projected surface slides
+  // relative to the geometry the moment the face is not axis-aligned.
+  //
+  // Columns are hashed along the face's own horizontal axis, so each rivulet
+  // has its own width, speed and break-up; only about half of them are live,
+  // because a wall where every column is running reads as a car wash.
+  // Returns x = coverage mask, y = the cross-section gradient for the normal.
+  var G_STREAK = [
+    '// gbStrkW is the view-distance schedule (1 near, ~0.2 far). A rivulet is a',
+    '// centimetre-scale analytic feature with no mip chain, so without it the',
+    '// layer runs at full amplitude at 60 m where its column pitch is a third of',
+    '// a pixel - which is precisely the heavy vertical striping that covered the',
+    '// container flanks and the freighter hull. Every other high-frequency layer',
+    '// in this file already fades (gbDetailFade 9-26 m, gbDet2W 3-7 m, gbMesoW',
+    '// 42-92 m, gbPomFade 4-11 m); this one did not, and it is the only one that',
+    '// also snaps roughness to 0.048 on the texels it touches.',
+    'vec2 gbStreaks( vec3 wp, vec3 wn ) {',
+    '  // The face\'s own HORIZONTAL tangent, so the column spacing is correct at',
+    '  // any yaw. The old code picked wp.zy or wp.xy off the dominant normal',
+    '  // axis, which is only right for an axis-aligned face - a hull plate or a',
+    '  // skewed container end got its rivulets spaced along the wrong axis and',
+    '  // sheared with it.',
+    '  vec2 hx = vec2( wn.z, - wn.x );',
+    '  float hl = length( hx );',
+    '  hx = hl > 1e-4 ? hx / hl : vec2( 1.0, 0.0 );',
+    '  vec2 pl = vec2( dot( wp.xz, hx ), wp.y );',
+    '  // COVERAGE IS A BUDGET, and this layer blew it. The pitch went 9.0 -> 4.2',
+    '  // (a 24 cm column) to stop the cross-section going sub-pixel, which was',
+    '  // right, but the WIDTH went with it: a half-width of 0.16-0.42 of the cell',
+    '  // is a run 7.7-20 cm wide, and at step(0.52) half the columns were live.',
+    '  // Multiply it out and 23-27% of every vertical face in the level was',
+    '  // running with water - measured as 23% of the columns on the red container',
+    '  // flank sitting below 45% of the flank median, i.e. the "heavy dark',
+    '  // red/black vertical smearing". Rain on a container does not do that: it',
+    '  // sheets off the top rail and comes down as a HANDFUL of runs a few',
+    '  // centimetres wide, in the corrugation valleys, with dry ribs between them.',
+    '  //',
+    '  // 3.1 (a ~32 cm column) with a 2.2-5.8 cm half-width and step(0.62) puts',
+    '  // the budget at ~5% before the break-up noise and ~3% after, which is what',
+    '  // a flank in a downpour actually looks like - and the run is still 4-11 px',
+    '  // across at 10 m, so nothing has gone back below Nyquist.',
+    '  float U = pl.x * 3.1;',
+    '  float ci = floor( U );',
+    '  float fu = fract( U ) - 0.5;',
+    '  float h1 = gbHash13( vec3( ci, 7.3, 2.1 ) );',
+    '  float h2 = gbHash13( vec3( ci, 1.9, 5.7 ) );',
+    '  float live = step( 0.62, h1 );',
+    '  float w = 0.070 + h2 * 0.110;',
+    '  float prof = 1.0 - smoothstep( w * 0.25, w, abs( fu ) );',
+    '  // Scroll downward. Wind shear tilts the run slightly off vertical.',
+    '  //',
+    '  // The vertical frequency is deliberately LOW (a ~1 m break-up period',
+    '  // against the column pitch). Water running down a container flank makes',
+    '  // long thin rivulets that occasionally break and re-form; at a frequency',
+    '  // anywhere near the column pitch the same code makes isotropic blobs, and',
+    '  // the flank photographs as mottled frost rather than as anything running',
+    '  // anywhere.',
+    '  float yy = pl.y * ( 0.85 + h2 * 1.05 ) + gbTime * ( 0.40 + h1 * 0.95 )',
+    '           + pl.x * gbWindW.z * 0.06;',
+    '  float bead = smoothstep( 0.34, 0.74, gbValue3( vec3( ci * 3.1, yy, 0.7 ) ) );',
+    '  float mask = live * prof * bead * gbStrkW;',
+    '  // A rivulet is a lens: the normal bends outward from its centre line.',
+    '  float g = - sign( fu ) * prof * ( 1.0 - prof ) * 4.0 * live * bead * gbStrkW;',
+    '  return vec2( mask, g );',
+    '}'
+  ].join('\n');
+
+  // Where standing water can lie. Two world-space octaves make the basins,
+  // biased by the surface's own cavity so the water settles INTO the relief
+  // rather than floating on top of it, and the threshold falls as the level
+  // soaks - so a puddle grows outward from its deepest point as the storm
+  // builds instead of fading up as a flat stencil.
+  var G_PUDDLE = [
+    'float gbPuddleField( vec3 wp, float cav ) {',
+    '  float b = gbValue3( wp * vec3( 0.21, 0.05, 0.21 ) + 17.0 ) * 0.63',
+    '          + gbValue3( wp * vec3( 0.86, 0.09, 0.86 ) + 41.0 ) * 0.37;',
+    '  return b + ( 0.5 - cav ) * 0.20;',
+    '}'
+  ].join('\n');
+
+  // --------------------------------------------------------------------------
+  // gbWetSolve - THE WET CONTRACT, in one function, published.
+  //
+  // Everything about "how wet is this square metre" - standing-water coverage,
+  // the damp collar outside it, film thickness and the resulting roughness -
+  // lives here so there is exactly ONE definition of it. It used to live inline
+  // in the material shader, and postfx.js's screen-space reflection pass (which
+  // has no G-buffer and must reconstruct the surface from depth) hand-rolled a
+  // completely different field: one octave of value noise at a ~7 m period with
+  // no cavity term, against this file's two octaves at ~4.8 m and ~1.2 m. The
+  // two were uncorrelated, so the apron came out mirror-flat where the SSR noise
+  // said "puddle" and matte where it said "dry", and neither had anything to do
+  // with where this file had darkened the albedo and collapsed the roughness.
+  // The reflections were not short - they were in the WRONG PLACES, and the ones
+  // that landed on a patch the material believed was dry got blurred and faded
+  // by the roughness ramp.
+  //
+  // So the string is exported as GAME.MaterialLibrary.WET_GLSL and postfx can
+  // paste it verbatim: same noise, same field, same thresholds, byte-identical
+  // evaluation in both passes. MaterialLibrary.wetContract() hands over the live
+  // uniform values to feed it.
+  //
+  //   wp   world position
+  //   up   clamp( worldNormal.y, 0.0, 1.0 )
+  //   cav  the surface's own 0.1-0.6 m cavity; 0.5 is neutral. A consumer with
+  //        no G-buffer passes 0.5. The term is a +-0.03 bias on a field whose
+  //        transition is 0.115 wide, so the two agree to within a quarter of the
+  //        puddle's edge feather - which is inside the SSR blur anyway.
+  //   cfg  x = global wetness, y = rain intensity, z = this surface's puddle
+  //        susceptibility, w = its base wet roughness (DEFS.wetRough)
+  //
+  // out pud   standing-water coverage
+  // out damp  the darker wicked collar just outside the water line
+  // out film  the SHAPED film thickness (0 = a damp bloom the substrate shows
+  //           through, 1 = a continuous sheet standing on it)
+  // returns   the wet roughness target for this fragment
+  // --------------------------------------------------------------------------
+  var G_WETSOLVE = [
+    'float gbWetSolve( vec3 wp, float up, float cav, vec4 cfg,',
+    '                  out float pud, out float damp, out float film ) {',
+    '  // Two world octaves, ~2.4 m and ~0.65 m, biased by the cavity so the film',
+    '  // pools INTO the relief exactly as the puddle basins do. Rain drives it:',
+    '  // in a downpour more of the surface is sheeted, so heavy rain reads',
+    '  // glossier than drizzle without the wetness dial doubling as a gloss dial.',
+    '  float raw = clamp( gbValue3( wp * vec3( 0.41, 0.11, 0.41 ) + 91.0 ) * 0.62',
+    '            + gbValue3( wp * vec3( 1.54, 0.22, 1.54 ) + 23.0 ) * 0.38',
+    '            + ( 0.5 - cav ) * 0.18',
+    '            + ( cfg.y - 0.5 ) * 0.22, 0.0, 1.0 );',
+    '  pud = 0.0; damp = 0.0;',
+    '  float lvl = cfg.x * cfg.z;',
+    '  if ( lvl > 0.004 ) {',
+    '    float flatN = smoothstep( 0.70, 0.93, up );',
+    '    // The water line falls as the yard soaks, so a puddle GROWS out of its',
+    '    // deepest point instead of fading up as a flat stencil. 0.56 puts it at',
+    '    // roughly a fifth of a level surface at full storm, which is what a yard',
+    '    // with drainage falls actually looks like in a downpour.',
+    '    float thr = mix( 0.94, 0.56, lvl );',
+    '    float fld = gbPuddleField( wp, cav );',
+    '    pud = smoothstep( thr, thr + 0.115, fld ) * flatN;',
+    '    // A feathered damp ring OUTSIDE the water line. A puddle whose edge is a',
+    '    // hard line reads as a decal; real standing water wicks into the',
+    '    // surrounding surface and leaves a darker collar.',
+    '    damp = smoothstep( thr - 0.17, thr + 0.015, fld ) * ( 1.0 - pud ) * flatN;',
+    '  }',
+    '  // A SUSTAINED DOWNPOUR SHEETS A SLAB. Off the noise field alone the film',
+    '  // only went continuous in the basins, so across most of the apron the',
+    '  // shaped film sat near 0.34 and two thirds of the micro relief survived -',
+    '  // on the surface the art direction calls a black mirror. Above ~0.8 global',
+    '  // wetness a horizontal surface that can pond at all is simply running with',
+    '  // water. Gated on wetness AND on cfg.z, so a sheltered slab and every',
+    '  // vertical face are untouched.',
+    '  // Deliberately a FLOOR of about half, not a clamp to sheeted: measured at',
+    '  // 0.74 the whole ground plane went to one film thickness, which is the',
+    '  // uniform-mirror failure this file already fought once. The spread between',
+    '  // damp high spots and sheeted hollows is what gives the level a specular',
+    '  // STRUCTURE rather than one flat gloss.',
+    '  float sheet = smoothstep( 0.78, 0.94, cfg.x ) * smoothstep( 0.55, 0.85, up )',
+    '              * step( 0.004, cfg.z ) * 0.50;',
+    '  film = max( smoothstep( 0.26, 0.78, raw ), sheet );',
+    '  // A thin damp bloom on porous concrete is NOT a mirror: the water is',
+    '  // inside the pores and the surface it presents is still the aggregate, so',
+    '  // it lands around 0.20-0.25. Only where the film goes continuous does it',
+    '  // approach the substrate-independent water value in cfg.w. Spanning that',
+    '  // range is what gives the level a specular STRUCTURE instead of one flat',
+    '  // gloss, and it is what a roughness-aware reflection blur needs in order',
+    '  // to do anything at all.',
+    '  return cfg.w * mix( 3.9, 0.92, film );',
+    '}'
+  ].join('\n');
+
+  // ==========================================================================
+  // COLD HARBOR - the sea.
+  //
+  // Wave normals are accumulated as SLOPES rather than as normals: three
+  // scrolled taps of one gradient tile at 9 m / 2.2 m / 0.6 m, summed and then
+  // turned into a normal once. Summing normals and renormalising loses
+  // amplitude on every layer after the first; summing gradients is what the
+  // surface actually is.
+  // ==========================================================================
+  var G_WAVE = [
+    'vec2 gbWaveG( vec2 p, vec2 flow, float scale, float amp ) {',
+    '  vec4 t = texture2D( gbWaveMap, p * scale + flow );',
+    '  return ( t.rg * 2.0 - 1.0 ) * amp;',
+    '}'
+  ].join('\n');
+
+  // Distance from a point to the nearest quay/hull edge segment, in metres.
+  // Foam collects where the water meets something solid; without this the sea
+  // is a clean plane butted against the wharf, which is the giveaway that it
+  // is a plane. Segments are supplied by the level through
+  // MaterialLibrary.setWaterFoamEdges() and default to none, in which case only
+  // the drifting scum and the wind-driven crest foam survive.
+  var G_FOAMEDGE = [
+    'float gbEdgeDist( vec2 p ) {',
+    '  float best = 1e4;',
+    '  for ( int i = 0; i < GB_FOAM_MAX; i ++ ) {',
+    '    vec4 s = gbFoamSeg[ i ];',
+    '    vec2 a = s.xy, b = s.zw - s.xy;',
+    '    float ll = max( dot( b, b ), 1e-6 );',
+    '    float t = clamp( dot( p - a, b ) / ll, 0.0, 1.0 );',
+    '    float d = length( p - a - b * t );',
+    '    // Unused slots are masked out rather than broken out of: a `break`',
+    '    // on a non-constant condition is outside GLSL ES 1.0\'s mandatory',
+    '    // loop grammar, and this loop is six iterations of eight ALU.',
+    '    d = mix( 1e4, d, step( float( i ), float( gbFoamCount ) - 0.5 ) );',
+    '    best = min( best, d );',
+    '  }',
+    '  return best;',
+    '}'
+  ].join('\n');
+
+  // ==========================================================================
   // Small helpers
   // ==========================================================================
 
@@ -1217,7 +2059,72 @@
         this._anisotropy = Math.min(8, ctx.renderer.capabilities.getMaxAnisotropy() || 1);
       }
     } catch (e) { this._anisotropy = 1; }
+
+    // ------------------------------------------------------------------------
+    // COLD HARBOR - wet-surface state.
+    //
+    // THE LEVEL-1 GATE. Everything wet hangs off this one flag. It is false
+    // for the market, which means _features never sets F.wet, which means the
+    // program cache key never grows, which means every market material
+    // compiles the same source it shipped with. There is no "wetness 0" code
+    // path running on level 1 - there is no code.
+    //
+    // The trigger is deliberately BROAD (level id, or the level declaring a
+    // weather preset, or a caller passing opts.wet) so that a level added
+    // later gets it without editing this file, and NARROW in effect (any level
+    // that does not ask for weather is untouched).
+    // ------------------------------------------------------------------------
+    var lid = null, ldef = null;
+    try { lid = ctx && ctx.levelId; ldef = ctx && ctx.levelDef; } catch (e) { /* no ctx */ }
+    this.wetEnabled = !!(lid === 'harbor' || (ldef && ldef.weather));
+
+    // Shared uniform OBJECTS - one per concept for the whole library, exactly
+    // like _time. Assigning the same object into every material's uniform set
+    // means setWetness() is a single scalar write that reaches every surface
+    // in the level, with no per-material iteration and no recompile.
+    //   gbWetP : x = global wetness, y = rain intensity,
+    //            z = this material's puddle amount, w = its streak amount
+    //            (z/w are per-material, so gbWetP is NOT shared - only x/y are
+    //            pushed into it by _syncWeather; see _pushWet)
+    this._wetGlobal = { value: new THREE.Vector2(0, 0) };   // wetness, rain
+    this._windW = { value: new THREE.Vector3(0.70, 0.71, 0) }; // dir.xy, speed
+    this._rippleTex = { value: null };
+    // x = ripple tiles per metre, y = strength, z = source mode
+    // (0 = this file's analytic field, 1 = weather.js's normal map)
+    this._ripCfg = { value: new THREE.Vector4(1.0, 1.0, 0, 0) };
+    this._ownRipple = null;      // ours, kept so we can fall back to it again
+    this._frames = 0;
+    this._waveTex = { value: null };
+    this._wetMats = [];          // materials carrying a per-material gbWetP
+    this.wetness = this.wetEnabled ? 0.88 : 0.0;
+    this.rainIntensity = this.wetEnabled ? 0.85 : 0.0;
+    // Set true the first time _syncWeather sees a real ctx.weather, so the
+    // defaults above stop fighting it.
+    this._weatherSeen = false;
+    // Quay/hull edges the sea foams against. See setWaterFoamEdges().
+    this._foamSeg = { value: [] };
+    this._foamCount = { value: 0 };
+    for (var fi = 0; fi < FOAM_MAX; fi++) this._foamSeg.value.push(new THREE.Vector4(0, 0, 0, 0));
+    // Populated by auditTextures(); see the comment there.
+    this.textureAudit = null;
+    // Every material name that failed to resolve, deduplicated. See
+    // _debugMaterial(). Empty is the only acceptable value in a shipping build.
+    this.missingNames = [];
   }
+
+  // How many quay-edge segments the sea shader can foam against. Baked as a
+  // #define, so it is a constant rather than a setting: the loop is unrolled
+  // and the count uniform breaks out of it early.
+  var FOAM_MAX = 6;
+
+  // The harbor's own material set, in the order the level asks for it. Public
+  // so a consumer (or a test) can iterate the level-2 library without knowing
+  // which entries of DEFS are maritime.
+  var HARBOR_NAMES = ['container_steel', 'container_red', 'container_blue',
+    'container_green', 'ship_hull', 'wet_concrete', 'dock_concrete', 'chainlink',
+    'tarpaulin', 'rope', 'rubber_fender', 'steel_grate', 'corrugated_roof',
+    'deck_plate', 'structural_steel', 'sea_water', 'painted_line', 'reefer_panel'];
+  MaterialLibrary.harborNames = HARBOR_NAMES.slice();
 
   // --------------------------------------------------------------------------
   // build() - front-load the expensive bits (detail normal, common materials)
@@ -1244,16 +2151,115 @@
 
     await GAME.yieldFrame();
 
+    // COLD HARBOR. The two procedural tiles the wet path needs, built before
+    // anything asks for a material so no sampler is ever bound to null. Both
+    // are cheap (256px, ~10 ms together) and both are skipped entirely on the
+    // market, where nothing samples them.
+    if (this.wetEnabled) {
+      try { this._ensureRipple(); } catch (e) { GAME.logError('materials.ripple', e); }
+      try { this._ensureWave(); } catch (e) { GAME.logError('materials.wave', e); }
+      await GAME.yieldFrame();
+    }
+
     // Warm the material set most of the level will ask for. Doing this here
     // means textures.get() cache misses happen during the loading bar.
     var warm = ['concrete', 'concrete_wall', 'plaster', 'brick', 'asphalt',
       'sand', 'gravel', 'rusted_metal', 'painted_metal', 'corrugated_metal',
       'wood_plank', 'tile', 'fabric', 'rubber', 'gun_metal'];
+    if (this.wetEnabled) warm = HARBOR_NAMES.concat(['rusted_metal', 'painted_metal', 'gun_metal']);
     for (var i = 0; i < warm.length; i++) {
       try { this.get(warm[i]); } catch (e) { GAME.logError('materials.warm:' + warm[i], e); }
       if ((i & 3) === 3) await GAME.yieldFrame();
     }
+
+    // NAME AUDIT. Level 1 shipped with five names silently redirecting to
+    // another material's map - sandbags wearing a market awning, the alley
+    // wall wearing plaster - and it survived a full round of review because
+    // nobody checked; the maps were generated every boot and thrown away. So
+    // this level asserts instead of assuming: every harbor name is resolved,
+    // the texture library is asked which recipe it actually served, and the
+    // resulting albedo images are compared by identity.
+    //
+    // It reports through console.warn and `this.textureAudit`, NOT through
+    // GAME.logError, for the same reason _checkDensity does not: logError
+    // marks the capture failed in tools/shoot.py, and while textures.js is
+    // still being written a fallback is the EXPECTED state, not a fault. It
+    // would break thirteen other agents' capture loops over a known-good
+    // degradation.
+    if (this.wetEnabled) {
+      try { this.auditTextures(); } catch (e) { GAME.logError('materials.audit', e); }
+    }
     return this;
+  };
+
+  /**
+   * auditTextures(names) -> [{ name, want, served, shared, ok }]
+   *
+   * For each material name: which texture recipe it asked for, which one the
+   * library actually served, and whether its albedo image is shared with a
+   * DIFFERENT material's. `ok` is false only for a genuine silent redirect -
+   * two distinct names ending up on one image without either of them having
+   * declared it - which is the exact class of bug that put a market awning on
+   * the sandbags.
+   *
+   * A declared fallback (DEFS.texAlt, used while textures.js has not shipped
+   * the recipe yet) is reported as `served` !== `want` with ok:true: it is a
+   * degradation the library chose, not one it failed to notice.
+   */
+  MaterialLibrary.prototype.auditTextures = function (names) {
+    var list = names || HARBOR_NAMES;
+    var out = [], byImage = Object.create(null), i;
+    for (i = 0; i < list.length; i++) {
+      var n = list[i];
+      if (ALIASES[n]) n = ALIASES[n];
+      var def = DEFS[n];
+      var rec = { name: n, want: (def && (def.tex || n)) || n, served: null, shared: null, ok: true };
+      try {
+        if (!def) { rec.ok = false; rec.served = '(no def)'; out.push(rec); continue; }
+        var texName = this._texName(def, n);
+        rec.served = texName === null ? '(local)' : texName;
+        var m = this.get(n);
+        var img = m && m.map && m.map.image;
+        if (img) {
+          var key = (img.width | 0) + 'x' + (img.height | 0) + '#';
+          // Identity, not dimensions: two 512s are only the SAME texture if
+          // they are literally the same image object.
+          var found = null;
+          for (var k in byImage) { if (byImage[k].img === img) { found = byImage[k]; break; } }
+          if (found) {
+            rec.shared = found.name;
+            // Sharing is legitimate when both sides declared the same recipe
+            // (the three container lots deliberately re-colour one corrugated
+            // sheet, exactly as paint_blue/paint_green re-colour one enamel).
+            rec.ok = (found.served === rec.served);
+          } else {
+            byImage[key + n] = { img: img, name: n, served: rec.served };
+          }
+        }
+      } catch (e) { rec.ok = false; rec.served = 'error: ' + e; }
+      out.push(rec);
+    }
+    this.textureAudit = out;
+    var bad = out.filter(function (r) { return !r.ok; });
+    if (bad.length) {
+      try {
+        console.warn('materials: ' + bad.length + ' harbor name(s) share a map with ' +
+          'an unrelated material: ' + bad.map(function (r) {
+            return r.name + '->' + r.shared;
+          }).join(', '));
+      } catch (e2) { /* no console */ }
+    }
+    // Anything that fell through to the debug material is a HARD failure, not a
+    // declared degradation, so it is reported through logError - see get().
+    // Reported here as well as at the point of failure so a consumer that only
+    // looks at the audit still sees it.
+    if (this.missingNames && this.missingNames.length) {
+      try {
+        console.error('materials: ' + this.missingNames.length +
+          ' UNRESOLVED material(s): ' + this.missingNames.join(' | '));
+      } catch (e3) { /* no console */ }
+    }
+    return out;
   };
 
   // --------------------------------------------------------------------------
@@ -1266,6 +2272,261 @@
       try { this._ensureEnvironment(ctx || this.ctx); }
       catch (e) { GAME.logError('materials.env', e); }
     }
+    if (this.wetEnabled) {
+      this._frames++;
+      try { this._syncWeather(ctx || this.ctx); }
+      catch (e) { GAME.logError('materials.weather', e); }
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // THE WEATHER CONTRACT, consumer side. src/fx/weather.js owns this state;
+  // this file only reads it, and every single field is optional - a build with
+  // no weather system, or one whose weather system failed, keeps the harbor's
+  // storm defaults rather than drying the level out to a clear day.
+  //
+  // NOTE ON ORDERING: main.js builds and updates `materials` at index 1 and
+  // `weather` at index 11, so this reads LAST frame's weather state. That is
+  // deliberate and correct - a one-frame lag on a value that ramps over
+  // seconds is invisible, and reaching forward to a system that has not
+  // updated yet would be worse.
+  // --------------------------------------------------------------------------
+  MaterialLibrary.prototype._syncWeather = function (ctx) {
+    var w = ctx && ctx.weather;
+    if (!w) return;
+    this._weatherSeen = true;
+    if (typeof w.wetness === 'number' && isFinite(w.wetness)) {
+      this.wetness = M.saturate(w.wetness);
+    }
+    if (typeof w.rainIntensity === 'number' && isFinite(w.rainIntensity)) {
+      this.rainIntensity = M.saturate(w.rainIntensity);
+    }
+    var g = this._wetGlobal.value;
+    g.x = this.wetness;
+    g.y = this.rainIntensity;
+
+    var d = w.windDir;
+    var wv = this._windW.value;
+    if (d && isFinite(d.x) && isFinite(d.y) && (d.x * d.x + d.y * d.y) > 1e-6) {
+      var il = 1 / Math.sqrt(d.x * d.x + d.y * d.y);
+      wv.x = d.x * il; wv.y = d.y * il;
+    }
+    if (typeof w.windSpeed === 'number' && isFinite(w.windSpeed)) {
+      wv.z = M.clamp(w.windSpeed, 0, 40);
+    }
+
+    // ---- the ripple normal SOURCE ------------------------------------------
+    // weather.js owns the rain, so when it publishes a ripple field we take
+    // ITS, and the rings the puddles show then belong to the same impacts that
+    // spawn the visible splashes. It is probed under several spellings, and
+    // through its uniform, because the contract names the VALUE and not the
+    // field name - a map that arrives as `uniforms.uRippleMap` instead of
+    // `rippleNormal` should not silently do nothing.
+    //
+    // Ours stays as the fallback and the shader branches on the mode, so
+    // puddles ripple whether or not weather.js ever publishes one. "The other
+    // module will provide it" is not a plan for something on the instant-fail
+    // list.
+    var src = w.rippleNormal || w.rippleMap || w.rippleTexture || w.rippleNormalMap || null;
+    if (!src && typeof w.getRippleTexture === 'function') {
+      try { src = w.getRippleTexture(); } catch (e) { src = null; }
+    }
+    if (!src && w.uniforms && w.uniforms.uRippleMap) src = w.uniforms.uRippleMap.value;
+
+    // Not before frame two. weather.js builds its render target during boot but
+    // does not draw into it until its first update() - which is AFTER ours in
+    // the system order - so binding it on frame one would sample a cleared
+    // target and decode (0,0,0) as a hard constant tilt across every puddle.
+    if (isTexture(src) && this._frames > 1) {
+      if (src !== this._rippleTex.value) {
+        src.wrapS = src.wrapT = THREE.RepeatWrapping;
+        if (src.colorSpace !== THREE.NoColorSpace) {
+          src.colorSpace = THREE.NoColorSpace;   // a normal map is DATA
+          src.needsUpdate = true;
+        }
+        this._rippleTex.value = src;
+      }
+      var tiling = (typeof w.rippleTiling === 'number' && w.rippleTiling > 0.05)
+        ? w.rippleTiling : 2.6;                  // world metres per tile
+      var cfg = this._ripCfg.value;
+      cfg.x = 1 / tiling;
+      // weather.js already folds rain intensity into the map it renders, so
+      // this is a pure amplitude match between the two sources, not a second
+      // intensity term. Its map is a full-strength tangent normal (its own
+      // uStrength runs to 1.6), and a rain ring is a few degrees of slope, not
+      // forty - at 1.0 every puddle in a lamp pool scintillates.
+      cfg.y = 0.30;
+      cfg.z = 1;
+    } else if (this._ripCfg.value.z > 0.5 && !isTexture(src)) {
+      // Weather went away (disposed, or its build failed after a preset
+      // change). Go back to ours rather than sampling a dead texture.
+      this._rippleTex.value = this._ownRipple;
+      this._ripCfg.value.z = 0;
+    }
+  };
+
+  /**
+   * wetContract() -> the live values GAME.MaterialLibrary.WET_GLSL needs.
+   *
+   * materials.js OWNS where the water is. Any other pass that has to know -
+   * postfx's screen-space reflection, weather.js's splash spawning, footstep
+   * audio picking a wet variant - should evaluate this file's field rather than
+   * reconstruct one, because two uncorrelated puddle fields on one surface is
+   * not a small error: the reflection lands mirror-flat where the material
+   * believes the concrete is dry and matte where it believes there is standing
+   * water, which reads as "the reflections are short and blurry" and is
+   * completely immune to tuning the reflection.
+   *
+   *     var W = GAME.MaterialLibrary.WET_GLSL;
+   *     frag = W.noise + '\n' + W.puddle + '\n' + W.solve + '\n' + frag;
+   *     // then, per fragment, with cav = 0.5 where there is no G-buffer:
+   *     //   float rough = gbWetSolve( Wp, up, 0.5, uWetCfg, pud, damp, film );
+   *
+   * `apron` is the cfg vector for the level's dominant ponding surface
+   * (wet_concrete), which is what an SSR pass reconstructing a ground plane
+   * from depth actually wants; `cfg(name)` builds it for any other material.
+   */
+  MaterialLibrary.prototype.wetContract = function (name) {
+    var n = name || 'wet_concrete';
+    if (ALIASES[n]) n = ALIASES[n];
+    var d = DEFS[n] || DEFS.wet_concrete;
+    return {
+      wetness: this.wetness,
+      rain: this.rainIntensity,
+      puddle: d.puddle !== undefined ? d.puddle : 0,
+      wetRough: d.wetRough !== undefined ? d.wetRough : 0.11,
+      wetDark: d.wetDark !== undefined ? d.wetDark : 0.55,
+      // vec4 to feed gbWetSolve's `cfg` directly.
+      cfg: [this.wetness, this.rainIntensity,
+        d.puddle !== undefined ? d.puddle : 0,
+        d.wetRough !== undefined ? d.wetRough : 0.11],
+      // The ripple field, its packing mode and its world tiling, so a consumer
+      // can perturb the reflection with the SAME impacts the puddles show.
+      rippleMap: this._rippleTex.value,
+      rippleCfg: [this._ripCfg.value.x, this._ripCfg.value.y, this._ripCfg.value.z],
+      // The distance schedules this file applies, published so a screen-space
+      // pass can match them instead of inventing its own.
+      rippleFade: [12.0, 30.0, 58.0, 95.0],
+      dryRough: (d.rough && d.rough[1]) || 0.95,
+
+      // ---- WHAT `cfg` IS NOT ------------------------------------------------
+      // MEASURED, AND IT IS THE SINGLE MOST DAMAGING THING IN THE LEVEL RIGHT
+      // NOW. `cfg` above describes ONE material - by default wet_concrete, the
+      // apron, whose puddle susceptibility is 1.0. A screen-space pass has no
+      // G-buffer, so it applies that one vector to EVERY pixel whose
+      // depth-derived normal points up. In enemy_closeup that includes a
+      // tarpaulin crown 1.2 m above the slab, and the result is the large pale
+      // flat-shaded mound that fills the bottom-left of the frame: an
+      // environment reflection painted over a domed sheet at standing-water
+      // roughness, faceted because the normal came from a depth derivative on a
+      // low-poly mesh. It is not a missing material - the surface underneath it
+      // is a correct, dark, smooth tarpaulin - it is the apron's water lying on
+      // something that is not the apron. It also drags the auto-exposure down
+      // hard enough to crush the enemy to a silhouette.
+      //
+      // So the contract now publishes the two things a G-buffer-less consumer
+      // needs in order to be right, both purely additive:
+      //
+      //   flat    the up-facing window gbWetSolve itself uses
+      //           (smoothstep(0.70, 0.93, n.y)). SSR's own 0.42/0.86 window is
+      //           wider at BOTH ends, so it wets surfaces this file considers
+      //           vertical.
+      //   ground  { y, band }. Standing water lies on the YARD. `y` is the
+      //           world height of the slab and `band` the height over which a
+      //           consumer should fade its puddle term out - a crate lid, a
+      //           tarpaulin, a container roof or a walkway grating above that
+      //           band is a shedding surface, not a pond, whatever its normal
+      //           says. Multiply your `pud`/`wetT` by gbWetHeight() (published
+      //           as WET_GLSL.height) and the disagreement is gone in one line.
+      //   cfgFor  the same vec4 for ANY material name, for a consumer that does
+      //           know which surface it is looking at.
+      flat: [0.70, 0.93],
+      ground: { y: this.groundY, band: 0.85 },
+      cfgFor: (function (self) {
+        return function (nm) {
+          var k = nm || 'wet_concrete';
+          if (ALIASES[k]) k = ALIASES[k];
+          var dd = DEFS[k] || DEFS.wet_concrete;
+          return [self.wetness, self.rainIntensity,
+            dd.puddle !== undefined ? dd.puddle : 0,
+            dd.wetRough !== undefined ? dd.wetRough : 0.11];
+        };
+      })(this)
+    };
+  };
+
+  /**
+   * setWetness(v) - global surface wetness, 0..1.
+   *
+   * The single dial that soaks or dries the whole level. It multiplies on TOP
+   * of the per-vertex wetness channel (the G channel of the wear colour
+   * attribute, see get()'s wear convention) rather than replacing it, so a
+   * patch level.js painted as permanently wet stays the wettest thing in
+   * frame at every global level.
+   *
+   * ctx.weather drives this automatically every frame; call it directly only
+   * to override (a cutscene, a test, an interior that never gets rained on).
+   */
+  MaterialLibrary.prototype.setWetness = function (v) {
+    this.wetness = M.saturate(typeof v === 'number' && isFinite(v) ? v : 0);
+    this._wetGlobal.value.x = this.wetness;
+    return this.wetness;
+  };
+
+  /** setRainIntensity(v) - 0..1. Drives ripple amplitude and streak density. */
+  MaterialLibrary.prototype.setRainIntensity = function (v) {
+    this.rainIntensity = M.saturate(typeof v === 'number' && isFinite(v) ? v : 0);
+    this._wetGlobal.value.y = this.rainIntensity;
+    return this.rainIntensity;
+  };
+
+  /** setWind(dirX, dirZ, speed) - shears the rain streaks and drives the sea. */
+  MaterialLibrary.prototype.setWind = function (dirX, dirZ, speed) {
+    var v = this._windW.value;
+    var l = Math.sqrt(dirX * dirX + dirZ * dirZ);
+    if (l > 1e-6) { v.x = dirX / l; v.y = dirZ / l; }
+    if (typeof speed === 'number' && isFinite(speed)) v.z = M.clamp(speed, 0, 40);
+  };
+
+  /**
+   * setWaterFoamEdges(segments) - where the sea meets something solid.
+   *
+   * `segments` is an array of [x0, z0, x1, z1] world-space line segments (the
+   * quay face, the freighter's waterline, a slipway) - up to FOAM_MAX of them.
+   * The water material builds a distance field from them and lays scum and
+   * foam along it. Without this the sea is a clean plane butted against the
+   * wharf, which is the single clearest tell that it IS a plane.
+   *
+   * Safe to call at any time, including after the water material exists: the
+   * segments are a uniform, not a #define.
+   */
+  MaterialLibrary.prototype.setWaterFoamEdges = function (segments) {
+    var n = 0;
+    try {
+      if (segments && segments.length) {
+        for (var i = 0; i < segments.length && n < FOAM_MAX; i++) {
+          var s = segments[i];
+          if (!s) continue;
+          var a = s.length >= 4 ? s : [s.x0, s.z0, s.x1, s.z1];
+          if (!isFinite(a[0]) || !isFinite(a[1]) || !isFinite(a[2]) || !isFinite(a[3])) continue;
+          this._foamSeg.value[n].set(a[0], a[1], a[2], a[3]);
+          n++;
+        }
+      }
+    } catch (e) { GAME.logError('materials.setWaterFoamEdges', e); }
+    this._foamCount.value = n;
+    return n;
+  };
+
+  /**
+   * rippleTexture() - the packed rain-ripple field this library animates
+   * puddles with (R = normalised distance to the impact centre, G = that
+   * impact's phase, BA = radial direction). Exposed so weather.js can drive
+   * its ground splash decals off the SAME field the puddles ripple with,
+   * rather than two uncorrelated rain patterns on one surface.
+   */
+  MaterialLibrary.prototype.rippleTexture = function () {
+    try { return this._ensureRipple(); } catch (e) { return null; }
   };
 
   // A metal with no environment map renders as a black hole. sky.js normally
@@ -1275,45 +2536,77 @@
     if (!ctx || !ctx.scene || !ctx.renderer) return;
     if (ctx.scene.environment) return;
 
-    var W = 64, H = 32;
-    var data = new Float32Array(W * H * 4);
     // Linear HDR radiance, not sRGB colours. A dim probe here is exactly how
     // metals end up looking like black plastic, so these are deliberately
     // bright - a real late-afternoon sky is well above 1.0 in linear.
     var zen = [0.42, 0.72, 1.35];       // cool zenith, matches ART_DIRECTION
     var hor = [2.10, 1.72, 1.28];       // warm dusty horizon
     var gnd = [0.36, 0.29, 0.21];       // sand bounce, never black
-    for (var y = 0; y < H; y++) {
-      var v = y / (H - 1);
-      var el = Math.cos(v * Math.PI);   // +1 up .. -1 down
-      for (var x = 0; x < W; x++) {
-        var i = (y * W + x) * 4;
-        var t = M.saturate(el);
-        var r, g, b;
-        if (el >= 0) {
-          r = M.lerp(hor[0], zen[0], Math.pow(t, 0.55));
-          g = M.lerp(hor[1], zen[1], Math.pow(t, 0.55));
-          b = M.lerp(hor[2], zen[2], Math.pow(t, 0.55));
-        } else {
-          var d = M.saturate(-el * 2.2);
-          r = M.lerp(hor[0], gnd[0], d);
-          g = M.lerp(hor[1], gnd[1], d);
-          b = M.lerp(hor[2], gnd[2], d);
-        }
-        data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 1;
-      }
+    // COLD HARBOR. The same net, three stops down and cold. A late-afternoon
+    // desert sky is 20x too bright for 02:00 under storm cloud, and this
+    // material library is exactly the wrong place to be the brightest light in
+    // a level built on "pools of light with genuine darkness between them" -
+    // wet surfaces have a near-black albedo and take almost all their value
+    // from the environment, so a daylight fallback here does not read as a
+    // slightly-too-bright ambient, it reads as a blown-out level. Still never
+    // zero: crushed pure-black shadows are the other instant fail.
+    if (this.wetEnabled) {
+      zen = [0.016, 0.024, 0.040];      // overcast storm cloud, no moon disc
+      hor = [0.052, 0.058, 0.070];      // sodium-lit cloud base off the terminal
+      gnd = [0.010, 0.013, 0.017];      // black water and wet concrete bounce
     }
-    var tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat, THREE.FloatType);
-    tex.mapping = THREE.EquirectangularReflectionMapping;
-    tex.colorSpace = THREE.NoColorSpace;   // already linear HDR values
-    tex.needsUpdate = true;
+    // ---- PMREM, via fromScene and NOT via fromEquirectangular ---------------
+    // MEASURED: on the SwiftShader build tools/shoot.py runs headless Chrome
+    // with, PMREMGenerator.fromEquirectangular() returns an ALL-BLACK probe.
+    // It fails silently - the render target is the right size, its mapping is
+    // CubeUVReflectionMapping, scene.environment is non-null, and every metal
+    // in the scene renders as void. It was caught by scaling the source
+    // radiance 20x and getting a byte-identical frame, then by drawing the
+    // probe as scene.background at intensity 30 and getting black.
+    //
+    // So the safety net that exists to stop metals reading as black holes was
+    // itself producing a black hole, on the exact renderer every capture and
+    // every critic round uses. sky.js goes through fromCubemap/fromScene, which
+    // is why the market never showed it.
+    //
+    // fromScene works on the same renderer, and a 24x16 vertex-coloured
+    // backside sphere carries this gradient exactly - it is two triangles per
+    // band of a function that is smooth in elevation and constant in azimuth,
+    // so nothing is lost by expressing it as geometry instead of as texels.
+    var geo = new THREE.SphereGeometry(50, 24, 20);
+    var pos = geo.attributes.position;
+    var col = new Float32Array(pos.count * 3);
+    for (var vi = 0; vi < pos.count; vi++) {
+      var el2 = M.clamp(pos.getY(vi) / 50, -1, 1);
+      var t2 = M.saturate(el2);
+      var cr, cg, cb;
+      if (el2 >= 0) {
+        var k = Math.pow(t2, 0.55);
+        cr = M.lerp(hor[0], zen[0], k);
+        cg = M.lerp(hor[1], zen[1], k);
+        cb = M.lerp(hor[2], zen[2], k);
+      } else {
+        var d2 = M.saturate(-el2 * 2.2);
+        cr = M.lerp(hor[0], gnd[0], d2);
+        cg = M.lerp(hor[1], gnd[1], d2);
+        cb = M.lerp(hor[2], gnd[2], d2);
+      }
+      col[vi * 3] = cr; col[vi * 3 + 1] = cg; col[vi * 3 + 2] = cb;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    var probeMat = new THREE.MeshBasicMaterial({
+      vertexColors: true, side: THREE.BackSide, toneMapped: false, fog: false
+    });
+    var probeScene = new THREE.Scene();
+    probeScene.add(new THREE.Mesh(geo, probeMat));
 
     var pmrem = new THREE.PMREMGenerator(ctx.renderer);
-    var rt = pmrem.fromEquirectangular(tex);
+    var rt = pmrem.fromScene(probeScene, 0.0, 0.05, 120, { size: 128 });
     this._envFallback = rt.texture;
     ctx.scene.environment = rt.texture;
     pmrem.dispose();
-    tex.dispose();
+    geo.dispose();
+    probeMat.dispose();
   };
 
   // --------------------------------------------------------------------------
@@ -1532,25 +2825,127 @@
    * edge. Pass wearMode:'multiply' to get stock three.js tinting instead.
    */
   MaterialLibrary.prototype.get = function (name, opts) {
+    var asked = name;
     name = (name || 'default');
     if (ALIASES[name]) name = ALIASES[name];
+    // The sea is not a surface with a wave normal map bolted on - it has its
+    // own absorption, Fresnel and foam model - so get('sea_water') is answered
+    // by water(). Routed here rather than making the level call a special
+    // method, because the contract names it in the same list as the other
+    // sixteen and a consumer should not have to know which one is different.
+    if (name === 'sea_water') {
+      try { return this.water(opts); }
+      catch (e) { GAME.logError('materials.water', e); }
+    }
     var key = hashOpts(name, opts);
     var cached = this.cache[key];
     if (cached) return cached;
 
-    var mat;
-    try {
-      mat = this._create(name, opts || null);
-    } catch (e) {
-      GAME.logError('materials.get:' + name, e);
-      mat = new THREE.MeshStandardMaterial({
-        color: srgb((DEFS[name] && DEFS[name].color) || 0x8f8a80),
-        roughness: 0.9, metalness: 0.0, envMapIntensity: 1.0
-      });
+    // ---- A MISSING MATERIAL MUST BE LOUD -----------------------------------
+    // An unknown name used to fall through _create's `DEFS[name] || DEFS.concrete`
+    // and come back as a perfectly plausible piece of concrete. That is the
+    // worst possible failure mode: the frame contains a wrong-but-believable
+    // surface, every coverage and exposure metric passes (they measure missing
+    // LIGHT, not missing MATERIAL), and the bug ships. Name it, log it, and
+    // paint it in a colour that cannot be mistaken for art direction.
+    //
+    // WHY THE PAINT IS GATED ON wetEnabled AND THE REPORT IS NOT. Level 1 is
+    // shipped and frozen, and I cannot prove by inspection that no market call
+    // site anywhere in eight scenarios asks for a name this table does not
+    // have - so turning a market surface magenta, or failing tools/shoot.py on
+    // a level-1 capture (GAME.logError does both), is a risk with no upside on
+    // a level nobody is changing. The DETECTION runs everywhere and is recorded
+    // on this.missingNames + console for anyone who looks; the LOUD failure
+    // runs on the level being built, which is the one where a silent fallback
+    // has already cost a review round.
+    var mat = null;
+    var loud = !!this.wetEnabled;
+    if (!DEFS[name]) {
+      mat = this._debugMaterial('unknown material name "' + asked + '"' +
+        (asked !== name ? ' (aliased to "' + name + '")' : ''), loud);
+    }
+    if (!mat) {
+      try {
+        mat = this._create(name, opts || null);
+      } catch (e) {
+        GAME.logError('materials.get:' + name, e);
+        mat = this._debugMaterial('get("' + name + '") threw: ' +
+          (e && e.message || e), loud) ||
+          new THREE.MeshStandardMaterial({
+            color: srgb((DEFS[name] && DEFS[name].color) || 0x8f8a80),
+            roughness: 0.9, metalness: 0.0, envMapIntensity: 1.0
+          });
+      }
+    }
+    // A def that declares a texture recipe but comes back with no albedo map at
+    // all is the same class of silent failure wearing different clothes: it
+    // renders as a flat single-colour surface, which is item one on the quality
+    // bar's instant-reject list, and nothing anywhere reports it.
+    if (mat && !mat.map && !mat.userData.gbDebug) {
+      var d = DEFS[name];
+      if (d && (d.tex || d.texAlt || d.local || d.repeat)) {
+        var alt = this._debugMaterial('material "' + name + '" resolved with NO albedo map' +
+          ' (texture set failed; the surface would have rendered flat)', loud);
+        if (alt) mat = alt;
+      }
     }
     mat.name = key;
     this.cache[key] = mat;
     return mat;
+  };
+
+  /**
+   * _debugMaterial(reason, loud) -> an unmistakable flat-magenta checker, or
+   * null when `loud` is false (detection only - see get()).
+   *
+   * Emissive, deliberately. A magenta ALBEDO at two in the morning under a
+   * sodium lamp is a dark plum smear that reads as "some prop I do not
+   * recognise" - i.e. exactly as invisible as the grey it replaces. The whole
+   * point of a debug material is that a human glancing at a contact sheet
+   * cannot fail to see it, so it emits its own light and carries a checker so
+   * it also cannot be mistaken for an emissive prop somebody meant to place.
+   *
+   * The reason goes to GAME.logError (which surfaces in the on-screen error
+   * badge AND fails the capture in tools/shoot.py) and to this.missingNames, so
+   * it is visible whether you are looking at the frame, the report or the
+   * console. Every recorded reason is deduplicated - one bad name asked for a
+   * hundred times is one error, not a hundred.
+   */
+  MaterialLibrary.prototype._debugMaterial = function (reason, loud) {
+    try {
+      if (!this.missingNames) this.missingNames = [];
+      if (this.missingNames.indexOf(reason) < 0) {
+        this.missingNames.push(reason);
+        if (loud) GAME.logError('materials.MISSING', reason);
+        try { console.error('materials: MISSING - ' + reason); } catch (e2) { /* no console */ }
+      }
+    } catch (e) { /* never throw out of get() */ }
+    if (!loud) return null;
+    if (this._debugMat) return this._debugMat.clone();
+    var S = 32, px = new Uint8Array(S * S * 4), x, y, i;
+    for (y = 0; y < S; y++) {
+      for (x = 0; x < S; x++) {
+        i = (y * S + x) * 4;
+        var on = (((x >> 2) + (y >> 2)) & 1) === 0;
+        px[i] = on ? 255 : 30; px[i + 1] = on ? 0 : 0; px[i + 2] = on ? 255 : 40;
+        px[i + 3] = 255;
+      }
+    }
+    var tex = new THREE.DataTexture(px, S, S, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(4, 4);
+    tex.magFilter = THREE.NearestFilter;
+    tex.minFilter = THREE.NearestFilter;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    var m = new THREE.MeshStandardMaterial({
+      color: 0xffffff, map: tex, roughness: 0.85, metalness: 0.0,
+      emissive: new THREE.Color(1, 0, 1), emissiveMap: tex, emissiveIntensity: 1.6,
+      envMapIntensity: 0.0
+    });
+    m.userData.gbDebug = true;
+    this._debugMat = m;
+    return m.clone();
   };
 
   /**
@@ -1967,7 +3362,17 @@
       if (sh > 0) {
         mat.sheen = sh;
         mat.sheenRoughness = 0.75;
-        mat.sheenColor = srgb(opts.sheenColor !== undefined ? opts.sheenColor : 0xbfae94);
+        // A SECOND DANGLING VALUE, found by the same audit as the missing-name
+        // check. `sheenColor` is documented in DEFS and set on two entries, and
+        // this line read opts only - so DEFS.tarpaulin's 0x9aa8a4 (a cold PVC
+        // grey-green) had never once reached a material and every sheened
+        // surface in the library wore the same warm 0xbfae94 canvas tint.
+        // Honoured on the harbor path only: the market's laundry def also
+        // carries a sheenColor, and level 1 is frozen byte-identical, so
+        // reading it there would change a shipped frame.
+        var shc = opts.sheenColor !== undefined ? opts.sheenColor
+          : ((this.wetEnabled && def.sheenColor !== undefined) ? def.sheenColor : 0xbfae94);
+        mat.sheenColor = srgb(shc);
       }
       if (opts.clearcoat) {
         mat.clearcoat = opts.clearcoat;
@@ -1987,6 +3392,19 @@
     if (opts.transparent) { mat.transparent = true; mat.depthWrite = opts.depthWrite !== false; }
     if (opts.opacity !== undefined) { mat.opacity = opts.opacity; mat.transparent = opts.opacity < 1; }
     if (opts.alphaTest !== undefined) mat.alphaTest = opts.alphaTest;
+    // COLD HARBOR: alpha-cut and coplanar flags carried on the DEF (and on the
+    // texture set, see _maps) rather than restated at every call site. A fence
+    // that is alpha TESTED writes depth, needs no sorting and still appears in
+    // the shadow map - which is the whole reason a chain-link fence reads
+    // through a lamp cone at all - and forgetting alphaTest at one of six call
+    // sites is how it stops.
+    else if (maps.alphaTest !== undefined) mat.alphaTest = maps.alphaTest;
+    else if (def.alphaTest !== undefined) mat.alphaTest = def.alphaTest;
+    if (def.poly && opts.polygonOffset === undefined) {
+      mat.polygonOffset = true;
+      mat.polygonOffsetFactor = def.poly[0];
+      mat.polygonOffsetUnits = def.poly[1];
+    }
     if (opts.depthWrite !== undefined) mat.depthWrite = opts.depthWrite;
     if (opts.flatShading) mat.flatShading = true;
     if (opts.emissive !== undefined) {
@@ -2023,11 +3441,31 @@
     F.mapMean = mean;
     this._patch(mat, F);
 
+    // A flag anything downstream can select on without knowing this file's
+    // internals - screen-space reflections in postfx, splash spawning in
+    // weather.js, footstep audio picking a wet variant.
+    if (F.wet) {
+      try {
+        mat.userData.gbWetSurface = true;
+        mat.userData.gbPuddles = F.puddle > 0.01;
+      } catch (e) { /* frozen userData */ }
+    }
+
     return mat;
   };
 
   // Decide which shader features this material gets.
   MaterialLibrary.prototype._features = function (name, def, opts, maps, mat) {
+    // ---- COLD HARBOR, resolved FIRST because it takes a sampler -------------
+    var wetOn = (opts.wet !== undefined ? !!opts.wet : !!this.wetEnabled);
+    // A surface only ponds if it is up-facing AND the def says water can lie on
+    // it, and only a ponding surface pays for the ripple sampler. Defaults to
+    // 0: a container flank must never grow a puddle because a noise field
+    // happened to peak there.
+    var puddleAmt = opts.puddle !== undefined ? opts.puddle
+      : (def.puddle !== undefined ? def.puddle : 0);
+    var ripOn = wetOn && puddleAmt > 0.01;
+
     var detailOn = this.enableDetail && opts.detail !== false && !!this._detailNormal &&
       !!maps.normalMap && (opts.detail !== undefined ? !!opts.detail : def.detail > 0);
     var detailAmt = typeof opts.detail === 'number' ? opts.detail : def.detail;
@@ -2057,8 +3495,29 @@
     }
     // Tile low-pass. Only meaningful for the stochastic path; if the map is
     // not CPU-readable the feature disables itself and nothing changes.
+    //
+    // ---- COLD HARBOR: SAMPLER BUDGET ---------------------------------------
+    // `!ripOn` makes the ripple field a TRADE rather than an addition, so the
+    // net fragment-sampler count across the level does not move.
+    //
+    // Why it is worth the trouble: MAX_TEXTURE_IMAGE_UNITS is 16 on the
+    // software rasteriser tools/shoot.py runs on, a fully-featured material
+    // here already binds eight (albedo, normal, the shared ORM through three
+    // slots, the detail tile, this low-pass) before the environment map, and
+    // every shadow-casting light in range costs one more. Blowing that limit
+    // does not degrade gracefully - the program fails to LINK and the surface
+    // vanishes. A stress scene with eight shadow-casting lamps produced eleven
+    // link failures; disabling the lamps' shadows cleared all eleven, so the
+    // measured failures were the SHADOW samplers, not this one - but they show
+    // how little headroom there is, and a level built on mast lamps is going
+    // to spend it.
+    //
+    // The low-pass is also the right thing to give up. It flattens large-scale
+    // blotching in the ALBEDO, and these are precisely the surfaces whose
+    // albedo is multiplied to 0.42 and then buried under a reflection, while
+    // the triplanar domain warp is still breaking the lattice.
     var tileLP = null, stochFlat = 0;
-    if (stochOn) {
+    if (stochOn && !ripOn) {
       stochFlat = opts.stochFlat !== undefined ? opts.stochFlat
         : (def.flat !== undefined ? def.flat : 0.85);
       if (stochFlat > 0.001) {
@@ -2103,7 +3562,16 @@
       : (def.polish || 0);
     var polishOn = polishAmt > 0.001 && detailOn;
 
-    var worldOn = triOn || macroOn || groundOn || wdet || mesoOn;
+    // ---- COLD HARBOR: wet surfaces -----------------------------------------
+    // THE LEVEL-1 GATE, second half. `this.wetEnabled` is false for the market,
+    // so wetOn is false, so not one line of the wet layer is emitted and the
+    // program cache key below does not grow. opts.wet forces it either way for
+    // anything that needs to opt out (a warehouse interior the rain never
+    // reaches) or in (a hosed-down prop on a dry level).
+    // Everything wet is derived from world position and world normal - which
+    // way is up decides whether a surface ponds, streaks or merely darkens -
+    // so it needs the world varyings.
+    var worldOn = triOn || macroOn || groundOn || wdet || mesoOn || wetOn;
 
     // ---- near detail tier ---------------------------------------------------
     // ARCHITECTURE 7.7 asks for micro detail at two scales. The far and mid
@@ -2126,7 +3594,12 @@
     var det2On = detailOn && this.enableDetail2 &&
       (opts.detail2 !== undefined ? !!opts.detail2 : true);
 
-    var triScale = opts.triScale !== undefined ? opts.triScale : (def.repeat || 0.5);
+    // `maps.repeat` is only ever set when a def declared `texels` (harbor
+    // triplanar surfaces), where the tiling was solved against the texture
+    // library's ACTUAL tile size rather than assumed. It is undefined for every
+    // market def, so this expression is exactly the old one there.
+    var defRepeat = (maps && maps.repeat !== undefined) ? maps.repeat : (def.repeat || 0.5);
+    var triScale = opts.triScale !== undefined ? opts.triScale : defRepeat;
     // Detail is authored as a world-space period in centimetres, so the layer
     // lands at the same physical scale no matter what UV scale the consumer
     // supplies. detailTile is the fallback for UV-space detail (characters and
@@ -2148,7 +3621,9 @@
     var triLP = null;
     var triFlat = opts.stochFlat !== undefined ? opts.stochFlat
       : (def.flat !== undefined ? def.flat : 0.75);
-    if (triOn && triFlat > 0.001 && maps.map) {
+    // COLD HARBOR: same one-for-one sampler trade as the stochastic path above.
+    // The apron is triplanar, so this is the branch that actually fires for it.
+    if (triOn && triFlat > 0.001 && maps.map && !ripOn) {
       triLP = this._tileLowpass(maps.map);
       if (!triLP) triFlat = 0;
     } else { triFlat = 0; }
@@ -2234,6 +3709,12 @@
         (!maps.aoMap || maps.aoMap.image === maps.roughnessMap.image) &&
         (!maps.metalnessMap || maps.metalnessMap.image === maps.roughnessMap.image)),
       hasNormalMap: !!maps.normalMap,
+      // The normal map's edge length in texels. Both sampling paths address it
+      // in TILE units - the planar one through vNormalMapUv (three folds the
+      // repeat into the uv transform) and the triplanar one through gbTP (world
+      // position x tiles-per-metre, sampled with texture2D, which never sees
+      // texture.repeat at all) - so one number serves both.
+      nrmTexels: (maps.normalMap && maps.normalMap.image && maps.normalMap.image.width) || 512,
       // Specular AA only means anything where a normal map (or the detail /
       // meso layers) can put sub-pixel variation into the shading normal.
       specAA: (!!maps.normalMap || detailOn)
@@ -2261,7 +3742,27 @@
       sssWrap: opts.sssWrap !== undefined ? opts.sssWrap : 0.6,
       sssAmbient: opts.sssAmbient !== undefined ? opts.sssAmbient : 0.28,
       wind: opts.wind ? (typeof opts.wind === 'number' ? opts.wind : 0.06) : 0,
-      isPhysical: !!mat.isMeshPhysicalMaterial
+      isPhysical: !!mat.isMeshPhysicalMaterial,
+
+      // ---- COLD HARBOR ----------------------------------------------------
+      // All six default to a market-neutral value and are only READ when
+      // F.wet is true, which it never is on level 1.
+      wet: wetOn,
+      wetDark: opts.wetDark !== undefined ? opts.wetDark
+        : (def.wetDark !== undefined ? def.wetDark : 0.55),
+      wetRough: opts.wetRough !== undefined ? opts.wetRough
+        : (def.wetRough !== undefined ? def.wetRough : 0.11),
+      wetAmt: opts.wetAmt !== undefined ? opts.wetAmt
+        : (def.wetAmt !== undefined ? def.wetAmt : 1.0),
+      wetFlat: opts.wetFlat !== undefined ? opts.wetFlat
+        : (def.wetFlat !== undefined ? def.wetFlat : 0.34),
+      puddle: puddleAmt,
+      streak: opts.streak !== undefined ? opts.streak
+        : (def.streak !== undefined ? def.streak : 0.8),
+      // Ripples need somewhere to ripple: no puddle, no ripple. That keeps the
+      // fetch - and the sampler - off every vertical surface in the yard.
+      ripple: ripOn,
+      water: !!opts.water
     };
   };
 
@@ -2270,9 +3771,15 @@
   // ==========================================================================
   MaterialLibrary.prototype._patch = function (mat, F) {
     var self = this;
+    // Every wet term is derived from world position and world normal, so if a
+    // caller has switched the world varyings back off after _features ran
+    // (glass() and foliage() both rewrite F by hand) the wet layer would emit
+    // references to varyings that do not exist and the material would fail to
+    // link - taking the frame with it. Disable rather than break.
+    if (F.wet && !F.world) { F.wet = false; F.ripple = false; }
     var anyShader = F.world || F.triplanar || F.detail || F.macro || F.parallax ||
       F.wear || F.translucent || F.hasRoughMap || F.wind || F.stochastic ||
-      F.grounding || F.specAA || F.polish || F.premulSpec ||
+      F.grounding || F.specAA || F.polish || F.premulSpec || F.wet || F.water ||
       (F.specOcc && (F.detail || F.grounding || F.hasNormalMap));
     if (!anyShader) return mat;
 
@@ -2366,6 +3873,60 @@
     }
     if (F.wind) U.gbWind = { value: F.wind };
 
+    // ---- COLD HARBOR -------------------------------------------------------
+    // gbWetG, gbWindW, gbRippleMap and gbWaveMap are the SHARED objects off the
+    // library (exactly like gbTime), so setWetness() is one scalar write that
+    // reaches every surface in the level with no iteration and no recompile.
+    // gbWetM is per-material: it carries this surface's own physics.
+    if (F.wet || F.water) {
+      U.gbWetG = self._wetGlobal;                  // x = wetness, y = rain
+      U.gbWindW = self._windW;                     // xy = dir, z = m/s
+      if (F.ripple || F.water) {
+        var rt = null;
+        try { rt = self._ensureRipple(); } catch (e) { rt = null; }
+        // Shared: _syncWeather can swap the bound texture and flip the decode
+        // mode for the whole level in one write.
+        U.gbRippleMap = self._rippleTex;
+        if (!self._rippleTex.value) self._rippleTex.value = rt;
+        U.gbRipCfg = self._ripCfg;
+      }
+    }
+    if (F.wet) {
+      // x = darken-to, y = roughness target, z = susceptibility, w = flatten
+      U.gbWetM = {
+        value: new THREE.Vector4(F.wetDark, F.wetRough, F.wetAmt, F.wetFlat)
+      };
+      // x = puddle amount, y = streak amount
+      U.gbWetS = { value: new THREE.Vector2(F.puddle, F.streak) };
+      // The material's authored envMapIntensity, which r180 throws away for any
+      // material lit by scene.environment - see the gbEnvW block in
+      // _fragmentShader. Registered so setEnvIntensity() can still drive it.
+      U.gbEnvW = { value: mat.envMapIntensity };
+      try {
+        Object.defineProperty(mat.userData, 'gbEnvWU',
+          { value: U.gbEnvW, enumerable: false, writable: true, configurable: true });
+      } catch (e) { /* enumerable is still workable */ }
+      // The normal map's own edge length in texels, so the shader can measure
+      // the real texel:pixel ratio instead of standing in a distance smoothstep
+      // for it. A distance ramp is wrong on every material whose repeat differs
+      // from the one it was tuned against, which is all of them.
+      if (F.hasNormalMap) U.gbNrmTexels = { value: F.nrmTexels };
+    }
+    if (F.water) {
+      var wt = null;
+      try { wt = self._ensureWave(); } catch (e) { wt = null; }
+      U.gbWaveMap = { value: wt };
+      U.gbFoamSeg = self._foamSeg;
+      U.gbFoamCount = self._foamCount;
+      U.gbWaterDepth = { value: F.waterDepth };
+      U.gbWaterBed = { value: srgb(F.waterBed) };
+      U.gbWaterTint = { value: srgb(F.waterTint) };
+      U.gbWaterAbsorb = { value: new THREE.Vector3(F.waterAbsorb[0], F.waterAbsorb[1], F.waterAbsorb[2]) };
+      U.gbFoamColor = { value: srgb(F.foamColor) };
+      U.gbFoamWidth = { value: F.foamWidth };
+      U.gbWaveAmp = { value: F.waveAmp };
+    }
+
     // Non-enumerable so THREE.Material.copy()'s JSON round-trip of userData
     // skips them. level.js and props.js both clone every material they take
     // from here, and a JSON.stringify that walks into a Texture serialises the
@@ -2397,12 +3958,24 @@
       F.sharedOrm ? 'o' : '', F.blend ? 'B' : '',
       F.hasMetalMap ? 'm' : '', F.wind ? 'w' : '', F.specAA ? 'A' : '',
       F.isPhysical ? 'X' : ''].join('_');
+    // COLD HARBOR. APPENDED, not joined in: adding two empty slots to the join
+    // above would put two extra separators on the end of every market key.
+    // Nothing would render differently, but every level-1 material would land
+    // on a fresh program - which is exactly the kind of silent, invisible
+    // change to a shipped level this level is not allowed to make.
+    if (F.wet) {
+      ck += '_Q' + (F.puddle > 0.01 ? 'p' : '') + (F.streak > 0.01 ? 's' : '') +
+        (F.ripple ? 'r' : '');
+    }
+    if (F.water) ck += '_Z';
 
     var obc = function (shader) {
       try {
         for (var k in U) shader.uniforms[k] = U[k];
         shader.vertexShader = self._vertexShader(shader.vertexShader, F);
-        shader.fragmentShader = self._fragmentShader(shader.fragmentShader, F);
+        shader.fragmentShader = F.water
+          ? self._waterShader(shader.fragmentShader, F)
+          : self._fragmentShader(shader.fragmentShader, F);
       } catch (e) {
         GAME.logError('materials.onBeforeCompile:' + F.name, e);
       }
@@ -2536,6 +4109,96 @@
       pars.push('uniform float gbPolishAmt;', 'float gbPolish = 0.0;');
       pars.push(G_POLISH);
     }
+    // ---- COLD HARBOR: wet surfaces ------------------------------------------
+    // Nothing here is emitted on the market (F.wet is false), so level 1's
+    // shader source is unchanged down to the character.
+    if (F.wet) {
+      pars.push('uniform vec2 gbWetG;',     // x = global wetness, y = rain
+        'uniform vec4 gbWetM;',             // darkTo, roughTo, susceptibility, flatten
+        'uniform vec2 gbWetS;',             // puddle amount, streak amount
+        'uniform vec3 gbWindW;');           // wind dir.xy, speed
+      pars.push('uniform float gbEnvW;');   // per-material env weight, see below
+      pars.push('float gbWetT = 0.0;',      // final wetness at this fragment
+        'float gbPud = 0.0;',               // standing-water coverage
+        'float gbDamp = 0.0;',              // the darker ring OUTSIDE the water line
+        'vec2 gbStrk = vec2( 0.0 );',       // x = rivulet mask, y = its gradient
+        // FILM THICKNESS, 0 = a thin damp bloom the substrate still shows
+        // through, 1 = a continuous sheet of water standing on it.
+        //
+        // Without this the whole wet layer had exactly ONE roughness - every
+        // soaked fragment in the level was pulled to gbWetM.y (0.055 on the
+        // apron) and the yard became a single uniform mirror. Two consequences,
+        // both measured:
+        //
+        //   * there is no specular STRUCTURE. A punctual SpotLight can only
+        //     light fragments inside its cone, so the mirror image of a lamp
+        //     lands outside the pool and returns nothing (computed for the
+        //     harbor rig: the mirror point sits at cone dot 0.66 against a
+        //     coneCos of 0.87). At one uniform roughness the surface therefore
+        //     shows no highlight anywhere - swapping the wet roughness target
+        //     from 0.055 to 0.30 changed the rendered frame by 3/255 peak.
+        //   * postfx's roughness-aware reflection blur has nothing to grade
+        //     against: every wet texel asked for the same mip.
+        //
+        // A real yard is not uniformly sheeted. Water runs to the low ground,
+        // so there is a continuum from barely-damp high spots through sheeted
+        // hollows to standing water, and that continuum is what makes wet
+        // ground read as wet rather than as painted black.
+        // (This holds the SHAPED film gbWetSolve returns - 0 = damp bloom,
+        // 1 = a continuous sheet - not the raw noise field behind it.)
+        'float gbFilm = 0.5;',
+        // this fragment's wet roughness target, solved from gbFilm
+        'float gbWetR = 0.11;',
+        // MICRO-TIER SURVIVAL, 1 = dry surface, 0 = fully drowned.
+        //
+        // This is the single most important number in the wet layer, and it is
+        // not obvious why. A water film does two things at once: it makes the
+        // surface glossy AND it fills the sub-millimetre relief. Do only the
+        // first and you get a surface with a mirror's ROUGHNESS and a dry
+        // surface's NORMALS - and under a point lamp that combination is not
+        // "slightly wrong", it is a dense field of glitter, because every
+        // micro-facet that happens to point at the lamp now returns a razor
+        // specular lobe instead of a broad dull one. It looks exactly like
+        // specular aliasing, so it invites exactly the wrong fix (more specAA,
+        // which cannot touch it: the normals genuinely are that different).
+        //
+        // So gloss and relief come down TOGETHER, and only the micro tier goes
+        // - the base map and the meso band stay, because a puddle of water is
+        // not deep enough to level a 40 cm dish in a concrete slab.
+        'float gbWetND = 1.0;',
+        // Rivulet view-distance schedule. See G_STREAK.
+        'float gbStrkW = 1.0;');
+      pars.push(G_PUDDLE, G_WETSOLVE);
+      if (F.streak > 0.01) pars.push(G_STREAK);
+      if (F.ripple) {
+        pars.push('uniform sampler2D gbRippleMap;', 'uniform vec4 gbRipCfg;');
+        pars.push(G_RIPPLE);
+      }
+    }
+    // ---- COLD HARBOR: the base normal map's LOD schedule --------------------
+    // Every other layer in this file fades with distance. The BASE normal map
+    // did not: `nsExpr` had no view-distance or texel-density term at all, so a
+    // container flank at 60 m ran its corrugation at full strength with a
+    // quarter of a texel per pixel. That is the rainbow-fringed vertical
+    // barcode across the container stacks and the freighter hull - measured at a
+    // 1.89 vertical/horizontal gradient ratio on the flanks against 1.0 for an
+    // unstriped surface - and it is not a filtering problem: anisotropic
+    // filtering deliberately keeps that detail sharp along the unstretched axis.
+    //
+    // The schedule is driven by the REAL texel:pixel ratio rather than by
+    // gbViewDist, because that is scale-correct on every material regardless of
+    // its repeat, which a distance smoothstep never is. Two halves, and both are
+    // needed: the amplitude comes down (gbNrmW) AND the variance that was
+    // removed goes back in as roughness (gbLodVar), which is the Toksvig
+    // identity - normal variance is mathematically extra roughness. Take only
+    // the first half and the surface goes flat and plastic; take only the second
+    // and the barcode is still there, just duller.
+    if (F.wet && F.hasNormalMap) {
+      pars.push('uniform float gbNrmTexels;',
+        'float gbNLod = 0.0;',      // log2 texels per pixel, >= 0
+        'float gbNrmW = 1.0;',      // base-normal amplitude schedule
+        'float gbLodVar = 0.0;');   // the variance it gave up, as roughness^2
+    }
     if (F.meso) {
       pars.push('uniform float gbMesoScale;', 'uniform float gbMesoAmount;');
       pars.push('vec4 gbMes = vec4( 0.5, 0.5, 0.5, 0.5 );', 'float gbMesoW = 0.0;');
@@ -2572,7 +4235,10 @@
         if (!F.stochastic) pars.push('uniform sampler2D gbTileLP;', 'uniform float gbTileFlat;');
       }
       pars.push(G_TRIWARP);
-      pars.push(G_TRI.replace('GB_TRI_DETAIL', F.detail ? G_TRI_DETAIL : ''));
+      // GB_WND is the micro-tier survival factor - empty on the market, so the
+      // emitted line is `gbDetailStrength * gbDetailFade;` exactly as before.
+      pars.push(G_TRI.replace('GB_TRI_DETAIL',
+        F.detail ? G_TRI_DETAIL.replace('GB_WND', F.wet ? ' * gbWetND' : '') : ''));
     }
     if (F.parallax) {
       pars.push('#define GB_POM_STEPS ' + (F.pomSteps | 0));
@@ -2618,6 +4284,40 @@
       head.push('#ifdef USE_ROUGHNESSMAP');
       head.push('  gbOrm = gbTriSample( roughnessMap, gbTP, gbTW, 1.0 );');
       head.push('#endif');
+    }
+    // ---- COLD HARBOR: texel:pixel ratio for the normal LOD schedule ---------
+    // Measured in the units the map is actually sampled in, so it is correct on
+    // the triplanar path (where the projection coordinate IS the uv) and on the
+    // planar path (where three has already folded the repeat into vNormalMapUv)
+    // without either having to know the other's scale.
+    if (F.wet && F.hasNormalMap) {
+      head.push('{');
+      if (F.triplanar) {
+        head.push('  vec3 gbNdX = dFdx( gbTP ) * gbNrmTexels;');
+        head.push('  vec3 gbNdY = dFdy( gbTP ) * gbNrmTexels;');
+        head.push('  float gbNm2 = max( dot( gbNdX, gbNdX ), dot( gbNdY, gbNdY ) );');
+      } else {
+        head.push('  float gbNm2 = 1.0;');
+        head.push('  #ifdef USE_NORMALMAP');
+        head.push('    vec2 gbNdX = dFdx( vNormalMapUv ) * gbNrmTexels;');
+        head.push('    vec2 gbNdY = dFdy( vNormalMapUv ) * gbNrmTexels;');
+        head.push('    gbNm2 = max( dot( gbNdX, gbNdX ), dot( gbNdY, gbNdY ) );');
+        head.push('  #endif');
+      }
+      head.push('  gbNLod = max( 0.0, 0.5 * log2( max( gbNm2, 1e-8 ) ) );');
+      // One free level: anisotropic filtering genuinely resolves ~2 texels per
+      // pixel, so the ramp starts where the hardware stops helping.
+      head.push('  float gbNo = max( gbNLod - 1.0, 0.0 );');
+      head.push('  gbNrmW = 1.0 / ( 1.0 + gbNo * 0.62 );');
+      head.push('  gbLodVar = ( 1.0 - gbNrmW ) * 0.085;');
+      head.push('}');
+    }
+    // Rivulets: the only analytic high-frequency layer in the file that had no
+    // schedule at all. Faded to a fifth rather than to zero, so a container
+    // flank at 50 m still reads as running with water instead of stopping being
+    // wet at a line the eye can find.
+    if (F.wet && F.streak > 0.01) {
+      head.push('gbStrkW = mix( 0.20, 1.0, 1.0 - smoothstep( 11.0, 32.0, gbViewDist ) );');
     }
     if (F.blend) {
       head.push('gbBTP = gbWP * gbBlendScale;');
@@ -2767,8 +4467,12 @@
     src = src.replace('#include <map_fragment>', mapCode.join('\n'));
 
     // ---- vertex wear --------------------------------------------------------
+    // Composed as one replacement so the wet layer can run immediately after
+    // the wear layer and read its result. With F.wet off the emitted string is
+    // character-for-character the one that shipped.
+    var colorCode = [];
     if (F.wear) {
-      src = src.replace('#include <color_fragment>', [
+      colorCode.push(
         '#if defined( USE_COLOR_ALPHA ) || defined( USE_COLOR )',
         '  // Vertex colour is a WEAR MASK, white = pristine:',
         '  //   R -> grime/dust    G -> wetness    B -> edge wear / exposed substrate',
@@ -2786,8 +4490,121 @@
         '  diffuseColor.rgb = mix( diffuseColor.rgb, gbWearColor * ( 0.55 + 0.75 * gbLum ), gbWear * 0.7 );',
         '  // Wet surfaces darken because the water film traps light in the pores.',
         '  diffuseColor.rgb *= mix( 1.0, 0.48, gbWet );',
-        '#endif'
-      ].join('\n'));
+        '#endif');
+    }
+
+    // ---- COLD HARBOR: soak, puddle, damp ring -------------------------------
+    // Runs here, after color_fragment, because it is the first point where BOTH
+    // the finished albedo and the per-vertex wetness channel exist - and
+    // roughness, the normal and the BRDF inputs are all still downstream, so
+    // one block can drive all four.
+    if (F.wet) {
+      // WHICH cavity biases the puddle field matters enormously, and getting it
+      // wrong does not look like a puddle bug - it looks like a lighting bug.
+      //
+      // The obvious choice is the detail layer's cavity (gbDet.b). It is
+      // wrong: that is a FIVE CENTIMETRE field, so it punches high-frequency
+      // holes straight through the puddle MASK, and the mask drives both the
+      // roughness collapse and the normal flattening. The result was a puddle
+      // whose every other texel was and was not water - which under a sodium
+      // lamp photographed as a dense field of orange glitter, indistinguishable
+      // from specular aliasing and completely immune to the specAA term,
+      // because the normals really were that different.
+      //
+      // The meso band is the right signal and it is already there: 0.1-0.6 m
+      // is puddle scale by definition. With no meso layer, no bias - a smooth
+      // basin field beats a sharp wrong one.
+      var cavExpr = F.meso ? 'gbMes.b' : '0.5';
+      var vwExpr = F.wear ? 'gbWet' : '0.0';
+      colorCode.push(
+        '{',
+        '  float gbVW = ' + vwExpr + ';',
+        '  float gbUp = clamp( gbWN.y, 0.0, 1.0 );',
+        '  // Sky exposure proxy: a horizontal slab takes the whole downpour,',
+        '  // a vertical flank only what the wind drives onto it, an overhang',
+        '  // stays comparatively dry. Without this every face of a container',
+        '  // soaks identically and the stack reads as dipped rather than',
+        '  // rained on.',
+        '  float gbExpo = mix( 0.42, 1.0, gbUp ) + clamp( - gbWN.y, 0.0, 1.0 ) * -0.22;',
+        '  gbWetT = clamp( gbWetG.x * gbWetM.z * gbExpo + gbVW * 0.9, 0.0, 1.0 );',
+        // ---- THE WET CONTRACT, evaluated once -------------------------------
+        // Film thickness, the puddle mask, the damp collar and the wet roughness
+        // target all come out of gbWetSolve - the one function this file
+        // publishes as GAME.MaterialLibrary.WET_GLSL so postfx's SSR pass can
+        // evaluate the identical field instead of guessing at one.
+        //
+        // `cav` is the surface's own 0.1-0.6 m cavity, and WHICH cavity matters
+        // enormously: the 5 cm detail cavity punches high-frequency holes
+        // straight through a mask that drives roughness AND normal flattening,
+        // which under a sodium lamp photographs as a dense field of orange
+        // glitter that no amount of specAA can touch.
+        '  gbWetR = gbWetSolve( gbWP, gbUp, ' + cavExpr + ',',
+        '      vec4( gbWetG.x, gbWetG.y, gbWetS.x, gbWetM.y ), gbPud, gbDamp, gbFilm );',
+        '  // Anything the level painted as soaking is a puddle whatever the',
+        '  // noise field says - the level knows where the drainage channels are.',
+        '  gbPud = max( gbPud, smoothstep( 0.58, 0.96, gbVW ) * smoothstep( 0.62, 0.90, gbUp ) * step( 0.004, gbWetS.x ) );',
+        '  gbWetT = max( gbWetT, gbPud );',
+        // A RIVULET IS NOT A FRACTION OF WET, IT IS WATER.
+        //
+        // This used to scale linearly by gbWetT, and gbWetT on a vertical face
+        // is only ~0.38 (gbExpo caps a flank at 0.42 of the downpour, which is
+        // right for the average soak). So the one cue that makes a container
+        // flank read as rained on rather than merely dark was running at a
+        // third strength and did not survive into the frame at all. A rivulet
+        // running down a flank is a continuous film of water whatever the wall
+        // either side of it is doing; how wet the WALL is decides whether
+        // rivulets exist, not how watery they are once they do. So gbWetT
+        // becomes a PRESENCE gate rather than a linear scale.
+        (F.streak > 0.01
+          ? '  if ( gbWetT * gbWetS.y > 0.02 ) gbStrk = gbStreaks( gbWP, gbWN ) * ( 1.0 - gbUp )\n' +
+            '      * smoothstep( 0.05, 0.40, gbWetT ) * gbWetS.y;'
+          : '  gbStrk = vec2( 0.0 );'),
+        // 0.24, not 0.42. A rivulet IS water, so it may push the fragment
+        // toward soaked - but gbWetT drives the albedo multiplier gbWetM.x
+        // (container enamel 0.66) as well as the normal flattening, so a 0.42
+        // step on a flank whose base is ~0.38 took the run to gbWetT ~0.80 and
+        // dropped its diffuse to 0.73 of the dry value BEFORE the roughness
+        // collapse below did the rest. Darker, yes; a black bar, no.
+        '  gbWetT = clamp( gbWetT + gbStrk.x * 0.24, 0.0, 1.0 );',
+        // Non-linear on purpose. A damp surface keeps most of its micro-relief;
+        // a soaked one has essentially none, because the film is thicker than
+        // the relief. The exponent is what makes drizzle and downpour look
+        // like different weather rather than two settings of one slider - and
+        // it is what finally killed the glitter: measured on a 1280x720 frame
+        // of the apron under two sodium lamps, isolated over-bright pixels went
+        // from 5095 to under 300 with no loss of readable surface, because the
+        // base map, the meso CAVITY and the parallax all survive untouched.
+        // Only the sub-millimetre bump goes, and a sheet of water really does
+        // take that away.
+        // The film thickness gates it: a barely-damp high spot keeps most of
+        // its relief, a sheeted hollow keeps none. Same physical argument as
+        // the roughness spread, applied to the other half of the same event, so
+        // gloss and relief still come down together per fragment rather than
+        // together across the whole surface.
+        '  float gbFilmS = gbFilm;',
+        '  gbWetND = pow( 1.0 - clamp( gbWetT * gbWetM.w * mix( 0.52, 1.0, gbFilmS )',
+        '        + gbPud * 0.85, 0.0, 1.0 ), 2.2 );',
+        // ---- albedo ---------------------------------------------------------
+        '  float gbDk = mix( 1.0, gbWetM.x, gbWetT );',
+        '  gbDk *= mix( 1.0, 0.74, gbDamp );',
+        '  gbDk = mix( gbDk, gbWetM.x * 0.66, gbPud );',
+        // ...and the soak follows the film too. A surface whose water is a
+        // bloom rather than a sheet has not filled its pores, so it has not
+        // done the total-internal-reflection trick that darkens it - which is
+        // the difference between wet ground with tonal range in it and wet
+        // ground painted one flat black.
+        '  gbDk = mix( mix( 1.0, gbDk, 0.55 ), gbDk, gbFilmS );',
+        '  diffuseColor.rgb *= gbDk;',
+        '  // A water film also SATURATES: light that would have scattered',
+        '  // straight back out is bounced around inside the surface instead,',
+        '  // so it comes back having been filtered by the pigment twice.',
+        '  float gbWL = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );',
+        '  diffuseColor.rgb = max( mix( vec3( gbWL ), diffuseColor.rgb, mix( 1.0, 1.18, gbWetT ) ), vec3( 0.0 ) );',
+        '}');
+    }
+    if (colorCode.length) {
+      src = src.replace('#include <color_fragment>',
+        (F.wear ? '' : '#include <color_fragment>\n') + colorCode.join('\n'));
     }
 
     // ---- roughness / metalness ---------------------------------------------
@@ -2814,13 +4631,19 @@
     if (F.detail) {
       // Micro-roughness. A surface whose bumps all share one gloss value is
       // the "wet plastic" tell the detail pass exists to kill.
-      roughCode.push('roughnessFactor += ( gbDet.a - 0.5 ) * gbDetailRough * gbDetailFade;');
+      // COLD HARBOR: and a surface UNDER WATER genuinely does share one gloss
+      // value, because the gloss is the water's, not the substrate's - so the
+      // micro-roughness scatter drowns with the micro-normal (see gbWetND).
+      roughCode.push('roughnessFactor += ( gbDet.a - 0.5 ) * gbDetailRough * gbDetailFade' +
+        (F.wet ? ' * gbWetND' : '') + ';');
     }
     if (F.detail2) {
-      roughCode.push('roughnessFactor += ( gbDet2.a - 0.5 ) * gbDetailRough * 0.7 * gbDet2W;');
+      roughCode.push('roughnessFactor += ( gbDet2.a - 0.5 ) * gbDetailRough * 0.7 * gbDet2W' +
+        (F.wet ? ' * gbWetND' : '') + ';');
     }
     if (F.meso) {
-      roughCode.push('roughnessFactor += ( gbMes.a - 0.5 ) * 0.30 * clamp( gbMesoW, 0.0, 1.0 );');
+      roughCode.push('roughnessFactor += ( gbMes.a - 0.5 ) * 0.30 * clamp( gbMesoW, 0.0, 1.0 )' +
+        (F.wet ? ' * mix( 0.45, 1.0, gbWetND )' : '') + ';');
     }
     if (F.macro) {
       // Weathering is patchy, and patchy GLOSS survives a hazy sky far better
@@ -2849,10 +4672,73 @@
       // The counter-pull. Deliberately the LAST roughness term: burnish is the
       // most recent event on a surface's history, and it sits on top of the
       // dust rather than under it.
+      // COLD HARBOR: the burnish mask drowns too, and it is the worst offender
+      // of the three. It is a HIGH-FREQUENCY crest mask that snaps its texels
+      // to a hard gloss target, which is exactly right under a broad sun and
+      // exactly wrong under a point lamp on a surface already at 0.05 - the
+      // isolated burnished texels each return the lamp at full intensity and
+      // the apron photographs as orange glitter. Water does not polish crests;
+      // it covers them.
       roughCode.push('roughnessFactor = min( roughnessFactor, mix( roughnessFactor, ' +
-        M.lerp(0.40, 0.10, M.saturate(F.polishAmount)).toFixed(3) + ', gbPolish ) );');
+        M.lerp(0.40, 0.10, M.saturate(F.polishAmount)).toFixed(3) + ', gbPolish' +
+        (F.wet ? ' * gbWetND' : '') + ' ) );');
     }
-    roughCode.push('roughnessFactor = clamp( roughnessFactor, 0.035, 1.0 );');
+    // COLD HARBOR. Last, and deliberately so: water is the most recent thing
+    // to happen to this surface and it sits ON TOP of the dust, the burnish
+    // and the grime. Three separate targets because they are three different
+    // interfaces - a soaked surface, a rivulet, and standing water are not the
+    // same optical event.
+    if (F.wet) {
+      // gbWetR, not gbWetM.y: the target varies per fragment with the film
+      // thickness (see the gbFilm block above). The pull is also no longer
+      // total - 0.88 rather than 0.96 - so the substrate's own roughness map
+      // still modulates the result instead of being erased, which is what
+      // keeps slab joints, rust patches and paint chips legible through the
+      // water.
+      roughCode.push('roughnessFactor = mix( roughnessFactor, gbWetR, gbWetT * 0.88 );');
+      if (F.streak > 0.01) {
+        // A RIVULET IS RUNNING WATER, NOT STANDING WATER, AND THE DIFFERENCE IS
+        // THE WHOLE ARTEFACT. This was mix(..., 0.048, gbStrk.x * 0.85): a
+        // near-total snap to a value BELOW the puddle target, on a VERTICAL
+        // face, at 02:00. A mirror only shows you what is in the mirror
+        // direction, and off the side of a container stack that is the black
+        // sky - so every texel the rivulet touched went to near-zero and the
+        // flank photographed as wide black bars over red enamel. (The bars were
+        // the coverage bug in gbStreaks; the BLACK was this line.)
+        //
+        // Physically a run of water down a corrugated flank is agitated,
+        // millimetres thick, and still shows the rib profile through it: it
+        // lands around 0.10-0.16, not 0.048, and it modulates the substrate
+        // rather than replacing it. So: the material's own solved wet target
+        // with a floor, mixed at 0.55 rather than 0.85. The rivulet now reads
+        // as a glossy run that CATCHES the sodium lamps - which is what makes a
+        // flank look rained on - instead of as a hole in the container.
+        roughCode.push('roughnessFactor = mix( roughnessFactor,' +
+          ' max( gbWetR, 0.105 ), gbStrk.x * 0.55 );');
+      }
+      roughCode.push('roughnessFactor = mix( roughnessFactor, 0.030, gbPud );');
+      // TOKSVIG. The other half of the normal LOD schedule: the sub-texel
+      // variance gbNrmW just removed from the shading normal comes back as
+      // roughness, because normal variance IS extra roughness. Without this the
+      // schedule would only make the far field flat and plastic; with it, the
+      // barcode on a 40 m container flank becomes the correctly dimmer, broader
+      // sheen it should have been. Standing water is exempt: a puddle really is
+      // a flat mirror at any distance, and this is what keeps the long lamp
+      // smears from being blurred away by their own footprint.
+      if (F.hasNormalMap) {
+        roughCode.push('roughnessFactor = min( 1.0, sqrt( roughnessFactor * roughnessFactor +' +
+          ' gbLodVar * ( 1.0 - gbPud ) ) );');
+      }
+    }
+    // 0.035 is the market's floor and stays the market's floor. Standing water
+    // is genuinely smoother than that - clamping a puddle to 0.035 broadens
+    // the lamp reflection into a smear, and "reflections that are just a blur"
+    // is on the harbor instant-fail list - so the wet path gets a lower one.
+    // Not much lower, though: below about 0.02 a point lamp's reflection is
+    // narrower than a pixel and the puddle stops reflecting and starts
+    // scintillating.
+    roughCode.push('roughnessFactor = clamp( roughnessFactor, ' +
+      (F.wet ? '0.022' : '0.035') + ', 1.0 );');
     src = src.replace('#include <roughnessmap_fragment>', roughCode.join('\n'));
 
     var metalCode = ['float metalnessFactor = metalness;'];
@@ -2909,8 +4795,29 @@
       brdf.push('  float gbAAd = smoothstep( 6.0, 20.0, gbViewDist );');
       brdf.push('  vec3 gbNdx = dFdx( normal ), gbNdy = dFdy( normal );');
       brdf.push('  float gbNv = max( dot( gbNdx, gbNdx ), dot( gbNdy, gbNdy ) );');
+      // COLD HARBOR. The near-field throttle above (0.28x strength, 0.06
+      // ceiling below ~6 m) was tuned against a library whose materials sit at
+      // roughness 0.3-0.95, where 0.06 of extra variance is nothing. A soaked
+      // surface sits at 0.055, where it is everything: roughness enters the
+      // GGX lobe as the fourth power, so the same normal noise that was
+      // invisible on dry concrete becomes a strobe on wet concrete. Measured
+      // on the apron under two sodium lamps, isolated over-bright pixels ran
+      // 5095 against 44 on the identical DRY frame - and the cause is not one
+      // layer, it is every layer at once, including the base map, which is why
+      // damping the detail tiers alone only ever got it halfway.
+      //
+      // So the throttle is lifted in proportion to how mirror-like the
+      // fragment actually is. This is the right lever precisely because it
+      // does not care which layer the sub-pixel normal variance came from: it
+      // measures the variance and widens the lobe by exactly that much, which
+      // is the physically correct answer and also the only one that scales.
+      //
+      // Emitted as one swapped expression rather than an extra line, because
+      // the market's source has to stay byte-identical, not merely equivalent.
       brdf.push('  material.roughness = min( 1.0, sqrt( material.roughness * material.roughness +');
-      brdf.push('    min( gbSpecAA * mix( 0.28, 1.0, gbAAd ) * gbNv, mix( 0.06, 0.36, gbAAd ) ) ) );');
+      brdf.push(F.wet
+        ? '    min( gbSpecAA * mix( mix( 0.28, 0.95, gbWetT ), 1.0, gbAAd ) * gbNv, mix( mix( 0.06, 0.30, gbWetT ), 0.36, gbAAd ) ) ) );'
+        : '    min( gbSpecAA * mix( 0.28, 1.0, gbAAd ) * gbNv, mix( 0.06, 0.36, gbAAd ) ) ) );');
       brdf.push('}');
     }
 
@@ -2921,6 +4828,21 @@
       brdf.push('material.specularColor *= mix( 1.0, 0.45, gbGrime );');
       brdf.push('material.specularF90 = mix( material.specularF90, 1.0, gbWet );');
       brdf.push('material.specularColor = mix( material.specularColor, vec3( 0.055 ), gbWet * ( 1.0 - metalnessFactor ) );');
+    }
+    // COLD HARBOR. The Fresnel half of wet. Roughness alone gets you a shinier
+    // surface; what actually reads as water is that the grazing response goes
+    // to unity, so a lamp forty metres up the quay lays a long specular streak
+    // across the apron instead of a small local hotspot.
+    //
+    // Inside a puddle the reflecting interface is no longer the substrate at
+    // all - it is a water surface, F0 = 0.02 - so specularColor is replaced
+    // rather than nudged. Metals are excluded from that: a puddle ON steel
+    // still reflects as water, but the steel's own tinted F0 has to survive
+    // wherever the water is thin.
+    if (F.wet) {
+      brdf.push('material.specularF90 = mix( material.specularF90, 1.0, gbWetT );');
+      brdf.push('material.specularColor = mix( material.specularColor, vec3( 0.021 ),' +
+        ' max( gbPud, gbStrk.x * 0.6 ) * ( 1.0 - metalnessFactor ) );');
     }
     if (brdf.length) {
       src = src.replace('#include <lights_physical_fragment>',
@@ -2933,6 +4855,65 @@
       // Silt fills the crevices, so heavily grimed surfaces read flatter.
       var nsExpr = F.wear ? 'normalScale * mix( 1.0, 0.6, gbGrime )' : 'normalScale';
       if (F.grounding) nsExpr = '( ' + nsExpr + ' * mix( 1.0, 0.72, gbSettle ) )';
+      // COLD HARBOR: the micro tier is what a water film levels. Applied to the
+      // detail layers' STRENGTH rather than to the composed normal, so the base
+      // map's plate seams and the meso band's 40 cm dishing survive being
+      // rained on - which is what keeps a wet apron reading as a wet APRON
+      // rather than as a sheet of black glass.
+      var wnd = F.wet ? ' * gbWetND' : '';
+      // ...but NOT the meso band. A water film a few tenths of a millimetre
+      // thick cannot level a 40 cm dish in a slab, and this file's own comment
+      // said so while the code drowned it anyway. It matters most exactly where
+      // it showed worst: at a grazing view the metre-scale undulation is what
+      // breaks a wet surface's reflection into the long wandering streaks that
+      // sell it. Drown it and the near ground becomes one optically flat sheet
+      // returning a smooth environment probe - measured at 0.57 mean on the
+      // gangway apron against 0.13 before, a featureless white plane where the
+      // art direction asks for a black mirror.
+      var wndMeso = F.wet ? ' * mix( 0.45, 1.0, gbWetND )' : '';
+      // ...and the BASE map gets the same treatment at a gentler exponent.
+      //
+      // This one was measured, not guessed, and it was the whole ball game.
+      // Isolating the sources of the apron's glitter one at a time: with the
+      // base normal scale forced to zero, over-bright isolated pixels dropped
+      // from 4292 to 79 at unchanged mean luminance - i.e. the base map alone
+      // was essentially all of it, and every amount of detail-tier damping and
+      // specular antialiasing put together had been chipping at the margins.
+      //
+      // The reason is worth writing down, because the instinct is to reach for
+      // specAA and specAA cannot fix it: the map IS mip-filtered, so adjacent
+      // pixels sample nearly the same texel and the screen-space derivative
+      // specAA measures UNDER-reports the true sub-pixel variance by a wide
+      // margin. Mip filtering averages normal VECTORS, which is not the same
+      // as averaging their specular response, and correcting that properly
+      // needs the filtered normal's length (Toksvig) - which a normalised RGB
+      // map does not carry, and which gbNrmW/gbLodVar reconstruct from the
+      // texel:pixel ratio instead.
+      //
+      // mix( 0.26, 1.0, gbWetND ), not sqrt( gbWetND ) and not gbWetND.
+      //
+      // sqrt() left the base map at ~46% on a surface driven to roughness 0.055.
+      // Roughness enters GGX to the FOURTH power, so that residual variance
+      // shattered the lobe and the apron came out as a field of 1-2 px sequins
+      // (measured: 1.20% isolated over-bright pixels on the warehouse floor
+      // against an AAA bar of 0.1%). It is not only a sparkle problem - a
+      // shattered lobe is a BROAD lobe away from its peak, which is exactly why
+      // the sodium reflections died after a metre or two instead of running as
+      // long coherent smears.
+      //
+      // Driving it all the way to gbWetND (~0.09 soaked) is the opposite error
+      // and it was measured too: the warehouse floor went to a featureless
+      // orange sheet at 0.40 mean, i.e. an optically flat mirror. It is not one,
+      // because the film is only a few tenths of a millimetre thick. It levels
+      // the sub-millimetre micro tier completely - that is what the detail
+      // layers' own gbWetND gate does - but it cannot level the 2 mm to 10 cm
+      // relief the BASE map carries: the slab joints, the float marks, the
+      // corrugation ribs and the plate seams are all still there under the
+      // water, refracted rather than reflected, at roughly a quarter amplitude.
+      // So the base map keeps a floor of ~26% however hard it rains, which is
+      // both the physical answer and the one that keeps a wet apron reading as
+      // an apron instead of as a sheet of black glass.
+      if (F.wet) nsExpr = '( ' + nsExpr + ' * mix( 0.26, 1.0, gbWetND ) * gbNrmW )';
       if (F.triplanar) {
         nrmCode.push('#ifdef USE_NORMALMAP_TANGENTSPACE');
         nrmCode.push('  vec3 gbNw = gbTriNormal( normalMap, gbTP, gbWN, gbTW, 1.0, ' + nsExpr + ' );');
@@ -2941,14 +4922,14 @@
           nrmCode.push('    gbTriNormal( gbBlendNrm, gbBTP, gbWN, gbTW, 1.0, ' + nsExpr + ' ), gbBlendW ) );');
         }
         if (F.detail2) {
-          nrmCode.push('  gbNw = gbMesoPerturb( gbNw, gbDetVec( gbDet2, gbDet2W * 0.55 ) );');
+          nrmCode.push('  gbNw = gbMesoPerturb( gbNw, gbDetVec( gbDet2, gbDet2W * 0.55' + wnd + ' ) );');
         }
         if (F.meso) {
           // One world-space perturbation rather than three more triplanar
           // taps. The meso layer is isotropic low-amplitude noise, so an
           // arbitrary-but-continuous tangent frame is indistinguishable from
           // the projected one and costs a quarter as much.
-          nrmCode.push('  gbNw = gbMesoPerturb( gbNw, gbDetVec( gbMes, 0.85 * clamp( gbMesoW, 0.0, 1.5 ) ) );');
+          nrmCode.push('  gbNw = gbMesoPerturb( gbNw, gbDetVec( gbMes, 0.85 * clamp( gbMesoW, 0.0, 1.5 )' + wndMeso + ' ) );');
         }
         // Triplanar produces a world-space normal directly; convert to view
         // space (viewMatrix is orthonormal, so the rotation part suffices).
@@ -2961,18 +4942,108 @@
           : '  vec3 mapN = texture2D( normalMap, vNormalMapUv + gbUvShift ).xyz * 2.0 - 1.0;');
         nrmCode.push('  mapN.xy *= ' + nsExpr + ';');
         if (F.detail) {
-          nrmCode.push('  mapN = gbBlendRNM( mapN, gbDetVec( gbDet, gbDetailStrength * gbDetailFade ) );');
+          nrmCode.push('  mapN = gbBlendRNM( mapN, gbDetVec( gbDet, gbDetailStrength * gbDetailFade' + wnd + ' ) );');
         }
         if (F.detail2) {
-          nrmCode.push('  mapN = gbBlendRNM( mapN, gbDetVec( gbDet2, gbDet2W * 0.55 ) );');
+          nrmCode.push('  mapN = gbBlendRNM( mapN, gbDetVec( gbDet2, gbDet2W * 0.55' + wnd + ' ) );');
         }
         if (F.meso) {
-          nrmCode.push('  mapN = gbBlendRNM( mapN, gbDetVec( gbMes, 0.85 * clamp( gbMesoW, 0.0, 1.5 ) ) );');
+          nrmCode.push('  mapN = gbBlendRNM( mapN, gbDetVec( gbMes, 0.85 * clamp( gbMesoW, 0.0, 1.5 )' + wndMeso + ' ) );');
         }
         nrmCode.push('  normal = normalize( tbn * mapN );');
         nrmCode.push('#endif');
       }
       src = src.replace('#include <normal_fragment_maps>', nrmCode.join('\n'));
+    }
+
+    // ---- COLD HARBOR: the wet shading normal --------------------------------
+    // Runs on the FINISHED shading normal, whatever produced it - map, detail,
+    // near tier, meso, triplanar or nothing at all - because water does not
+    // care which layer authored the relief it is filling. That also means this
+    // works on a material with no normal map, where the block above does not
+    // run at all.
+    //
+    // The order is the physical order: the film fills the micro-relief, then
+    // standing water replaces the surface outright, then the rain dimples that
+    // water, then rivulets bend it on the way down.
+    if (F.wet) {
+      var wetNrm = ['{'];
+      // viewMatrix is orthonormal, so v * M is M^T * v is the inverse rotation.
+      wetNrm.push('  vec3 gbNwW = normalize( ( vec4( normal, 0.0 ) * viewMatrix ).xyz );');
+      // THE detail that separates wet from glossy. A water film is not a
+      // varnish over the existing bumps: it PONDS in them, and the surface it
+      // presents to the light is smoother in SHAPE as well as in gloss. Skip
+      // this and a wet wall keeps every one of its dry micro-facets and reads
+      // as a shiny dry wall, which is the single most common way this effect
+      // is got wrong.
+      // The pull on the COMPOSED normal, on top of gbWetND having already
+      // drowned the detail tiers. The ceiling was 0.35, which is a 35% pull on
+      // a surface the def declares 0.94 flattened - so nearly two thirds of the
+      // dry micro-facet field survived onto a mirror. It is now gated by the
+      // material's own wetFlat (gbWetM.w), which is what that field is FOR: the
+      // apron and the quay slab go to ~0.9 and level out properly, while rope
+      // (wetFlat 0.15) and chainlink (0.35) barely move, because a soaked rope
+      // is not a mirror and getting that wrong is what makes wet weather read
+      // as a varnish pass.
+      wetNrm.push('  gbNwW = normalize( mix( gbNwW, gbWN, clamp( gbWetT * gbWetM.w * 0.62, 0.0, 1.0 ) ) );');
+      wetNrm.push('  gbNwW = normalize( mix( gbNwW, gbWN, gbPud ) );');
+      if (F.ripple) {
+        // "Puddles that do not ripple in the rain" is an instant fail. Gated
+        // on there being standing water AND rain, so the two-tap fetch is
+        // skipped on every dry or vertical surface in the yard - and skipped
+        // entirely once the storm passes.
+        //
+        // AMPLITUDE AND FADE, both learned the hard way. A rain ring is a
+        // capillary wave a millimetre or so high across a ten-centimetre
+        // radius: a few degrees of slope, not thirty. At the amplitude this
+        // started on, every puddle inside a lamp pool became a field of
+        // orange glitter - each pixel caught the lamp in a different mirror
+        // direction, which is precisely the specular aliasing the specAA term
+        // exists to kill and which no amount of specAA can kill once the
+        // normal is swinging that far.
+        //
+        // And it FADES with distance, like every other high-frequency normal in
+        // this file - but to a THIRD, not to nothing, and not by 24 m. "Puddles
+        // that do not ripple in the rain" is an instant fail, and the old 9-24 m
+        // ramp meant nothing in harbor_overview rippled at all: the establishing
+        // shot of a terminal in a downpour had a dead-still ground plane. The
+        // tile is mipmapped and the amplitude is a third out there, so what the
+        // far field gets is a correct low-amplitude shimmer rather than either
+        // aliasing or glass.
+        wetNrm.push('  float gbRipA = gbPud * gbWetG.y' +
+          ' * mix( 0.34, 1.0, 1.0 - smoothstep( 12.0, 30.0, gbViewDist ) )' +
+          ' * ( 1.0 - smoothstep( 58.0, 95.0, gbViewDist ) );');
+        wetNrm.push('  if ( gbRipA > 0.004 ) {');
+        wetNrm.push('    vec2 gbR = gbRipples( gbWP.xz, gbRipA * 0.115 );');
+        wetNrm.push('    gbNwW = normalize( gbNwW + vec3( gbR.x, 0.0, gbR.y ) );');
+        wetNrm.push('  }');
+      }
+      if (F.streak > 0.01) {
+        wetNrm.push('  if ( abs( gbStrk.y ) > 0.002 ) {');
+        wetNrm.push('    vec3 gbTz = cross( vec3( 0.0, 1.0, 0.0 ), gbWN );');
+        wetNrm.push('    float gbTl = length( gbTz );');
+        wetNrm.push('    vec3 gbTt = gbTl > 1e-4 ? gbTz / gbTl : vec3( 1.0, 0.0, 0.0 );');
+        // 0.26, not 0.16. The rivulet's cross-section is a lens a millimetre or
+        // two proud on a surface that has otherwise been levelled to near-glass
+        // by the film - at 0.16 its normal deviation was smaller than the
+        // levelling it sits on top of, so it modulated nothing and the flank
+        // photographed as flat dark metal. Still an order of magnitude below
+        // the base map's own relief, so it bends the reflection rather than
+        // replacing the surface.
+        wetNrm.push('    gbNwW = normalize( gbNwW + gbTt * gbStrk.y * 0.26 );');
+        wetNrm.push('  }');
+      }
+      wetNrm.push('  normal = normalize( ( viewMatrix * vec4( gbNwW, 0.0 ) ).xyz );');
+      wetNrm.push('}');
+      var wetNrmSrc = wetNrm.join('\n');
+      if (src.indexOf('#include <normal_fragment_maps>') >= 0) {
+        src = src.replace('#include <normal_fragment_maps>',
+          '#include <normal_fragment_maps>\n' + wetNrmSrc);
+      } else {
+        // The block above already consumed the include; append to its output.
+        src = src.replace('#include <clearcoat_normal_fragment_begin>',
+          wetNrmSrc + '\n#include <clearcoat_normal_fragment_begin>');
+      }
     }
 
     // ---- ambient occlusion --------------------------------------------------
@@ -3028,7 +5099,7 @@
     //     something the geometry occludes. This is what stops a strongly
     //     normal-mapped wall from lighting up uniformly under a bright sky,
     //     and it is why it raises local contrast rather than lowering it.
-    if (F.specOcc && (F.detail || F.grounding || F.hasNormalMap)) {
+    if (F.specOcc && (F.detail || F.grounding || F.hasNormalMap || F.wet)) {
       var so = ['{', '  float gbSO = 1.0;'];
       if (F.detail) {
         so.push('  gbSO *= mix( 1.0, 0.58 + 0.48 * gbDet.b, gbDetailFade * gbDetailCav );');
@@ -3044,6 +5115,43 @@
       so.push('    float gbHz = clamp( 1.0 + 1.30 * dot( gbRefl, normalize( vNormal ) ), 0.0, 1.0 );');
       so.push('    gbSO *= gbHz * gbHz;');
       so.push('  #endif');
+      if (F.wet) {
+        // COLD HARBOR. Every term above occludes the environment because the
+        // SUBSTRATE cannot see the sky - dust settled in it, cavities, bumps
+        // facing the wrong way. None of that is true of the water lying on
+        // top: its surface is above all of it and sees the whole hemisphere.
+        // Without this release the puddles inherit the concrete's occlusion
+        // and the "black mirror" the level is built around never appears.
+        so.push('  gbSO = mix( gbSO, 1.0, gbPud );');
+        // And a modest lift across all wet surfaces: a smooth water interface
+        // reflects the hemisphere the rough substrate underneath it was
+        // scattering away. Deliberately small - this is a reflectivity
+        // argument, not an exposure one.
+        so.push('  gbSO *= mix( 1.0, 1.14, gbWetT );');
+        // ---- envMapIntensity, put back ---------------------------------------
+        // r180's WebGLRenderer.setProgram ends with:
+        //
+        //   if ( material.isMeshStandardMaterial && material.envMap === null &&
+        //        scene.environment !== null )
+        //     m_uniforms.envMapIntensity.value = scene.environmentIntensity;
+        //
+        // i.e. as soon as a material takes its IBL from scene.environment - and
+        // every material in this build does, sky.js owns the probe - the value
+        // three actually uses is scene.environmentIntensity (1.0), and the
+        // material's own envMapIntensity is discarded before the draw. Measured:
+        // building the same material at envMapIntensity 0.0 and at 5.0 produced
+        // byte-identical frames. So the whole `env` column of DEFS, and
+        // setEnvIntensity(), have been inert.
+        //
+        // Restored HERE, on the harbor path only, because it is a real change
+        // in output and level 1 is frozen: this block is already gated on
+        // F.wet, so not one market program grows a character. It reaches only
+        // the indirect specular, which is what `env` means for these surfaces -
+        // the reefer's cold stainless (1.20) against soaked rope (0.85) - and
+        // it leaves the indirect diffuse to scene.environmentIntensity, where
+        // sky.js can still own the overall level of ambient fill.
+        so.push('  gbSO *= gbEnvW;');
+      }
       so.push('  reflectedLight.indirectSpecular *= gbSO;');
       so.push('  #if defined( USE_SHEEN )');
       so.push('    sheenSpecularIndirect *= gbSO;');
@@ -3128,15 +5236,29 @@
   // set, so a def that reaches ahead of the texture library (a dedicated
   // laundry-sheet or far-facade recipe that may or may not exist yet) has to
   // ask first. Purely additive: a def with no texAlt behaves exactly as before.
+  //
+  // COLD HARBOR addition: `def.local` means "there is no market recipe that
+  // stands in for this" (the two alpha-cut meshes and the sea). Those return
+  // NULL, which routes _maps to this file's own generator instead of asking
+  // textures.js for a name it may not implement - which would answer with
+  // concrete AND push a missingRecipe entry into GAME.errors, i.e. into every
+  // other agent's capture report, for a degradation we already planned for.
+  //
+  // The early-out on the first line is what keeps every market def byte-for-
+  // byte unchanged: only `laundry` and `far_facade` carry texAlt, and no
+  // market def carries `local`.
   MaterialLibrary.prototype._texName = function (def, name) {
     var want = def.tex || name;
-    if (!def.texAlt) return want;
+    if (!def.texAlt && !def.local) return want;
     try {
       var tx = this.ctx && this.ctx.textures;
       var known = tx && tx.names && tx.names.indexOf ? tx.names.indexOf(want) >= 0 : false;
       if (!known && tx && typeof tx.has === 'function') known = !!tx.has(want);
-      return known ? want : def.texAlt;
-    } catch (e) { return def.texAlt; }
+      // A recipe generated before `names` was published still counts.
+      if (!known && tx && tx.cache && tx.cache[want]) known = true;
+      if (known) return want;
+      return def.local ? null : def.texAlt;
+    } catch (e) { return def.local ? null : def.texAlt; }
   };
 
   MaterialLibrary.prototype._maps = function (name, def, opts) {
@@ -3152,7 +5274,34 @@
     // `cloth_*` and `sandbag` all silently resolved to the generic concrete
     // recipe - which is why the market awnings were canvas-coloured concrete.
     var texName = this._texName(def, name);
-    if (tx && typeof tx.get === 'function' && !this._texBroken) {
+
+    // ---- COLD HARBOR: solve the tiling against the REAL tile size ----------
+    // `def.texels` (harbor triplanar surfaces only) declares a target texel
+    // density per world metre instead of a fixed tiles-per-metre. The texture
+    // library's tile size tracks ITS quality preset - 1024 / 512 / 256 - so a
+    // hard-coded repeat silently halves the apron's grain at 'medium' and
+    // doubles it at 'ultra'. Probing the base set costs one cached call.
+    //
+    // On the triplanar path the texture's own repeat is never sampled through
+    // (gbTriSample computes its uv from world position), so the tiling is
+    // reported out to _features as the triScale and the texture is left at
+    // 1,1 - which also saves the clone _prep would otherwise make.
+    if (def.texels && opts.repeat === undefined && texName && tx &&
+        typeof tx.get === 'function' && !this._texBroken) {
+      try {
+        var probe = tx.get(texName);
+        var size = (probe && probe.size) ||
+          (probe && probe.map && probe.map.image && probe.map.image.width) || 512;
+        var tiles = M.clamp(def.texels / Math.max(size, 1), 0.02, 50);
+        out.repeat = tiles;
+        rep = def.tri ? [1, 1] : [tiles, tiles];
+      } catch (e) { /* keep the def's static repeat */ }
+    }
+
+    if (texName === null) {
+      // A surface with no market stand-in. Synthesise locally and never ask.
+      set = this._fallbackSet(name);
+    } else if (tx && typeof tx.get === 'function' && !this._texBroken) {
       try {
         set = tx.get(texName, { repeat: rep, scale: opts.scale, seed: opts.seed });
       } catch (e) {
@@ -3167,6 +5316,26 @@
     }
     if (!set || !isTexture(set.map)) set = this._fallbackSet(name);
     if (!set) return out;
+
+    // COLD HARBOR handshake. textures.js publishes `alphaTest` on any set whose
+    // ALPHA is the material (the chain-link mesh, the walkway grating) - its
+    // own comment is "these render as solid black squares without it". The
+    // library that authored the coverage knows where its boundary sits far
+    // better than a number typed into DEFS here does, so its hint outranks the
+    // def; an explicit opts.alphaTest still outranks both.
+    if (typeof set.alphaTest === 'number' && isFinite(set.alphaTest)) {
+      out.alphaTest = set.alphaTest;
+    }
+
+    // COLD HARBOR: coverage-preserving alpha mips. Applied to the SOURCE
+    // texture, before _prep possibly clones it, so every consumer of that image
+    // gets the corrected chain (Texture.copy carries `mipmaps` by reference).
+    if (def.alphaCov && set.map) {
+      var at = out.alphaTest !== undefined ? out.alphaTest
+        : (def.alphaTest !== undefined ? def.alphaTest : 0.5);
+      try { this._alphaCoverageMips(set.map, at); }
+      catch (e3) { GAME.logError('materials.alphaCoverage:' + name, e3); }
+    }
 
     out.map = this._prep(set.map, rep, true);
     out.normalMap = this._prep(set.normalMap, rep, false);
@@ -3184,6 +5353,112 @@
       out.aoMap.channel = opts.aoChannel !== undefined ? opts.aoChannel : 0;
     }
     return out;
+  };
+
+  // --------------------------------------------------------------------------
+  // Coverage-preserving alpha mipmaps (Castano, "Computing Alpha Mipmaps").
+  //
+  // An alpha-TESTED surface's mip chain is not a filtering detail, it is the
+  // material. The driver builds each level with a box filter, so as the screen
+  // footprint grows every level's alpha converges on the tile's MEAN - and then
+  // alphaTest cuts that mean. Whichever side of the threshold the mean happens
+  // to fall on, the result is wrong in one of two catastrophic ways: above it,
+  // the mesh fills in and the perimeter fence becomes an opaque mat that blocks
+  // the sightline it exists to let you shoot through AND casts a solid slab of
+  // shadow through the sodium cone (which is exactly the "pools of light" read
+  // the fence is there to protect); below it, the wire dissolves and the fence
+  // disappears at 20 m.
+  //
+  // The fix is to rescale each level's alpha so the FRACTION OF TEXELS THAT
+  // SURVIVE alphaTest matches level 0's. That is a monotone function of the
+  // scale, so a 12-step binary search nails it to better than 0.1% coverage.
+  // The chain is uploaded through texture.mipmaps with generateMipmaps off.
+  //
+  // Deliberately applied to the texture the library was handed rather than to a
+  // clone: the correction belongs to the IMAGE, every material that samples that
+  // image wants it, and Texture.copy() carries `mipmaps` across so the clones
+  // _prep makes inherit it. Degrades to a no-op (and the driver's own chain) for
+  // anything with no CPU-side data.
+  // --------------------------------------------------------------------------
+  MaterialLibrary.prototype._alphaCoverageMips = function (tex, alphaTest) {
+    if (!isTexture(tex)) return false;
+    var img = tex.image;
+    if (!img || !img.data || !img.data.BYTES_PER_ELEMENT) return false;
+    var W = img.width | 0, H = img.height | 0;
+    if (W < 4 || H < 4 || (W & (W - 1)) !== 0 || W !== H) return false;
+    if (img.data.length < W * H * 4) return false;
+    // Once per image, however many materials ask.
+    if (tex.userData && tex.userData.__gbAlphaCov) return true;
+    var thr = M.clamp(alphaTest !== undefined ? alphaTest : 0.5, 0.02, 0.98) * 255;
+
+    function coverage(d, n, scale) {
+      var c = 0;
+      for (var i = 0; i < n; i++) if (d[i * 4 + 3] * scale >= thr) c++;
+      return c / n;
+    }
+
+    var src = img.data;
+    var n0 = W * H;
+    var want = coverage(src, n0, 1.0);
+    // A map whose level 0 is already nearly all-or-nothing has no coverage to
+    // preserve, and rescaling it would only quantise.
+    if (want < 0.002 || want > 0.998) return false;
+
+    var levels = [{ data: src, width: W, height: H }];
+    var cur = src, cw = W, ch = H;
+    while (cw > 1 || ch > 1) {
+      var nw = Math.max(1, cw >> 1), nh = Math.max(1, ch >> 1);
+      var dst = new Uint8Array(nw * nh * 4);
+      var x, y, c2, s, o0, o1, o2, o3, od;
+      for (y = 0; y < nh; y++) {
+        var y0 = Math.min(cw > 1 ? y * 2 : y, ch - 1);
+        var y1 = Math.min(y0 + (ch > 1 ? 1 : 0), ch - 1);
+        for (x = 0; x < nw; x++) {
+          var x0 = Math.min(cw > 1 ? x * 2 : x, cw - 1);
+          var x1 = Math.min(x0 + (cw > 1 ? 1 : 0), cw - 1);
+          o0 = (y0 * cw + x0) * 4; o1 = (y0 * cw + x1) * 4;
+          o2 = (y1 * cw + x0) * 4; o3 = (y1 * cw + x1) * 4;
+          od = (y * nw + x) * 4;
+          // COLOUR is averaged weighted by ALPHA. A plain box average pulls the
+          // wire's colour toward whatever is painted in the transparent gaps,
+          // which on a cut-out map is meaningless data - that is how an
+          // alpha-tested mesh picks up a dark halo as it minifies.
+          var a0 = cur[o0 + 3], a1 = cur[o1 + 3], a2 = cur[o2 + 3], a3 = cur[o3 + 3];
+          var aw = a0 + a1 + a2 + a3;
+          for (c2 = 0; c2 < 3; c2++) {
+            dst[od + c2] = aw > 0
+              ? ((cur[o0 + c2] * a0 + cur[o1 + c2] * a1 +
+                  cur[o2 + c2] * a2 + cur[o3 + c2] * a3) / aw) | 0
+              : ((cur[o0 + c2] + cur[o1 + c2] + cur[o2 + c2] + cur[o3 + c2]) * 0.25) | 0;
+          }
+          dst[od + 3] = ((a0 + a1 + a2 + a3) * 0.25) | 0;
+        }
+      }
+      // Binary search the alpha scale that reproduces level 0's coverage.
+      var lo = 0.0, hi = 12.0, mid = 1.0, nn = nw * nh, k;
+      for (k = 0; k < 12; k++) {
+        mid = (lo + hi) * 0.5;
+        if (coverage(dst, nn, mid) < want) lo = mid; else hi = mid;
+      }
+      s = (lo + hi) * 0.5;
+      if (s !== 1.0) {
+        for (k = 0; k < nn; k++) {
+          var v = dst[k * 4 + 3] * s;
+          dst[k * 4 + 3] = v > 255 ? 255 : (v | 0);
+        }
+      }
+      levels.push({ data: dst, width: nw, height: nh });
+      cur = dst; cw = nw; ch = nh;
+    }
+
+    tex.mipmaps = levels;
+    tex.generateMipmaps = false;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    if (!tex.userData) tex.userData = {};
+    tex.userData.__gbAlphaCov = true;
+    tex.needsUpdate = true;
+    return true;
   };
 
   // Make sure a texture from any source has the wrapping/filtering/colour
@@ -3239,6 +5514,7 @@
   };
 
   MaterialLibrary.prototype._genFallback = function (name) {
+    if (FALLBACK_CUT[name]) return this._genCutSet(name, FALLBACK_CUT[name]);
     var style = FALLBACK_STYLE[name] || FALLBACK_STYLE.concrete;
     var S = 256;
     var base = new THREE.Color().setHex(style[0], THREE.SRGBColorSpace);
@@ -3452,6 +5728,510 @@
     var tex = dataTex(data, S, false);
     tex.userData.__gbOwned = true;
     return tex;
+  };
+
+  // ==========================================================================
+  // COLD HARBOR - locally generated surfaces
+  //
+  // Three things this level needs that no market recipe stands in for. All of
+  // them are generated here rather than requested from textures.js: the alpha
+  // channel IS the material for the two cut meshes, and the two animation
+  // fields are consumed by this file's own shaders in a packing only this file
+  // knows. Everything is deterministic (GAME.Noise + hashes, never
+  // Math.random) so captures stay reproducible.
+  // ==========================================================================
+
+  // ---- alpha-cut meshes (chain-link, walkway grating) ----------------------
+  // A solid fallback would turn the perimeter fence into a WALL and the crane
+  // walkway into a plate, which changes the level's sightlines and its
+  // silhouettes, not just its look. Both are authored as a height field of
+  // round wire/bar sections so the normal map gives each strand a real
+  // cylindrical shade, plus a coverage alpha that alphaTest cuts.
+  MaterialLibrary.prototype._genCutSet = function (name, cut) {
+    // 512, not 256. This is the one alpha-tested surface in the level that has
+    // to survive both an extreme close-up (the player walks into the fence) and
+    // 40 m, and a wire that is now a hundredth of a tile wide needs the texels
+    // to exist before the coverage-preserving chain can preserve anything.
+    var S = 512, n = S * S;
+    var alb = new Uint8Array(n * 4);
+    var rgh = new Uint8Array(n * 4);
+    var hgt = new Float32Array(n);
+    var base = new THREE.Color().setHex(cut.base, THREE.SRGBColorSpace);
+    var tip = new THREE.Color().setHex(cut.tip, THREE.SRGBColorSpace);
+    var bR = Math.round(Math.pow(base.r, 1 / 2.2) * 255);
+    var bG = Math.round(Math.pow(base.g, 1 / 2.2) * 255);
+    var bB = Math.round(Math.pow(base.b, 1 / 2.2) * 255);
+    var tR = Math.round(Math.pow(tip.r, 1 / 2.2) * 255);
+    var tG = Math.round(Math.pow(tip.g, 1 / 2.2) * 255);
+    var tB = Math.round(Math.pow(tip.b, 1 / 2.2) * 255);
+    var ph = hashString(name) % 64;
+
+    // Round-section coverage: 1 at the bar centre, falling to 0 at its edge,
+    // with the height of a half-cylinder so the Sobel gives a real barrel.
+    function bar(d, w) {
+      if (d >= w) return 0;
+      var t = 1 - d / w;
+      return Math.sqrt(Math.max(t * (2 - t), 0));   // half-circle profile
+    }
+
+    for (var y = 0; y < S; y++) {
+      for (var x = 0; x < S; x++) {
+        var i = y * S + x;
+        var u = x / S, v = y / S;
+        var cov = 0, hh = 0, wear = 0;
+
+        if (cut.kind === 'diamond') {
+          // Chain-link is two families of helically-woven wires running at
+          // +-45 degrees. Doing it in rotated coordinates is what gives the
+          // diamond aperture rather than a square grid.
+          var a = (u + v) * cut.pitchU;
+          var b = (u - v) * cut.pitchU;
+          var da = Math.abs(a - Math.round(a)) / cut.pitchU;
+          var db = Math.abs(b - Math.round(b)) / cut.pitchU;
+          var ca = bar(da, cut.wire), cb = bar(db, cut.wire);
+          // Over/under weave: whichever strand is proud here also occludes.
+          var over = (Math.floor(a) + Math.floor(b)) & 1;
+          hh = over ? ca * 0.9 + cb * 0.5 : cb * 0.9 + ca * 0.5;
+          cov = Math.max(ca, cb);
+          wear = Math.max(ca, cb);
+        } else {
+          // Bar grating: deep bearing bars one way, thin cross rods the other.
+          var ub = u * cut.pitchU, vb = v * cut.pitchV;
+          var du = Math.abs(ub - Math.round(ub)) / cut.pitchU;
+          var dv = Math.abs(vb - Math.round(vb)) / cut.pitchV;
+          var cu = bar(du, cut.wire);
+          var cv = bar(dv, cut.wire * 0.62);
+          hh = cu * 1.0 + cv * 0.45;
+          cov = Math.max(cu, cv * 0.92);
+          wear = cu;
+        }
+
+        // Galvanising is never even: pitting, zinc spangle and rust bloom.
+        var mott = NOISE.fbm2(u * 12 + ph, v * 12 + ph, 4, 2, 0.55) * 0.5 + 0.5;
+        var pit = NOISE.worley2(u * 40 + ph, v * 40 + ph, 1.0);
+        var pitH = 1 - M.saturate(pit.f1 * 1.5);
+        hh += (mott - 0.5) * 0.10 - pitH * 0.08;
+        hgt[i] = M.saturate(hh);
+
+        // Alpha is a hard-ish coverage so alphaTest cuts a clean wire edge,
+        // with a couple of texels of feather to survive minification.
+        var a8 = M.saturate((cov - 0.14) * 2.3) * 255;
+        // The crest of a wire is rubbed bright; the shaded flank is dark.
+        var k = M.saturate(wear * 0.85 + (mott - 0.5) * 0.5 - pitH * 0.35);
+        alb[i * 4] = bR + (tR - bR) * k;
+        alb[i * 4 + 1] = bG + (tG - bG) * k;
+        alb[i * 4 + 2] = bB + (tB - bB) * k;
+        alb[i * 4 + 3] = a8 | 0;
+
+        // Zinc is satin on the crest and matte where it has weathered off.
+        var r = M.saturate(0.34 + (1 - k) * 0.42 + pitH * 0.30);
+        rgh[i * 4] = 255;
+        rgh[i * 4 + 1] = Math.round(r * 255);
+        rgh[i * 4 + 2] = Math.round(M.saturate(0.72 + k * 0.28) * 255);  // metalness
+        rgh[i * 4 + 3] = 255;
+      }
+    }
+
+    var nrm = heightToNormal(hgt, S, 3.2);
+    var ao = heightToAO(hgt, S);
+    var hTex = new Uint8Array(n * 4);
+    for (var j = 0; j < n; j++) {
+      var hv = Math.round(M.saturate(hgt[j]) * 255);
+      hTex[j * 4] = hv; hTex[j * 4 + 1] = hv; hTex[j * 4 + 2] = hv; hTex[j * 4 + 3] = 255;
+    }
+    return {
+      map: dataTex(alb, S, true),
+      normalMap: dataTex(nrm, S, false),
+      roughnessMap: dataTex(rgh, S, false),
+      metalnessMap: dataTex(rgh, S, false),
+      aoMap: dataTex(ao, S, false),
+      displacementMap: dataTex(hTex, S, false),
+      size: S, name: name
+    };
+  };
+
+  // ---- rain-ripple field ---------------------------------------------------
+  // A jittered-grid Voronoi of impact points, stored as
+  //   R = normalised distance to this texel's impact centre (0 at it, 1 at the
+  //       cell boundary)
+  //   G = that impact's hashed birth phase
+  //   BA = the unit radial direction, so the shader knows which way to tilt
+  // The travelling ring is then evaluated ANALYTICALLY from (R, G) and the
+  // clock, so one 256px tile animates forever: no flipbook, no per-frame CPU
+  // work, and no upper bound on how long a capture can run.
+  //
+  // Distances are toroidal so the tile wraps seamlessly at any world scale.
+  MaterialLibrary.prototype._ensureRipple = function () {
+    if (this._ownRipple) {
+      if (!this._rippleTex.value) this._rippleTex.value = this._ownRipple;
+      return this._rippleTex.value;
+    }
+    var S = 256, CELLS = 6, n = S * S;
+    var data = new Uint8Array(n * 4);
+    var rng = new GAME.RNG(0x2A11B1E);            // 'RIPPLE'
+    // One jittered impact per cell. Jitter is bounded to 0.34 of a cell so no
+    // two impacts can land on top of each other and leave a bald patch.
+    var px = new Float32Array(CELLS * CELLS), py = new Float32Array(CELLS * CELLS);
+    var ba = new Float32Array(CELLS * CELLS);
+    var ci, cj;
+    for (cj = 0; cj < CELLS; cj++) {
+      for (ci = 0; ci < CELLS; ci++) {
+        var k = cj * CELLS + ci;
+        px[k] = (ci + 0.5 + rng.range(-0.34, 0.34)) / CELLS;
+        py[k] = (cj + 0.5 + rng.range(-0.34, 0.34)) / CELLS;
+        ba[k] = rng.next();
+      }
+    }
+    var half = 0.5;
+    for (var y = 0; y < S; y++) {
+      for (var x = 0; x < S; x++) {
+        var i = y * S + x;
+        var u = (x + 0.5) / S, v = (y + 0.5) / S;
+        var best = 1e9, bdx = 1, bdy = 0, bk = 0;
+        // Only the 3x3 neighbourhood can hold the nearest point.
+        var gi = Math.floor(u * CELLS), gj = Math.floor(v * CELLS);
+        for (var oj = -1; oj <= 1; oj++) {
+          for (var oi = -1; oi <= 1; oi++) {
+            var mi = ((gi + oi) % CELLS + CELLS) % CELLS;
+            var mj = ((gj + oj) % CELLS + CELLS) % CELLS;
+            var kk = mj * CELLS + mi;
+            var dx = px[kk] - u, dy = py[kk] - v;
+            if (dx > half) dx -= 1; else if (dx < -half) dx += 1;
+            if (dy > half) dy -= 1; else if (dy < -half) dy += 1;
+            var d2 = dx * dx + dy * dy;
+            if (d2 < best) { best = d2; bdx = -dx; bdy = -dy; bk = kk; }
+          }
+        }
+        var d = Math.sqrt(best);
+        var il = d > 1e-6 ? 1 / d : 0;
+        // Normalise against the cell radius so R spans 0..1 within a cell.
+        var dn = M.saturate(d * CELLS * 1.05);
+        var o = i * 4;
+        data[o] = Math.round(dn * 255);
+        data[o + 1] = Math.round(M.saturate(ba[bk]) * 255);
+        data[o + 2] = Math.round(M.saturate(bdx * il * 0.5 + 0.5) * 255);
+        data[o + 3] = Math.round(M.saturate(bdy * il * 0.5 + 0.5) * 255);
+      }
+    }
+    // MIPMAPPED, and this is not a detail. The first version of this tile
+    // disabled mips on the reasoning that averaging two neighbouring impacts'
+    // DIRECTIONS gives mush - which is true, and completely beside the point.
+    // The field is read on a surface whose roughness has just collapsed to
+    // 0.05, so any un-mipped minification lands as per-pixel normal noise on a
+    // mirror, and that is not mush, it is a field of glitter shaped exactly
+    // like the puddles. Mush at distance is the correct answer: the ripple
+    // amplitude is ramped to zero by 24 m anyway, and a smeared ring that
+    // fades out beats a sharp ring that scintillates.
+    var t = dataTex(data, S, false);
+    t.userData = { __gbOwned: true, gbRipplePacked: true };
+    this._ownRipple = t;
+    if (!this._rippleTex.value) this._rippleTex.value = t;
+    return this._rippleTex.value;
+  };
+
+  // ---- wave gradient field -------------------------------------------------
+  // RG = surface SLOPE (dh/dx, dh/dy), B = height, A = a fine chop mask.
+  //
+  // Slopes rather than normals, because the sea shader sums three scrolled
+  // taps of this one tile and summing normals loses amplitude on every layer
+  // after the first - the slope of a sum IS the sum of the slopes, which is
+  // both correct and one normalise cheaper.
+  MaterialLibrary.prototype._ensureWave = function () {
+    if (this._waveTex.value) return this._waveTex.value;
+    var S = 256, n = S * S;
+    var h = new Float32Array(n);
+    var fine = new Float32Array(n);
+    var x, y, i, u, v;
+    for (y = 0; y < S; y++) {
+      for (x = 0; x < S; x++) {
+        i = y * S + x;
+        u = x / S; v = y / S;
+        // Wind waves are ANISOTROPIC - long crests across the wind, short
+        // period along it - so the lattice is stretched 1:3. An isotropic
+        // field reads as a lake, not as a harbour in a storm.
+        var swell = NOISE.fbm2(u * 3, v * 9, 4, 2.1, 0.55);
+        var chop = NOISE.fbm2(u * 11 + 7, v * 26 + 3, 3, 2.0, 0.5);
+        // Ridged noise makes the crests sharper than the troughs, which is
+        // what a wind sea actually looks like and what catches a lamp.
+        var crest = NOISE.ridged2(u * 6 + 13, v * 17 + 5, 2);
+        h[i] = swell * 0.52 + chop * 0.26 + (crest - 0.5) * 0.30;
+        fine[i] = M.saturate(0.5 + chop * 0.6);
+      }
+    }
+    var data = new Uint8Array(n * 4);
+    // Central differences on the wrapped field give the slope directly.
+    for (y = 0; y < S; y++) {
+      for (x = 0; x < S; x++) {
+        i = y * S + x;
+        var xm = (x - 1 + S) % S, xp = (x + 1) % S;
+        var ym = (y - 1 + S) % S, yp = (y + 1) % S;
+        var gx = (h[y * S + xp] - h[y * S + xm]) * 0.5 * S / 24;
+        var gy = (h[yp * S + x] - h[ym * S + x]) * 0.5 * S / 24;
+        var o = i * 4;
+        data[o] = M.clamp((M.clamp(gx, -1, 1) * 0.5 + 0.5) * 255, 0, 255) | 0;
+        data[o + 1] = M.clamp((M.clamp(gy, -1, 1) * 0.5 + 0.5) * 255, 0, 255) | 0;
+        data[o + 2] = M.clamp((M.saturate(h[i] * 0.5 + 0.5)) * 255, 0, 255) | 0;
+        data[o + 3] = M.clamp(fine[i] * 255, 0, 255) | 0;
+      }
+    }
+    var t = dataTex(data, S, false);
+    t.userData = { __gbOwned: true, gbWavePacked: true };
+    this._waveTex.value = t;
+    return t;
+  };
+
+  // ==========================================================================
+  // COLD HARBOR - the sea
+  // ==========================================================================
+
+  /**
+   * water(opts) -> THREE.Material for the harbour surface.
+   *
+   * Also what get('sea_water') returns, so the level can ask for it by the
+   * same contracted name as the other sixteen surfaces.
+   *
+   * Four things have to be true at once or black water at night reads as a
+   * black hole in the geometry:
+   *
+   *   WAVES        three scrolled taps of one gradient tile at ~9 m, ~2.2 m
+   *                and ~0.6 m, running along the wind at different speeds
+   *                (short waves are slower than long ones, so a single
+   *                scrolled layer reads as a moving texture rather than as
+   *                water). Summed as SLOPES, resolved to a normal once.
+   *   ABSORPTION   Beer-Lambert down the actual view path through the column,
+   *                not a flat depth tint: the path length is the depth over
+   *                the view's zenith cosine, so looking straight down shows
+   *                the harbour bed and looking along the water shows only
+   *                what the surface reflects. Red is absorbed ~3x faster than
+   *                blue-green, which is what puts the cyan-green of the
+   *                palette into the water for free.
+   *   FRESNEL      F0 = 0.02, F90 = 1.0. At 02:00 essentially the entire read
+   *                is the grazing reflection of the mast lamps and the
+   *                freighter's deck lights.
+   *   FOAM         along the quay face and the hull waterline (see
+   *                setWaterFoamEdges), plus drifting scum and wind-driven
+   *                crest foam. Water butted cleanly against a wharf is the
+   *                clearest possible tell that it is a plane.
+   *
+   * opts: depth, absorb [r,g,b] per metre, bed, tint, foam, foamWidth,
+   *       waveAmp, roughness, envMapIntensity, side, edges.
+   */
+  MaterialLibrary.prototype.water = function (opts) {
+    opts = opts || {};
+    var key = 'water|' + hashOpts('', opts);
+    if (this.cache[key]) return this.cache[key];
+
+    var def = DEFS.sea_water;
+    var maps;
+    try { maps = this._maps('sea_water', def, {}); }
+    catch (e) { maps = { map: null, normalMap: null, roughnessMap: null }; }
+
+    var mat = new THREE.MeshStandardMaterial({
+      // Near-black. Every bit of the visible value comes from the reflection
+      // and from the in-scattered tint solved in the shader.
+      color: srgb(opts.color !== undefined ? opts.color : 0x0a1015),
+      // A flat sea is a mirror; the wave normals do the breaking up, so the
+      // base roughness stays very low and the shader raises it with distance
+      // (to stop the far water aliasing) and with foam.
+      roughness: opts.roughness !== undefined ? opts.roughness : 0.035,
+      metalness: 0.0,
+      envMapIntensity: opts.envMapIntensity !== undefined ? opts.envMapIntensity : 1.5,
+      side: opts.side !== undefined ? opts.side : THREE.FrontSide,
+      // The sea is opaque in this build: there is nothing under it to see at
+      // 02:00, and an opaque plane needs no sorting and no second pass.
+      transparent: false,
+      depthWrite: true
+    });
+    // A very low-weight albedo mottle off whatever sea_water map exists, so
+    // the surface is not perfectly uniform where the reflection is weak. The
+    // wave normals, not this, carry the movement.
+    if (maps.map) { mat.map = maps.map; }
+
+    if (opts.edges) this.setWaterFoamEdges(opts.edges);
+
+    var F = this._features('sea_water', def, {
+      water: true, wet: false, detail: false, macro: false,
+      triplanar: false, parallax: false, meso: false, polish: false,
+      grounding: false, specAA: false
+    }, maps, mat);
+    F.water = true;
+    F.wet = false;
+    F.world = true;
+    F.triplanar = false;
+    F.parallax = false;
+    F.detail = false;
+    F.detail2 = false;
+    F.meso = false;
+    F.macro = false;
+    F.grounding = false;
+    F.polish = false;
+    F.stochastic = false;
+    F.specAA = 0;
+    F.specOcc = false;
+    F.hasNormalMap = false;
+    F.hasRoughMap = false;
+    F.hasAoMap = false;
+    F.hasMetalMap = false;
+    F.hasMap = !!maps.map;
+    F.waterDepth = opts.depth !== undefined ? opts.depth : 7.0;
+    F.waterAbsorb = opts.absorb || [0.58, 0.19, 0.13];
+    F.waterBed = opts.bed !== undefined ? opts.bed : 0x0b1214;
+    F.waterTint = opts.tint !== undefined ? opts.tint : 0x14313a;
+    F.foamColor = opts.foam !== undefined ? opts.foam : 0x9fb0b4;
+    F.foamWidth = opts.foamWidth !== undefined ? opts.foamWidth : 1.5;
+    F.waveAmp = opts.waveAmp !== undefined ? opts.waveAmp : 1.0;
+    this._patch(mat, F);
+
+    mat.name = key;
+    try {
+      mat.userData.gbWetSurface = true;
+      mat.userData.gbWater = true;
+    } catch (e2) { /* frozen userData */ }
+    this.cache[key] = mat;
+    return mat;
+  };
+
+  // --------------------------------------------------------------------------
+  // The sea's fragment shader. Kept separate from _fragmentShader rather than
+  // bolted into it: the sea shares none of that function's twenty features and
+  // folding it in would have added a `water` branch to every one of them.
+  // --------------------------------------------------------------------------
+  MaterialLibrary.prototype._waterShader = function (src, F) {
+    var pars = [];
+    pars.push('uniform float gbTime;');
+    pars.push('uniform vec2 gbFadeRange;');
+    pars.push('uniform vec2 gbWetG;');
+    pars.push('uniform vec3 gbWindW;');
+    pars.push('uniform sampler2D gbWaveMap;');
+    pars.push('uniform sampler2D gbRippleMap;');
+    pars.push('uniform vec4 gbRipCfg;');
+    pars.push('uniform vec4 gbFoamSeg[ ' + FOAM_MAX + ' ];');
+    pars.push('uniform int gbFoamCount;');
+    pars.push('uniform float gbWaterDepth;');
+    pars.push('uniform vec3 gbWaterBed;');
+    pars.push('uniform vec3 gbWaterTint;');
+    pars.push('uniform vec3 gbWaterAbsorb;');
+    pars.push('uniform vec3 gbFoamColor;');
+    pars.push('uniform float gbFoamWidth;');
+    pars.push('uniform float gbWaveAmp;');
+    pars.push('#define GB_FOAM_MAX ' + FOAM_MAX);
+    pars.push('float gbFoam = 0.0;');
+    pars.push('float gbWDist = 0.0;');
+    pars.push(G_COMMON);
+    pars.push(G_WAVE);
+    pars.push(G_RIPPLE);
+    pars.push(G_FOAMEDGE);
+
+    // ---- head ---------------------------------------------------------------
+    var head = [];
+    head.push('gbWDist = length( vViewPosition );');
+    head.push('vec3 gbWP = vGbWorld;');
+    head.push('vec2 gbWXZ = gbWP.xz;');
+    head.push('vec2 gbFlowD = normalize( gbWindW.xy + vec2( 1e-4, 1e-4 ) );');
+    head.push('float gbWindK = clamp( gbWindW.z / 14.0, 0.20, 1.6 );');
+    // Distance to the nearest quay/hull edge, and the foam mask built on it.
+    head.push('float gbEd = gbEdgeDist( gbWXZ );');
+    head.push('float gbFoamE = smoothstep( gbFoamWidth, 0.0, gbEd );');
+    // Broken up so the band is never a clean offset curve, and drifting so it
+    // is never static.
+    head.push('gbFoamE *= smoothstep( 0.22, 0.78, gbValue3( vec3( gbWXZ * 1.6, gbTime * 0.22 ) ) + 0.32 );');
+    // Scum and spilled diesel drifting downwind. This is a working terminal.
+    head.push('float gbScum = smoothstep( 0.60, 0.90, gbValue3( vec3( gbWXZ * 0.22 - gbFlowD * ( gbTime * 0.018 ), 0.0 ) ) );');
+    head.push('gbFoam = clamp( gbFoamE + gbScum * 0.30, 0.0, 1.0 );');
+    src = src.replace('#include <clipping_planes_fragment>',
+      '#include <clipping_planes_fragment>\n' + head.join('\n'));
+
+    // ---- albedo: depth absorption + foam ------------------------------------
+    var mapCode = [];
+    mapCode.push('{');
+    // BEER-LAMBERT DOWN THE VIEW PATH. Not a depth tint: the light that comes
+    // back out has crossed the column twice at whatever angle the eye is
+    // looking, so the path is the depth over the zenith cosine. Straight down
+    // shows the bed; along the surface shows only what is reflected.
+    mapCode.push('  vec3 gbVw = normalize( cameraPosition - gbWP );');
+    mapCode.push('  float gbCosT = clamp( abs( gbVw.y ), 0.07, 1.0 );');
+    // Shoaling: the water is shallower where it meets the wharf, which is
+    // exactly where the eye can tell the difference.
+    mapCode.push('  float gbShoal = mix( 0.30, 1.0, smoothstep( 0.0, gbFoamWidth * 5.0, gbEd ) );');
+    mapCode.push('  float gbPath = ( gbWaterDepth * gbShoal ) / gbCosT;');
+    mapCode.push('  vec3 gbAbs = exp( - gbWaterAbsorb * gbPath );');
+    // Bed seen through the column, plus what the column itself scatters back.
+    mapCode.push('  vec3 gbBody = gbWaterBed * gbAbs + gbWaterTint * ( 1.0 - gbAbs );');
+    if (F.hasMap) {
+      // A whisper of the library's own sea map so the body is not perfectly
+      // uniform where the reflection falls away.
+      mapCode.push('  vec4 gbSm = texture2D( map, gbWXZ * 0.06 );');
+      mapCode.push('  gbBody *= 0.80 + 0.40 * dot( gbSm.rgb, vec3( 0.3333 ) );');
+    }
+    mapCode.push('  diffuseColor.rgb = gbBody;');
+    mapCode.push('  diffuseColor.rgb = mix( diffuseColor.rgb, gbFoamColor * 0.55, gbFoam );');
+    mapCode.push('}');
+    src = src.replace('#include <map_fragment>', mapCode.join('\n'));
+
+    // ---- roughness ----------------------------------------------------------
+    var roughCode = ['float roughnessFactor = roughness;'];
+    // Foam is a mass of bubbles: the one genuinely rough thing on the surface.
+    roughCode.push('roughnessFactor = mix( roughnessFactor, 0.78, gbFoam );');
+    // FAR-FIELD ROUGHENING, on top of the variance term above. The two attack
+    // the same problem from different ends: the variance term is exact but can
+    // only see what the screen-space derivative reports, which under heavy
+    // minification under-reports badly. A distance floor covers the rest. It
+    // starts at 12 m rather than 35 - measured on a low camera at the quay
+    // edge, the crawling starts well inside 20 m because the view is grazing
+    // and one pixel covers metres of water long before it covers metres of
+    // ground.
+    roughCode.push('roughnessFactor = max( roughnessFactor, smoothstep( 12.0, 90.0, gbWDist ) * 0.30 );');
+    roughCode.push('roughnessFactor = clamp( roughnessFactor, 0.020, 1.0 );');
+    src = src.replace('#include <roughnessmap_fragment>', roughCode.join('\n'));
+
+    // ---- wave normals -------------------------------------------------------
+    var nrm = [];
+    nrm.push('{');
+    // Three scales, three speeds, three directions. Long waves run fastest
+    // along the wind, the chop crosses it, the ripple detail crawls - one
+    // scrolled layer at one speed reads as a sliding texture, not as water.
+    nrm.push('  vec2 gbSlope = vec2( 0.0 );');
+    nrm.push('  gbSlope += gbWaveG( gbWXZ, gbFlowD * ( gbTime * 0.016 ), 0.11, 1.00 * gbWaveAmp * gbWindK );');
+    nrm.push('  gbSlope += gbWaveG( gbWXZ, vec2( - gbFlowD.y, gbFlowD.x ) * ( gbTime * 0.030 ), 0.46, 0.62 * gbWaveAmp * gbWindK );');
+    nrm.push('  gbSlope += gbWaveG( gbWXZ, gbFlowD * ( gbTime * 0.075 ), 1.55, 0.34 * gbWaveAmp * gbWindK );');
+    // Rain dimpling the sea. The same field the puddles use, so the two agree.
+    nrm.push('  vec2 gbRr = gbRipples( gbWXZ, gbWetG.y * 0.45 );');
+    nrm.push('  gbSlope += gbRr * 2.4;');
+    // Foam is a bubble raft: it flattens the wave shape under it.
+    nrm.push('  gbSlope *= mix( 1.0, 0.40, gbFoam );');
+    nrm.push('  vec3 gbNwW = normalize( vec3( - gbSlope.x, 1.0, - gbSlope.y ) );');
+    nrm.push('  normal = normalize( ( viewMatrix * vec4( gbNwW, 0.0 ) ).xyz );');
+    nrm.push('}');
+    src = src.replace('#include <normal_fragment_maps>',
+      '#include <normal_fragment_maps>\n' + nrm.join('\n'));
+
+    // ---- Fresnel ------------------------------------------------------------
+    var brdf = [];
+    // GEOMETRIC SPECULAR ANTIALIASING, and the sea needs it more than anything
+    // else in the build. It is the smoothest surface in the level and its
+    // normal is the sum of three scrolled gradient taps plus the rain ripples,
+    // so past a few metres the slope varies faster than a pixel and every lamp
+    // lays down a path of crawling white specks instead of a glitter path.
+    // Folding the measured normal variance into roughness converts those
+    // specks into the correct broad shimmer - which is what a glitter path
+    // actually is.
+    brdf.push('{');
+    brdf.push('  vec3 gbWdx = dFdx( normal ), gbWdy = dFdy( normal );');
+    brdf.push('  float gbWv = max( dot( gbWdx, gbWdx ), dot( gbWdy, gbWdy ) );');
+    brdf.push('  material.roughness = min( 1.0, sqrt( material.roughness * material.roughness +');
+    brdf.push('    min( gbWv * 1.6, 0.34 ) ) );');
+    brdf.push('}');
+    // Water: F0 = 0.02, F90 = 1. The entire night read of the harbour is the
+    // grazing term - the deck lights and the mast lamps smeared down the
+    // surface - so F90 has to reach unity or the water goes flat black.
+    brdf.push('material.specularColor = vec3( 0.020 );');
+    brdf.push('material.specularF90 = 1.0;');
+    // Foam is a dielectric solid, not a smooth interface.
+    brdf.push('material.specularColor = mix( material.specularColor, vec3( 0.045 ), gbFoam );');
+    src = src.replace('#include <lights_physical_fragment>',
+      '#include <lights_physical_fragment>\n' + brdf.join('\n'));
+
+    return pars.join('\n') + '\n' + src;
   };
 
   // ==========================================================================
@@ -3964,7 +6744,9 @@
     F.parallax = false;
     F.translucent = true;
     F.wind = opts.wind === false ? 0 : (opts.wind !== undefined ? opts.wind : 0.05);
-    F.world = F.macro;
+    // F.wet needs the world varyings; without this a harbor leaf card would
+    // lose the soak layer entirely (see the guard in _patch).
+    F.world = F.macro || F.wet;
     if (opts.vertexColors) mat.vertexColors = true;
     this._patch(mat, F);
 
@@ -3987,6 +6769,12 @@
       if (!m || m.envMapIntensity === undefined) return;
       if (m.userData.gbBaseEnv === undefined) m.userData.gbBaseEnv = m.envMapIntensity;
       m.envMapIntensity = m.userData.gbBaseEnv * scale;
+      // ...and the shadow copy the harbor path actually reads, because r180
+      // overwrites the real uniform with scene.environmentIntensity on every
+      // draw of a material lit by scene.environment. Market materials have no
+      // gbEnvWU, so this line is a no-op there and level 1 is untouched.
+      var u = m.userData.gbEnvWU;
+      if (u) u.value = m.userData.gbBaseEnv * scale;
     }
     for (var k in self.cache) apply(self.cache[k]);
     for (var d in self.decals) apply(self.decals[d]);
@@ -4085,6 +6873,80 @@
     }
     return h >>> 0;
   }
+
+  // ==========================================================================
+  // THE WET CONTRACT, published as source.
+  //
+  // The exact GLSL this file's own materials run. Paste it into any other pass
+  // that needs to know where the water is and you get byte-identical evaluation
+  // in both, which is the only way two passes can agree about a noise field.
+  // Pair it with MaterialLibrary.prototype.wetContract() for the live values.
+  //
+  //   noise   gbHash13 / gbValue3        (no varyings, safe anywhere)
+  //   puddle  gbPuddleField( wp, cav )   requires `noise`
+  //   solve   gbWetSolve(...)            requires `noise` + `puddle`
+  //   ripple  gbRipples( xz, amt )       requires `noise`, and the uniforms
+  //                                      gbRippleMap / gbRipCfg / gbTime
+  //   height  gbWetHeight( wp, y, band ) no dependencies at all
+  //
+  // `uniforms` is the declaration block those two need, so a consumer does not
+  // have to guess the names or the packing.
+  //
+  // -------------------------------------------------------------------------
+  // `height` IS NEW AND IT FIXES A MEASURED, VISIBLE BUG.
+  //
+  // gbWetSolve answers "is there standing water at this world position, on a
+  // surface with THIS material's susceptibility". A consumer with a G-buffer
+  // knows the material. A consumer reconstructing the surface from DEPTH does
+  // not, so it has to pick one cfg - in practice the apron's, whose puddle
+  // susceptibility is 1.0 - and apply it to every pixel whose normal points up.
+  // The apron is a ground plane; most up-facing pixels in this level are not.
+  //
+  // Measured consequence, enemy_closeup at 1280x720: the tarpaulin over the
+  // near pallet stack (a domed sheet whose crown is 1.2 m above the slab) is
+  // classified as standing water, gets an environment reflection at
+  // standing-water roughness, and photographs as a large pale flat-shaded mound
+  // faceted by the depth-derivative normal - which reads as an asset that lost
+  // its material. Force the pass's reflection off and the same pixels are a
+  // correct, dark, smooth tarpaulin. It is not free either: the mound is bright
+  // enough to pull the auto-exposure down about a stop and a half, which is
+  // what crushes the militiaman in the same frame to a silhouette.
+  //
+  // One line at the call site removes it:
+  //
+  //     float g = wetContract().ground;                       // {y, band}
+  //     pud  *= gbWetHeight( Wp, uWetGround.x, uWetGround.y );
+  //     wetT *= gbWetHeight( Wp, uWetGround.x, uWetGround.y );
+  //
+  // It takes its parameters as ARGUMENTS rather than reading a uniform, so a
+  // consumer can paste it without declaring anything and can hard-code the two
+  // numbers if it prefers. See wetContract().ground for the live values.
+  // -------------------------------------------------------------------------
+  var G_WETHEIGHT = [
+    '// 1 on the yard slab, 0 above it. `band` is the height a surface may stand',
+    '// above the slab and still be part of the ground (a kerb, a drain cover, a',
+    '// pallet lying flat); the fade above it is deliberately soft and finishes',
+    '// about a metre later, because a hard line would print as a horizontal edge',
+    '// across anything tall. Below the slab is still ground - the quay steps and',
+    '// the drainage channels are down there and they hold the most water in the',
+    '// level.',
+    'float gbWetHeight( vec3 wp, float groundY, float band ) {',
+    '  return 1.0 - smoothstep( groundY + band, groundY + band + 1.05, wp.y );',
+    '}'
+  ].join('\n');
+
+  MaterialLibrary.WET_GLSL = {
+    noise: G_NOISE,
+    puddle: G_PUDDLE,
+    solve: G_WETSOLVE,
+    ripple: G_RIPPLE,
+    height: G_WETHEIGHT,
+    uniforms: [
+      'uniform sampler2D gbRippleMap;',
+      'uniform vec4 gbRipCfg;',      // x = tiles/m, y = strength, z = source mode
+      'uniform float gbTime;'
+    ].join('\n')
+  };
 
   GAME.MaterialLibrary = MaterialLibrary;
 

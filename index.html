@@ -97,15 +97,19 @@
 <script src="src/render/lighting.js"></script>
 <script src="src/render/postfx.js"></script>
 
-<!-- world -->
+<!-- world: one Level+Props pair per level, selected at boot via ?level=<id>.
+     See the LEVELS registry in src/game/main.js. -->
 <script src="src/world/level.js"></script>
 <script src="src/world/props.js"></script>
+<script src="src/world/level_harbor.js"></script>
+<script src="src/world/props_harbor.js"></script>
 
 <!-- gameplay -->
 <script src="src/player/controller.js"></script>
 <script src="src/weapons/weapons.js"></script>
 <script src="src/weapons/ballistics.js"></script>
 <script src="src/fx/vfx.js"></script>
+<script src="src/fx/weather.js"></script>
 <script src="src/audio/audio.js"></script>
 <script src="src/ai/ai.js"></script>
 <script src="src/ui/hud.js"></script>

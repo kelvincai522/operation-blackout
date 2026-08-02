@@ -73,6 +73,38 @@ to build; `main.js` records the failure and carries on rather than dying:
 if (ctx.vfx && ctx.vfx.impact) ctx.vfx.impact(point, normal, 'concrete');
 ```
 
+### Adding a level
+
+A level is a `Level`+`Props` pair registered in the `LEVELS` table in
+`src/game/main.js` and selected with `?level=<id>`. No other system knows which
+level is loaded — they branch on `ctx.levelId` / `ctx.levelDef`, never on a
+class name. An unknown or failed level logs and falls back to `market`.
+
+1. Write `src/world/level_<id>.js` exporting `GAME.Level<Id>`, satisfying the
+   same Level contract in `ARCHITECTURE.md` §5 (`root`, `colliders`,
+   `spawnPoints`, `navGrid`, `cameraPoses`, `raycast`, `sampleGround`).
+2. Write `src/world/props_<id>.js` exporting `GAME.Props<Id>`.
+3. Add both `<script>` tags to `index.html`, an entry to `LEVELS` in `main.js`,
+   scenarios in `src/game/scenarios.js`, and a scenario list in
+   `SCENARIOS_BY_LEVEL` in `tools/shoot.py`.
+4. Register both modules in `MODULES` in `tools/check.py`.
+5. Write an art-direction document for it. `ART_DIRECTION_HARBOR.md` is the
+   model: it opens by tabulating how the level differs from the existing one on
+   every axis, which is what stops a second level becoming a re-dress of the
+   first.
+
+**Extending a shared system for a new level:** gate every new behaviour on
+`ctx.levelId === '<id>'`, on the presence of a system like `ctx.weather`, or on
+an explicit preset. Never change the default path. Existing levels are frozen,
+and the regression gate is a byte-comparison — capture `street.png` before and
+after and confirm the hashes match.
+
+**Publish anchors, don't derive placement from camera poses.** During the harbor
+build, the level moved four camera poses mid-flight and two other modules had
+placed fixtures and props relative to them, so lamps and props ended up in the
+wrong corridor. A level should publish named anchors (quay edge, warehouse,
+container rows) that other modules resolve at build time.
+
 ### Performance budget
 
 60fps at 1080p, under ~500 draw calls and ~4.5M triangles for the whole frame.
@@ -118,11 +150,20 @@ player dying within 10 seconds of spawn.
 | `dynamic_range` | Below ~0.45 reads as flat and washed |
 | `flat_area_pct` | Untextured surface area — missing normal/roughness detail |
 | `grade_split` | Positive = warm highlights over cool shadows (the target look). Near zero or negative means the grade is not landing. |
+| `coverage.dead_cell_pct` | % of an 8×8 grid whose *95th percentile* is below a visibility floor — i.e. cells containing nothing a player could see. Target under 12. |
+| `coverage.vertical_imbalance` | top-half mean ÷ bottom-half mean. Above ~2.5 on a ground-level camera means the floor is unlit or missing. Target under 2.5. |
 | `repetition` | **Advisory only.** It collapses each row to a mean, so on a 3D perspective scene it measures profile smoothness, not texture tiling. It reported the same "peak" for two frame halves showing different walls. Do not tune against it. |
 
 The `grade_split` metric earned its keep: it caught the colour grade *inverting*
 at night (−0.0198 against +0.11 everywhere else) in a frame that looked
-acceptable as a thumbnail.
+acceptable as a thumbnail. The `coverage` metrics were added after mean
+luminance reported a *black* harbor frame as healthy — a bright fog ceiling
+averaged against a dead floor produces a perfectly normal-looking number.
+
+**But metrics are necessary, not sufficient.** A later harbor round passed every
+coverage check at 0.0% dead cells while a large untextured mound occupied half
+the frame: `coverage` detects missing *light*, not missing *material*. Always
+read the PNG.
 
 ### Capture scenarios
 

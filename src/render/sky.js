@@ -15,6 +15,11 @@
 //     material in the game gets exponential *height* fog with sun-direction
 //     dependent inscattering and aerial perspective. See "FOG" below.
 //   * sky.dustParticles - a cheap additive mote field that thickens the air.
+//   * sky.setWeather(preset) - 'clear' (the default and every prior behaviour)
+//                     or 'storm' / 'overcast' / 'drizzle', which paint a
+//                     procedural nimbostratus deck over the atmosphere for
+//                     LEVEL 2. See the STORM WEATHER section below. Level 1
+//                     never calls it and never reaches a line of it.
 //
 // THE ATMOSPHERE MODEL
 //   Single-scattering Rayleigh + Mie + ozone through a spherical, exponentially
@@ -346,6 +351,512 @@
   var CLOUD_AMOUNT = 0.45;
   var CLOUD_BEER = 3.4;
 
+  // ==========================================================================
+  // STORM WEATHER  -  LEVEL 2, "COLD HARBOR"
+  //
+  // EVERYTHING IN THIS SECTION IS INERT UNTIL setWeather('storm') RUNS.
+  // The single gate is Sky._stormF, which is 0 for the market level and for
+  // every existing caller. Every added branch - in the dome shader, in the haze
+  // schedule, in the derived ambient, in the fog parameters - tests it first
+  // and falls through to the untouched clear-sky path when it is zero, so
+  // level 1 renders the frame it rendered before, bit for bit.
+  //
+  // WHAT A STORM NIGHT SKY ACTUALLY IS, and why the clear-sky machinery cannot
+  // produce one by being retuned:
+  //
+  //   The atmosphere model above integrates a CLEAR column. A 2 km-thick
+  //   nimbostratus deck is not a turbidity setting - it is an opaque scattering
+  //   slab that (a) removes the moon, the stars and the airglow entirely, (b)
+  //   substitutes its own underside as the visible sky, and (c) is lit almost
+  //   exclusively FROM BELOW, by the terminal's own sodium lamps. There is no
+  //   value of MIE_AOD that does any of that; a thicker aerosol just makes a
+  //   brighter grey dome, which is the flat grey card the art direction calls
+  //   an instant fail.
+  //
+  //   So the deck is a separate layer painted over the finished atmosphere, and
+  //   the three things that make it read as weather rather than as a texture
+  //   are all structural:
+  //
+  //   1. TWO DECKS AT DIFFERENT HEIGHTS. The projection d.xz / (elev + h) is a
+  //      plane at height ~1/h; using two different h values and drifting them
+  //      at different rates gives real parallax between the near ragged scud
+  //      and the far ceiling. A single layer, however detailed, reads as a
+  //      painted dome the instant the camera turns.
+  //   2. LIT FROM BELOW, MODULATED BY THICKNESS. A sodium underglow that is a
+  //      flat warm wash is worthless; it has to land on the sagging cells of
+  //      the cloud base and leave the gaps between them dark. That is the
+  //      hallmark of a lit industrial site under low cloud and it is the whole
+  //      reason this module knows about the terminal's lamps at all.
+  //   3. THIN PATCHES. An overcast that is uniformly opaque has no depth. The
+  //      deck's brightness therefore runs on 1/thickness, not on coverage - you
+  //      never see through it, but where it is thin, light from above leaks and
+  //      the sky is two or three stops brighter than the bruise beside it.
+  //
+  // The numbers are ABSOLUTE linear HDR radiances, not multiples of keyRef.
+  // That is deliberate and it is the one place this file departs from its own
+  // convention: keyRef is the radiance of a mid-grey card in the KEY, and under
+  // a storm deck at 02:00 there is no key - the moon is behind two kilometres
+  // of water. Referencing the deck to a key that is itself a floor value would
+  // make the sky's level an accident of the floor. The reference that matters
+  // here is the terminal's own lit ground, which ART_DIRECTION_HARBOR puts at
+  // roughly 0.076 radiance under a sodium head; the deck is authored an order
+  // of magnitude under that, and the underglow about a third of the way up to
+  // it, so the lamps stay the brightest thing in the frame.
+  // ==========================================================================
+
+  // Deck radiance at the zenith and at the horizon, in its MEAN thickness
+  // state. Cold blue-grey: a night overcast has no warm content of its own,
+  // every warm thing in this sky comes from the ground.
+  // These are MEASURED against the real stack, twice, and the second
+  // measurement changed the shape of the curve as well as its level.
+  //
+  // Pass 1 authored a steep dome - zenith 0.0030, horizon 0.0092, plus an
+  // underglow that tripled the horizon again - on the reasoning that a horizon
+  // ray crosses far more deck. That is true, and it is still in the model, but
+  // it produced a NINEFOLD zenith-to-horizon ramp, and the harbor's postfx runs
+  // a deliberately narrow exposure window (exposureMin 1.10 / Max 5.20 against
+  // the market's 0.16 / 18.0, todBiasFloor 0.62) because this level is pools of
+  // light in a black field. Under that window the two ends of the ramp landed
+  // on opposite failures at the same time: the crane framing measured its sky
+  // at 0.023 / 0.022 / 0.022 - crushed, the stacks silhouetted against nothing,
+  // no lid at all - while postfx measured the horizon band on the quay framing
+  // at RGB(148,79,35) and had to pull its whole reference gain 30% to stop the
+  // sky being the brightest thing in a 02:00 frame.
+  //
+  // Both readings are right, and a level shift cannot fix them because they
+  // point in opposite directions. The ramp itself was wrong. A night overcast
+  // lit from below is FLAT in luminance - the underside of a cloud deck is
+  // nearly a Lambertian sheet a few hundred metres up, and what varies across
+  // it is hue and structure, not brightness. So: the zenith comes up 4x, the
+  // horizon only 2x, the underglow only 1.6x, and the ramp collapses from 9x to
+  // about 2.6x. The interest now comes from where it should - thick against
+  // thin, warm against cold - and the whole dome sits between 3x and 7x under
+  // the wet apron beneath a sodium mast (~0.076), which is where a real one is.
+  //
+  // PASS 3, and this one is the reason the level did not read as night at all.
+  // Measured on the real quay framing: the deck filled the upper half of the
+  // frame at a printed RGB(148,79,35) and a row-mean luminance of 0.339 against
+  // a ground at 0.030 - an ELEVEN-fold sky-over-ground ratio, top-half mean
+  // 0.2344 against bottom-half 0.0620, coverage.vertical_imbalance 3.78. The
+  // brightest object in a two-in-the-morning frame was the sky, which is the
+  // "flat, uniformly-lit scene" instant-fail wearing a cloud texture: at 02:00
+  // the luminance hierarchy MUST run lamp core > lamp pool > wet reflection >
+  // cloud deck, and it ran cloud deck first.
+  //
+  // Two separate faults, and only one of them was a level:
+  //
+  //   1. LEVEL. The deck integrated to ~0.013 mean radiance across the visible
+  //      dome, i.e. a sixth of the wet apron under a mast (0.076) - which is
+  //      the right ORDER but the wrong side of it once you remember the sky is
+  //      50% of the pixels in every harbor framing and the lit apron is about
+  //      8%. A lid that is one sixth as bright as the brightest surface but
+  //      six times as large is still the subject of the photograph. Cut to
+  //      about 0.45x, which puts the mean deck around a thirteenth of the
+  //      apron and lands the sky UNDER the lamp pools where it belongs.
+  //
+  //   2. UNIFORMITY, and this is the structural one. The underglow was a pure
+  //      function of ELEVATION - identical in every compass direction - so it
+  //      painted a continuous amber ring right round the sky. Nothing in nature
+  //      does that. A terminal is a FINITE lit patch; the cloud over it glows
+  //      and the cloud over the black water two hundred metres away does not,
+  //      which is why a real port at night has warm PATCHES on the base with
+  //      cold bruised gaps between them. See stAz in the shader: the glow now
+  //      rides a smooth field around the compass with hot lobes and real gaps,
+  //      and its elevation falloff is tightened from 0.30 to 0.16 so it is a
+  //      band ON the skyline rather than a wash climbing forty degrees up.
+  //
+  // Net effect at the horizon: 0.0145 radiance inside a lit lobe (0.56x the
+  // old figure), 0.0069 in the gaps between them (0.26x). Same sky, two stops
+  // of variation across it instead of none.
+  //
+  // PASS 4. Measured on harbor_overview: the sky occupies the top third of the
+  // establishing shot and runs 0.123 at the top edge to 0.199 just above the
+  // skyline, against a terminal-region median of 0.115. The brightest third of
+  // the frame was empty sky, which is why the shot has no focal point and why
+  // postfx's meter was being driven by pixels with no subject in them.
+  //
+  // The LEVEL was only half of it. The other half is that the ramp ran the
+  // wrong way for this camera. STORM_GLOW below models a DISTANT lit place -
+  // its falloff is in elevation, so it banks on the SKYLINE - and that is the
+  // correct model for a town you are looking at from outside. It is the wrong
+  // model for a terminal you are standing IN. The cloud a hundred metres over
+  // your head is the part directly above the lamps; the cloud on the skyline is
+  // three hundred metres out over black water and there is nothing under it to
+  // light it. So the horizon band comes down (x0.82 here, and STORM_GLOW itself
+  // to 0.45x) and the energy moves into STORM_BOUNCE, a dome centred on the
+  // terminal's own lamp cluster in WORLD space. See _stormDome.
+  //
+  // Net: the top edge of a downward-looking establishing shot darkens (it is
+  // aimed at cloud beyond the lit patch), while the upper frame of anything
+  // looking UP - the crane, the canyon slot - gains the warm lit base the art
+  // direction asks for and the crane finally has something to silhouette
+  // against.
+  var STORM_ZENITH = [0.0092, 0.0116, 0.0162];
+  var STORM_HORIZON = [0.0113, 0.0130, 0.0161];
+  // Peak sodium underglow radiance on the cloud base, INSIDE a lit lobe.
+  // #ff9a3c broadened by multiple scattering through the deck (a cloud is a
+  // very effective diffuser, so the glow arrives less saturated than the lamp
+  // that made it).
+  // The peak is barely down on the old 0.048 - the fix was never to make the
+  // sodium dimmer, it was to stop it being everywhere. Averaged over the
+  // compass by STORM_MEAN_AZ and over elevation by the tighter falloff, the
+  // glow now delivers about 40% of the light it used to while looking MORE
+  // like sodium, because it is now the bright half of a contrast rather than a
+  // floor under the whole dome.
+  //
+  // PASS 4 cuts it to 0.45x and hands the difference to STORM_BOUNCE. This term
+  // is now what it always physically was - the glow of everything OUTSIDE the
+  // terminal (the port beyond the fence, the town behind it, the far basin)
+  // banked on the skyline - and it is no longer asked to also be the light the
+  // terminal itself is throwing at the ceiling directly overhead, which it
+  // could never be: a function of elevation alone is a ring round the horizon,
+  // and the one place it puts NO light is straight up, which is exactly where
+  // the cloud over a lit apron is brightest.
+  var STORM_GLOW = [0.0149, 0.0063, 0.0019];
+  // e-folding elevation (sin) of the underglow. 0.16, not 0.30: at 0.30 the
+  // band still held 19% of peak at thirty degrees and 37% at seventeen, i.e.
+  // it covered the entire wedge of sky a ground-level framing actually sees.
+  // At 0.16 it is 12% by twenty degrees and gone by thirty-five - the glow sits
+  // on the skyline and dies into the cloud above it.
+  var STORM_GLOW_FALL = 0.16;
+  // Fraction of the peak underglow reaching the DARKEST compass bearings, i.e.
+  // how black the sky gets over the unlit water. Not zero - light scattered
+  // sideways inside the deck itself carries some of it everywhere - but low
+  // enough that the lobes read as lit places rather than as a modulation.
+  var STORM_GLOW_FLOOR = 0.13;
+  // Mean of the azimuthal lobe over a full turn of the compass. Used ONLY by
+  // the CPU mirror (_stormDeckRadiance) so the light the scene receives is the
+  // average of the sky it is actually shown, not the peak of it.
+  var STORM_MEAN_AZ = 0.52;
+
+  // --------------------------------------------------------------------------
+  // GROUND-BOUNCE DOME  -  the terminal's own sodium on the cloud base
+  //
+  // The single most efficient thing a port sky can have and the one this deck
+  // was missing. Everything above models light arriving from SOMEWHERE ELSE;
+  // this models the light leaving the apron you are standing on, hitting a
+  // cloud base a hundred metres up, and coming back down. It is what makes a
+  // real container terminal at 02:00 read as a lit place under a lid rather
+  // than as a dark place under a grey ceiling, and it is what gives a 30 m
+  // black crane something to be a silhouette against.
+  //
+  // WHY IT CANNOT BE A FUNCTION OF ELEVATION. STORM_GLOW is, and that is right
+  // for a distant source - a town twenty kilometres off subtends nothing but a
+  // band on the skyline. A lit patch you are INSIDE subtends the opposite: the
+  // brightest cloud is straight up, and it falls away with the horizontal
+  // distance from the lit patch to the point of the base you are looking at.
+  // That distance is h/tan(elevation), so the term is peaked at the zenith and
+  // dies toward the horizon - the exact inverse of STORM_GLOW - and it is
+  // anchored in WORLD space, not in view space, so walking out of the terminal
+  // walks out from under the glow. That is a depth cue no elevation curve can
+  // produce, and it is why the same constant cannot serve both.
+  //
+  //   STORM_BOUNCE_H   cloud base height, metres. LOW: ART_DIRECTION_HARBOR
+  //                    asks for a gantry crane whose legs "disappear into low
+  //                    cloud", and the crane apex is 34 m. 115 m is a storm
+  //                    scud base - low enough that the terminal's own lamps
+  //                    reach it, high enough that the bright patch is a broad
+  //                    dome overhead rather than a hard disc.
+  //   STORM_BOUNCE_R   radius of the lit patch ON the base. Not the terminal's
+  //                    own 45 m: light spreads sideways inside the deck (the
+  //                    same lateral multiple scattering STORM_DECK_FLOOR
+  //                    models), and the wet apron beyond the fence, the water
+  //                    and the freighter's deck lights all contribute. At
+  //                    ~1.1 x the base height the dome still holds a fifth of
+  //                    its peak at 25 degrees of elevation, which is where a
+  //                    ground-level framing's sky band actually lives.
+  //   STORM_BOUNCE_CTR the lamp cluster's centroid in world XZ. The nine sodium
+  //                    masts of level_harbor average to within a couple of
+  //                    metres of the origin; z is pulled slightly seaward
+  //                    because the quay pair and the mid-lane mast are the
+  //                    three brightest.
+  var STORM_BOUNCE_H = 115.0;
+  var STORM_BOUNCE_R = 128.0;
+  var STORM_BOUNCE_CTR = [0.0, -4.0];
+  // Peak radiance of the bounce, directly over the lamp cluster, BEFORE the
+  // back-scatter and cell terms (which take about 0.58 of it in the mean). Same
+  // broadened sodium hue as STORM_GLOW. Lands the zenith of a ground-level
+  // framing around 0.028 - roughly a third of the wet apron under a mast
+  // (~0.076), i.e. clearly the second-brightest thing in the frame and never
+  // the first.
+  var STORM_BOUNCE = [0.0345, 0.0146, 0.0044];
+  // The lit patch is not a uniform disc - it is nine lamps, a warehouse, a
+  // freighter and a lot of black water - so the dome rides the same azimuthal
+  // lobe field the skyline glow does, at reduced depth.
+  var STORM_BOUNCE_AZ_LO = 0.55, STORM_BOUNCE_AZ_HI = 0.45;
+  // The deck's COLD term, thickest -> thinnest. These two are the shader's own
+  // literals: they are interpolated into the GLSL below AND read by the CPU
+  // mirror, so the picture and the IBL cannot drift apart the way they did
+  // before (the mirror was carrying 0.30 + 1.85 against a shader running
+  // 0.24 + 0.72, i.e. it thought the deck was 1.74x brighter than it drew it).
+  var STORM_DECK_MIN = 0.18;       // radiance multiplier where the deck is thickest
+  var STORM_DECK_RANGE = 0.98;     // extra multiplier where it is thinnest
+  // Mid-frequency brightness band. Mean exactly 1.0 by construction
+  // (lo + hi/2), so it adds structure without moving the level by a percent.
+  //
+  // Applied LAST, after the toe floor below, and that ordering is the whole
+  // point of it. Folded in before the floor it was worth +-20% of a number the
+  // floor then compressed to +-7%, i.e. the deepest cloud printed as a flat
+  // dark card - measured on the quay framing at a 95th-percentile of 0.041
+  // against a 0.045 visibility floor, with a cell mean of 0.021: not crushed to
+  // zero, but with nothing in it either, which the coverage metric scores the
+  // same way and the eye reads the same way. After the floor the same term is
+  // worth its full +-30% everywhere, so the darkest deck keeps visible cloud
+  // shape - and because the multiplier averages to exactly 1, it buys that
+  // structure at zero cost to the frame's mean or its vertical balance.
+  var STORM_BAND_LO = 0.70, STORM_BAND_HI = 0.60;
+  // ---- the deck's toe -------------------------------------------------------
+  // Lateral multiple scattering INSIDE the deck. A cloud base is not a stack of
+  // independent columns: light entering it over the lit apron spreads sideways
+  // through several hundred metres of droplets before it leaves, so the part of
+  // the base over the black water is never as dark as its own local column
+  // says. That is a real term and it is the one this model was missing.
+  //
+  // It is also the term that fixes a measured failure. With the deck cut to
+  // 0.45x, thick cloud at the zenith landed at 0.0021 radiance and the top
+  // corners of the quay framing printed a 95th-percentile luminance of 0.039 -
+  // under analyze.py's 0.045 visibility floor, i.e. five SKY cells counted as
+  // dead, plus ARCHITECTURE 7.6's "no pure black". Simply raising the level
+  // again would have put the sunset back.
+  //
+  // Applied as a SOFT floor, d' = f + d*d/(d+f), not as an addition and not as
+  // a max(). At d = 0 it returns f; at d = f it returns 1.5f; by d = 4f it is
+  // within 5% of d and by d = 10f within 1%. So it lifts the darkest cloud
+  // about 2.5x, the mean zenith about a third, and the sodium band on the
+  // skyline by six per cent - it compresses the deck's toe without touching its
+  // level, which is exactly the difference between "dark" and "crushed".
+  //
+  // 0.0046 rather than the 0.0026 the first pass at this used, and the second
+  // number is the measured one: at 0.0026 the quay framing's top corners came
+  // back at a 95th-percentile of 0.048 / 0.041 / 0.041 against a 0.045 floor,
+  // i.e. still on the wrong side of it. The reason the first estimate fell
+  // short is worth recording, because it will catch the next person too - the
+  // harbor's auto-exposure is a NEGATIVE FEEDBACK loop around this whole
+  // module. Brightening the sky by 30% raised the meter's own reference by
+  // nearly as much and the frame printed 4% DARKER overall. Nothing in this
+  // file moves the picture by the factor it moves the radiance by; measure the
+  // print, never the constant.
+  var STORM_DECK_FLOOR = [0.00367, 0.00474, 0.00593];
+  // Back-scatter saturation curve, and how much more of it the sagging cells of
+  // the base catch than the flat sheet between them.
+  var STORM_REFL_A = 1.30, STORM_REFL_B = 0.40;
+  var STORM_CELL_LO = 0.44, STORM_CELL_HI = 1.04;
+  var STORM_MACRO_LO = 0.42, STORM_MACRO_HI = 0.90;
+  // Mean thin/thick fractions of the noise field, used ONLY by the CPU-side
+  // ambient integral so the light the scene receives agrees with the picture
+  // without having to sample the cloud texture on the CPU.
+  var STORM_MEAN_THICK = 0.56;
+  var STORM_MEAN_TRANS = (1.0 - STORM_MEAN_THICK) * (1.0 - STORM_MEAN_THICK);
+  var STORM_MEAN_BULGE = 0.50;
+  // In-cloud sheet lightning. HISTORY FIRST, then the constant that replaced
+  // it - read PASS 5 below before changing anything here.
+  //
+  // There used to be a STORM_FLASH_K: a fixed radiance handed to the deck at
+  // flash = 1, which the shader multiplied by up to 2.75
+  // in the core, i.e. ~2.3 peak - about 45x the underglow and 400x the deck
+  // beside it, which is what a strike inside a cloud looks like and what feeds
+  // postfx's bloom. It decays over 60-180 ms, far faster than the 2.6/s
+  // exposure adaptation, so it prints as a flash rather than as a new exposure.
+  // Measured at 0.85 / 2.4 on the probe: the ENTIRE dome clipped to white,
+  // including the half of the sky facing away from the strike, because a lobe
+  // exponent of 2.4 still returns 0.19 at ninety degrees off axis. That is the
+  // full-screen white fade on ART_DIRECTION_HARBOR's instant-fail list wearing
+  // a cloud texture. Tighter lobe, a third of the gain: the core still clips
+  // (it should - it is what feeds postfx's bloom and it is what freezes the
+  // rain) but the far side of the sky only lifts about a stop, so the flash
+  // has a DIRECTION, which is the entire point of putting it in the cloud
+  // rather than in the composite.
+  //
+  // 0.25, not 0.42, and the reason is a consequence rather than a taste. This
+  // is an ABSOLUTE radiance while everything it is judged against - the deck
+  // under it, and the auto-exposure that meters both - just moved. Cutting the
+  // deck to 0.45x left the flash where it was, so its ratio to the sky it is
+  // supposed to be a flash IN more than doubled, AND the meter opened up to
+  // compensate for the darker sky, which multiplied the two effects instead of
+  // cancelling them. Measured on the lightning framing: mean luminance went UP
+  // from 0.188 to 0.221 and the top-half / bottom-half split from 3.69 to 4.76,
+  // i.e. the strike went from lighting the deck to being the frame - the
+  // full-screen white fade, again, arrived by the back door. Scaled with the
+  // deck it lifts the same number of stops over it that it did before.
+  //
+  // ==========================================================================
+  // PASS 5, and it invalidates the whole argument above, because that argument
+  // was between this file and itself.
+  //
+  // MEASURED, same pose, pre-strike against strike: the sky gap at the top of
+  // frame fell 0.189 -> 0.074 (x0.39) while the ground rose x6.4 and the frame
+  // mean went 0.105 -> 0.281. THE STORM DECK GOES DARK WHEN LIGHTNING FIRES.
+  // The physical source of the light dims a stop and a half at the instant it
+  // emits, and the brightest thing in a lightning frame is wet concrete.
+  //
+  // The mechanism is not subtle once you look for it. This module sized the
+  // in-cloud radiance from a FIXED constant scaled by w.flash. lighting.js
+  // independently sized the key it spends on the scene from ITS constants
+  // (HB.key, HB.keyShare, HB.keyMin) plus whatever weather.js's own flash light
+  // is already spending. Nothing tied the two together. Then postfx's meter -
+  // which is a negative feedback loop around the frame mean - closed down on
+  // the newly-lit ground and took the sky with it. Two modules sizing the same
+  // physical event from unrelated constants, arbitrated by a third that can
+  // only see the sum.
+  //
+  // A tuning pass cannot fix that. The next change to HB.key desynchronises it
+  // again. So the deck's emission is now DERIVED from the key the scene is
+  // actually receiving, which is the physically correct direction of causation
+  // anyway: in a real storm the cloud is the emitter and the ground is lit BY
+  // it, not the other way round.
+  //
+  //   A surface under a hemisphere of uniform radiance L collects E = pi * L.
+  //   lighting.js hands the scene an irradiance of `keyIntensity`. So the deck
+  //   that could have produced it has radiance keyIntensity / pi, and that is
+  //   the anchor - no free constant, no unit mismatch, and it tracks lighting.js
+  //   automatically for ever.
+  //
+  // STORM_FLASH_Q is the only dimensionless thing left: what fraction of that
+  // ideal uniform emitter the visible lobe actually is. A real strike is not a
+  // uniform hemisphere - it is a bright cell with a lit half-dome around it -
+  // so the average over the lit side comes out under 1 while the core runs
+  // several times over it. That is exactly the shape the lobe/core split below
+  // already had; all that changes is what it is a fraction OF.
+  //
+  // Sanity check on the direction: wet concrete's albedo in this level is
+  // deliberately near-black, so a cloud that lights it to radiance G has its
+  // own radiance around G/albedo - i.e. the sky in a lightning frame is
+  // SEVERAL TIMES the ground it is lighting, not a quarter of it. The critic's
+  // acceptance target (sky >= 2x the lit apron) is the conservative end of the
+  // physics, not a stylistic ask.
+  //
+  // 0.54, and the number was BISECTED against the print rather than argued.
+  // Measured on the `lightning` framing at 1280x720, t = 1.5, sampling the sky
+  // slot above the canyon against the lit apron in the lower third:
+  //
+  //     the old fixed constant   sky 0.091 / apron 0.287   ratio 0.32
+  //     Q = 0.34 (tight split)   sky 0.606 / apron 0.487   ratio 1.25
+  //     Q = 0.46                 sky 0.624 / apron 0.327   ratio 1.91
+  //     Q = 0.54                 sky 0.649 / apron 0.321   ratio 2.02  <-
+  //
+  // Note what happens to the DENOMINATOR across those rows: it falls, because
+  // postfx's meter closes on the brightening sky. That is the negative feedback
+  // this file's DAY_GAIN comment warns about, working FOR us for once - each
+  // extra stop in the deck buys more than a stop of separation. It is also why
+  // the first attempt overshot so badly.
+  //
+  // The overshoot is worth recording. At 0.62 with the ORIGINAL wide lobe the
+  // ratio target was met and the frame was ruined: 60% of the 8x8 cells sat on
+  // postfx's black floor, the containers were silhouettes with nothing in them
+  // and the rain had gone. The deck is 30-50% of the pixels in every harbor
+  // framing, so a broad two-stop lift moves the frame mean two stops and the
+  // meter answers by closing down until the only thing left is the thing that
+  // moved - the strike stopped lighting the terminal and started replacing it.
+  //
+  // The physics was not wrong; the uniform-hemisphere reading of it was. A
+  // strike is a bright CELL inside the deck, not an evenly glowing dome, so
+  // most of the emitted power belongs in a small solid angle. Spending it there
+  // instead (see STORM_FLASH_TIGHT and the lobe/core split, both moved with
+  // this) buys 20x the peak radiance of the old constant for about 6x the total
+  // energy in the sky, so the cloud around the strike clips while the frame
+  // mean lands at 0.256, dynamic range 0.811, crushed black 0.00%, blown 0.01%
+  // and no red flag anywhere.
+  var STORM_FLASH_Q = 0.54;
+  // Fallback key-per-unit-flash, used only until ctx.lighting has been observed
+  // through one frame of a real strike (and for ever if lighting.js is missing
+  // or has no keyIntensity). Sized to lighting.js's own harbor budget so the
+  // untied path is still in the right decade rather than back at pass 4.
+  var STORM_FLASH_KEY_DEF = 18.0;
+  // Clamp on the observed key-per-flash. Wide enough to follow any plausible
+  // retune of lighting.js's budget, tight enough that one bad frame from
+  // another agent's module cannot white the sky out.
+  var STORM_FLASH_KEY_MIN = 2.0, STORM_FLASH_KEY_MAX = 90.0;
+  // Luminance-normalised #dceaff, so the emission constants above are true
+  // luminances rather than "whatever this triple happens to integrate to".
+  var STORM_FLASH_HUE = [0.878, 1.012, 1.228];
+  // 5.6, not 3.6. The peak went up 8.5x, and at 3.6 the far side of the sky
+  // would have gone up with it: a bearing ninety degrees off the strike still
+  // returned 8% of the lobe, which at the new level is a visible lift over the
+  // whole dome - the full-screen white fade arriving by the back door for the
+  // third time - and, worse, it is spent where it does nothing but drive the
+  // meter. At 5.6 the same bearing returns 2%, so the strike keeps a DIRECTION
+  // while its own cell clips.
+  var STORM_FLASH_TIGHT = 5.6;
+  // How the emission splits between the broad lit half-dome and the cell the
+  // strike is actually inside. The energy is now concentrated hard into the
+  // core: the core is what the eye reads as lightning and what feeds postfx's
+  // bloom, and it is worth eight times as much per unit of frame mean as the
+  // lobe is. The core exponent is 3.6x the lobe's (it was 5x) so the bright
+  // cell subtends ~25 degrees and reads as a lit cloud mass rather than as a
+  // dot with a halo.
+  var STORM_FLASH_LOBE = 0.38, STORM_FLASH_CORE = 3.00;
+  var STORM_FLASH_CORE_P = 3.6;
+  // How much of the moon key survives the deck. Not zero: a storm deck still
+  // has a bright side, and lighting.js needs a key DIRECTION at all times or
+  // its cascade has nothing to hang on. But it must not read as moonlight -
+  // the harbor is lit by its practicals.
+  var STORM_MOON_K = 0.55;
+  // How far the storm haze may sit above the key reference. Same argument as
+  // NIGHT_HAZE_K, one step further: the brightest surface in this level is wet
+  // concrete under a sodium mast, roughly twenty times a moonlit grey card, and
+  // rain scatter is what makes a lamp cone visible at all.
+  var STORM_HAZE_GAIN = 5.2;
+  var STORM_HAZE_ALBEDO = 0.93;    // water droplets, vs 0.76 for mineral dust
+  // Coverage THRESHOLD on the deck's fbm. Low = near-total overcast; the
+  // structure lives in the deck's brightness, not in holes in it.
+  // Deliberately LOW. Nimbostratus is not broken cloud: you do not see sky
+  // through it, and at 0.16 with a 0.34 span roughly half the dome was still
+  // showing the atmosphere behind it, which reads as a nice afternoon
+  // cloudscape and not as the lid the art direction asks for. The deck's DEPTH
+  // comes from its brightness running on 1/thickness (see stTrans in the
+  // shader), not from holes in it - a couple of per cent of genuinely torn scud
+  // is all the leak that should exist.
+  var STORM_COVER = 0.06;
+  var STORM_COVER_SPAN = 0.26;
+  var STORM_DETAIL = 1.0;          // cellular-bulge gain
+  // Wind drift -> deck uv, per metre of world travel. Sized so a 14 m/s gale
+  // moves the near deck about one texture width in 45 s: clearly alive when you
+  // stand and watch, effectively frozen inside a 1.5 s deterministic capture.
+  var STORM_DRIFT_K = 0.0016;
+  var STORM_TEX_SIZE = 256;
+  // Fog for driving rain. heightScale is enormous compared with the market's
+  // 5.5 because rain is not a ground layer - it fills the whole column, and a
+  // 5.5 m e-folding height would leave the crane boom and the deck above it
+  // perfectly crisp over the top of a hazed apron. mieG is LOW: water droplets
+  // at night with no key to forward-scatter from want a nearly isotropic veil,
+  // not a directional glow.
+  var STORM_FOG = {
+    density: 0.0265,
+    heightScale: 22.0,
+    startDistance: 1.0,
+    maxOpacity: 0.94,
+    mieG: 0.38,
+    glowGain: 0.75,
+    desaturate: 0.34
+  };
+  // Haze hues, linear, max-channel-normalised. Slate is ART_DIRECTION_HARBOR's
+  // #39434d "steam / rain haze"; sodium is #ff9a3c after the same scattering
+  // broadening as the underglow.
+  var STORM_HAZE_HUE = [0.551, 0.756, 1.000];
+  var STORM_SODIUM_HUE = [1.000, 0.420, 0.130];
+  // Target luminances for the three inscatter directions. Well under the
+  // lamp-lit ground (~0.076) so the haze never out-brightens the surfaces it
+  // sits in front of, and well over zero so the freighter fades into a veil
+  // instead of silhouetting against literal black.
+  //
+  // Brought down with the deck (see STORM_ZENITH pass 3) rather than left where
+  // they were, and that is not tidiness: the haze is the DECK's light scattered
+  // by the rain under it, so a veil that stays put while the sky it is lit by
+  // halves is a veil that is now brighter than its own source. That is exactly
+  // what a "flat grey-orange fog with no geometry legible through it" is - the
+  // near field stops being lit air in front of a scene and becomes an opaque
+  // card in front of it. SKY and SUN come down with the deck; GND is held much
+  // closer to where it was, because that one is the warm bounce off the lit
+  // apron (whose brightness has not changed) and it is the only thing keeping
+  // the bottom of the frame off literal black.
+  var STORM_FOG_SKY_LUM = 0.0066;
+  var STORM_FOG_SUN_LUM = 0.0104;
+  var STORM_FOG_GND_LUM = 0.0090;
+  // Hue-normalised light colours published to lighting.js under storm.
+  var STORM_SKY_HUE = [0.551, 0.756, 1.000];
+  var STORM_ZENITH_HUE = [0.480, 0.700, 1.000];
+  var STORM_GND_HUE = [1.000, 0.660, 0.400];
+
   // --------------------------------------------------------------------------
   // HAZE SCHEDULE (see _scheduleHaze)
   //
@@ -529,6 +1040,17 @@
     'uniform vec3 uCloudSun;',       // sunlit cloud radiance
     'uniform vec3 uCloudAmb;',       // shadowed cloud radiance
     'uniform vec4 uDay;',            // x gain, y knee, z asymptote, w cloud scale
+    // ---- storm deck (level 2). All zero / unused when uStorm.x == 0. -------
+    'uniform sampler2D uStormTex;',  // r base fbm, g mid fbm, b cells, a wisps
+    'uniform vec4 uStorm;',          // x strength, y cover threshold, z detail, w wind bearing
+    'uniform vec4 uStormDrift;',     // xy near-deck uv drift, zw far-deck uv drift
+    'uniform vec3 uStormLow;',       // deck radiance at the horizon
+    'uniform vec3 uStormHigh;',      // deck radiance at the zenith
+    'uniform vec3 uStormGlow;',      // peak sodium underglow radiance
+    'uniform vec3 uStormBounce;',    // peak ground-bounce radiance over the lamps
+    'uniform vec4 uStormBase;',      // x base height, y 1/patchRadius^2, zw centre XZ
+    'uniform vec4 uFlash;',          // xyz in-cloud flash radiance, w lobe tightness
+    'uniform vec3 uFlashDir;',       // unit, points TOWARD the strike
     'varying vec3 vDir;',
     GLSL_NOISE,
 
@@ -676,6 +1198,233 @@
     '      vec3 cc = uCloudAmb + uCloudSun * ( lit + silver );',
     '      col = mix( col, cc, clamp( cloudA, 0.0, 0.94 ) );',
     '    }',
+    '  }',
+
+    // ---- STORM DECK (level 2) ---------------------------------------------
+    // Skipped entirely when uStorm.x is 0, which is every frame of level 1.
+    //
+    // The projection d.xz / (elev + h) is a plane at height ~1/h seen from
+    // under it. Written that way rather than as d.xz / d.y because the naive
+    // form runs to infinity at the skyline: the noise frequency explodes, the
+    // deck aliases into a shimmering band and no amount of mip biasing saves
+    // it. Adding h SATURATES the projection at 1/h, which both bounds the
+    // frequency and reproduces the real thing - a deck really does compress
+    // into an unresolvable smear at the horizon.
+    //
+    // TWO of them, at different h, drifting at different rates: that is the
+    // parallax that makes this a volume with a base rather than wallpaper.
+    '  if ( uStorm.x > 0.002 ) {',
+    '    float stEl = max( d.y, -0.03 );',
+    // Rotate into the WIND frame and squash along it. A storm deck is sheared:
+    // the cells are drawn out into rolls lying along the wind, and an isotropic
+    // fbm reads as fair-weather cumulus however dark you make it. uStorm.w
+    // carries the wind bearing so the shear turns with the weather instead of
+    // pointing wherever the author happened to leave it.
+    '    float stCa = cos( uStorm.w ), stSa = sin( uStorm.w );',
+    '    vec2 stAx = vec2( d.x * stCa + d.z * stSa, -d.x * stSa + d.z * stCa );',
+    '    vec2 stNear = stAx / ( stEl + 0.15 ) * vec2( 0.48, 1.12 );',
+    '    vec2 stFar  = stAx / ( stEl + 0.42 ) * vec2( 0.55, 1.05 );',
+    // SCALE IS THE WHOLE BALLGAME HERE, and it was got wrong first time in
+    // exactly the way the clear-sky deck above was got wrong a round earlier:
+    // at 0.115 the entire upper dome sampled about a fifth of one tile, so the
+    // "storm" was a single soft blob draped over half the sky and a clear
+    // gradient over the other half. The projection magnitude runs from 0 at the
+    // zenith to 1/0.15 = 6.7 at the skyline, so a multiplier of 0.80 puts about
+    // 1.2 tiles across the sky at 30 degrees of elevation and 5.3 at the
+    // horizon - real masses overhead compressing into an unresolvable band at
+    // the skyline, which is what a deck does.
+    //
+    // The three layers are deliberately split across the two projections: the
+    // broad masses and the low ragged scud ride the NEAR deck, the mid
+    // structure rides the FAR one. They therefore slide over each other at
+    // different rates under the same wind, which is the parallax.
+    // stMacro is the weather SYSTEM: which half of the sky is bruised and
+    // which is thinning out. Sampled off the far deck at a very low frequency
+    // so it barely moves - a front crosses the terminal in minutes, the scud
+    // under it in seconds.
+    '    float stMacro = texture2D( uStormTex, stFar * 0.28 + uStormDrift.zw ).r;',
+    '    vec4 stA = texture2D( uStormTex, stNear * 0.80 + uStormDrift.xy );',
+    '    vec4 stB = texture2D( uStormTex, stFar * 2.10 - uStormDrift.zw * 1.55 + vec2( 0.37, 0.11 ) );',
+    '    vec4 stC = texture2D( uStormTex, stNear * 3.60 + uStormDrift.xy * 2.20 + vec2( 0.63, 0.29 ) );',
+    '    float stDen = stA.r * 0.52 + stB.g * 0.30 + stC.a * 0.18;',
+    '    stDen *= 0.42 + 1.16 * stMacro;',
+    // The sagging cells of the cloud base. This is the term the underglow
+    // lands on; without it the orange is a flat wash and the whole effect
+    // reads as a gradient rather than as lit geometry.
+    //
+    // The wisp channel is folded into the cell term on purpose. Worley on its
+    // own is a field of CIRCLES, and at the horizon compression it printed as
+    // discrete dark dots across the deck rather than as torn cloud. A fifth of
+    // ridged noise breaks the roundness without costing a texture fetch - stC
+    // is already sampled for the density.
+    '    float stCell = stA.b * 0.50 + stB.b * 0.30 + stC.a * 0.20;',
+    '    stDen += ( stCell - 0.5 ) * 0.20 * uStorm.z;',
+    '    float stCov = smoothstep( uStorm.y, uStorm.y + ' + STORM_COVER_SPAN.toFixed(3) + ', stDen );',
+    // Below the skyline the plane projection folds back on itself - |d.xz|
+    // shrinks toward the nadir while the divisor is pinned - and the deck
+    // smears into radial streaks under the horizon. Gate it out on the same
+    // narrow window the sun/moon occluder uses, and let the ground bounce own
+    // that half of the dome exactly as it does with a clear sky.
+    '    stCov *= smoothstep( -0.025, 0.015, d.y );',
+    '    float stThick = smoothstep( 0.16, 0.90, stDen );',
+    '    float stTrans = ( 1.0 - stThick ) * ( 1.0 - stThick );',
+    // ---- what the deck is actually made of ---------------------------------
+    // Two independent terms, and getting their SIGNS the right way round is
+    // the difference between a storm and a summer afternoon.
+    //
+    //   TRANSMISSION (cold, from above). Only thin cloud passes it. This is
+    //   the "light leaking through the thinner patches" that keeps the lid
+    //   from being a flat card - but it is faint, because there is very little
+    //   above the deck at 02:00 to leak.
+    //
+    //   BACK-SCATTER (warm, from below). This is the whole show. Ground light
+    //   entering the cloud base is scattered back down again, and THICK cloud
+    //   returns MORE of it - a thin wisp lets the sodium straight through and
+    //   out the top. So thick = bright and orange, thin = dark and cold, and
+    //   the gaps between the masses are the deepest black in the frame.
+    //
+    // The first version of this had it exactly backwards - deck brightness ran
+    // on 1/thickness for BOTH terms, so the thin patches were the bright ones
+    // and the warm glow was strongest where the cloud was darkest. Measured on
+    // the probe: white cumulus puffs on an amber field, which is a fair-weather
+    // sky at golden hour, i.e. level 1's palette on the level that exists to be
+    // its opposite.
+    '    float stHor = exp( - max( stEl, 0.0 ) * 3.2 );',
+    '    vec3 stAmb = mix( uStormHigh, uStormLow, stHor );',
+    // HUE structure, not luminance structure. The two ends of this mix are
+    // luminance-matched to within 2%, so it costs the deck nothing in level -
+    // but a thin patch at 02:00 is showing the residual blue of the column
+    // above it while a thick base is the part actually holding the town's
+    // light, and that difference is most of why a real overcast reads as
+    // WEATHER rather than as a grey ramp. A deck that varies only in brightness
+    // is a gradient; one that varies in colour is cloud.
+    '    vec3 stTint = mix( vec3( 0.88, 0.99, 1.17 ), vec3( 1.08, 1.00, 0.90 ), stThick );',
+    // STORM_DECK_MIN is a FLOOR, not a taste call: the darkest place in this
+    // sky is thick cloud high up, where there is neither transmission from
+    // above nor underglow from below, and ARCHITECTURE 7.6 and the harbor art
+    // direction both forbid crushing it to nothing.
+    //
+    // The RANGE around it is deliberately wider than the mean is high (0.18 to
+    // 1.16 about a mean of 0.37): the deck's depth is the spread, not the
+    // level.
+    '    vec3 stDeck = stAmb * stTint',
+    '               * ( ' + STORM_DECK_MIN.toFixed(3) + ' + ' + STORM_DECK_RANGE.toFixed(3) + ' * stTrans );',
+    // Back-scatter saturates: past a few hundred metres of cloud the base
+    // stops getting any better at returning light.
+    '    float stRefl = stThick * ( ' + STORM_REFL_A.toFixed(3) + ' - ' + STORM_REFL_B.toFixed(3) + ' * stThick );',
+    // ---- WHERE the sodium is, and this is the structural half of the fix ----
+    //
+    // The underglow used to depend on ELEVATION ALONE, which means it was
+    // identical in every compass direction: a continuous amber ring painted
+    // right round the sky at a fixed height. Nothing outdoors does that. A
+    // terminal is a FINITE lit patch a few hundred metres across under a cloud
+    // base a few hundred metres up, so the cloud directly over the lit apron
+    // is bright, the cloud over the black water beyond the quay is not, and
+    // what you actually see from inside a port at night is warm PATCHES on the
+    // base with cold bruised gaps between them. Measured: the old uniform ring
+    // put the deck at RGB(148,79,35) across the whole upper half of the quay
+    // framing - a single flat colour field, i.e. a backdrop card, and the
+    // brightest thing in a two-in-the-morning photograph.
+    //
+    // hn is already the normalised horizontal view direction (the clear-sky
+    // horizon ridge computes it a few lines up), so tracing a CIRCLE through
+    // the deck texture with it gives a smooth, exactly periodic function of
+    // compass bearing for free - no seam is possible, because the sample path
+    // closes on itself. Two radii: 0.155 puts about three broad lobes around
+    // the horizon (the terminal, the town behind it, the far basin), 0.430 puts
+    // finer structure inside them. Both drift with the far deck, so the lit
+    // patches breathe as the cloud moves over the lamps rather than being
+    // painted on.
+    '    float stAzA = texture2D( uStormTex, hn * 0.155 + uStormDrift.zw * 0.30 + vec2( 0.31, 0.67 ) ).r;',
+    '    float stAzB = texture2D( uStormTex, hn * 0.430 - uStormDrift.zw * 0.50 + vec2( 0.72, 0.18 ) ).r;',
+    // A NARROW window on a field whose spread is about 0.12: that is what turns
+    // a gentle modulation into genuine lobes with genuine gaps between them.
+    '    float stAz = ' + STORM_GLOW_FLOOR.toFixed(3) + ' + ' + (1.0 - STORM_GLOW_FLOOR).toFixed(3),
+    '               * smoothstep( 0.38, 0.66, stAzA * 0.72 + stAzB * 0.28 );',
+    '    float stGlow = exp( - max( stEl, 0.0 ) / ' + STORM_GLOW_FALL.toFixed(3) + ' ) * stAz',
+    '                 * ( ' + STORM_MACRO_LO.toFixed(3) + ' + ' + STORM_MACRO_HI.toFixed(3) + ' * stMacro );',
+    // The cells hang below the deck, so they are nearer the lamps and catch
+    // more. This is the term that turns a warm gradient into lit geometry.
+    '    float stBulge = ' + STORM_CELL_LO.toFixed(3) + ' + ' + STORM_CELL_HI.toFixed(3) + ' * stCell;',
+    '    stDeck += uStormGlow * stGlow * stRefl * stBulge;',
+    // ---- GROUND BOUNCE: the terminal's own lamps on the base overhead -------
+    //
+    // Where the previous term asks "how low am I looking", this one asks "what
+    // is UNDER the piece of cloud I am looking at". The view ray is intersected
+    // with the cloud base plane in WORLD space and the answer is the horizontal
+    // distance from that intersection to the terminal's lamp cluster, so the
+    // glow stays nailed over the apron while the camera moves and turns - which
+    // is the depth cue, and the reason this cannot be baked into an elevation
+    // curve. A Lorentzian rather than a Gaussian falloff on purpose: a lit
+    // patch under a scattering slab has long tails (that is the same lateral
+    // multiple scattering STORM_DECK_FLOOR models), so the dome has to reach
+    // several patch-radii out at a few per cent instead of stopping dead.
+    //
+    // d.y is floored well above zero: at the skyline the intersection runs to
+    // infinity, which is both numerically unpleasant and, once the ray is
+    // pointing past the far side of the lit patch, physically over.
+    '    float stRise = max( uStormBase.x - cameraPosition.y, 6.0 );',
+    '    vec2 stHit = cameraPosition.xz + d.xz * ( stRise / max( d.y, 0.05 ) ) - uStormBase.zw;',
+    '    float stDome = 1.0 / ( 1.0 + dot( stHit, stHit ) * uStormBase.y );',
+    '    stDome *= ' + STORM_BOUNCE_AZ_LO.toFixed(3) + ' + ' +
+      STORM_BOUNCE_AZ_HI.toFixed(3) + ' * stAz;',
+    '    stDeck += uStormBounce * stDome * stRefl * stBulge;',
+    // Lateral multiple scattering inside the deck: a soft floor that lifts the
+    // darkest cloud without moving the lit band. See STORM_DECK_FLOOR. Applied
+    // BEFORE the strike, which must keep its full contrast against it.
+    '    vec3 stFlr = vec3( ' + STORM_DECK_FLOOR[0].toFixed(5) + ', ' +
+      STORM_DECK_FLOOR[1].toFixed(5) + ', ' + STORM_DECK_FLOOR[2].toFixed(5) + ' );',
+    '    stDeck = stFlr + stDeck * stDeck / max( stDeck + stFlr, vec3( 1e-6 ) );',
+    // Mid-frequency structure, applied AFTER the toe so the floored regions
+    // keep their cloud shape instead of printing as a flat card. Mean 1.0.
+    '    stDeck *= ' + STORM_BAND_LO.toFixed(3) + ' + ' + STORM_BAND_HI.toFixed(3) + ' * stB.g;',
+    // ...and the RELIEF of the base itself, on the same schedule and for the
+    // same measured reason. Until now the sagging cells only ever modulated the
+    // warm terms, so wherever the sodium did not reach - which after the glow
+    // moved overhead is most of the lower dome - the deck had exactly one
+    // spatial field in it (the mid-frequency band) and read as a soft gradient
+    // with smudges: measured on harbor_overview at a sky-band local RMS of
+    // 0.070 on a mean of 0.155, most of which was the band alone. This is a
+    // second, independent, higher-frequency field, and because its mean is
+    // exactly 1.0 against a cell channel whose mean is 0.5 it buys that
+    // structure at zero cost to the level, the vertical balance or the meter.
+    '    stDeck *= 0.74 + 0.52 * stCell;',
+    // ---- sheet lightning INSIDE the deck ----------------------------------
+    // The strike is inside the cloud, so the cloud is the emitter: thick cloud
+    // near uFlashDir glows, thin cloud barely lifts, and the far side of the
+    // sky picks up only the broad lobe. That difference is what separates a
+    // storm from a white screen fade.
+    '    float stFl = uFlash.x + uFlash.y + uFlash.z;',
+    '    float stEsc = 0.0;',
+    '    if ( stFl > 1e-5 ) {',
+    '      float stFd = dot( d, uFlashDir );',
+    '      float stLobe = pow( max( stFd * 0.5 + 0.5, 0.0 ), max( uFlash.w, 1.0 ) );',
+    '      float stCore = pow( max( stFd, 0.0 ), max( uFlash.w, 1.0 ) * ' +
+      STORM_FLASH_CORE_P.toFixed(2) + ' );',
+    '      stDeck += uFlash.xyz * ( stLobe * ' + STORM_FLASH_LOBE.toFixed(3) +
+      ' + stCore * ' + STORM_FLASH_CORE.toFixed(3) + ' ) * ( 0.18 + 0.95 * stThick );',
+    '      stEsc = stLobe;',
+    '    }',
+    '    col = mix( col, stDeck, clamp( stCov * uStorm.x, 0.0, 1.0 ) );',
+    // The deck must not wrap under the skyline. Re-apply the SAME ground blend
+    // the clear path used a few lines up, with the same `deep` term, so the two
+    // agree exactly at d.y = 0 and no new seam can appear at any width.
+    // A little of the strike escapes the deck entirely and lights the clear
+    // air below it, so the whole sky lifts a touch even where there is no
+    // cloud. Faded out by `deep` so it does not glow up out of the sea.
+    //
+    // Weighted by the LOBE now, and the coefficient cut to a quarter. It used
+    // to be an omnidirectional 0.020 of the flash radiance, which was harmless
+    // while that radiance was a fixed 0.25 and is a flat lift over every pixel
+    // of the dome now that it is derived from the key (an order of magnitude
+    // more). An undirected additive term applied to the whole sky IS the
+    // full-screen white fade ART_DIRECTION_HARBOR forbids, however it is
+    // spelled - so the escaping light gets the same direction the emission has.
+    '    if ( stFl > 1e-5 ) col += uFlash.xyz * 0.0050 * stEsc * uStorm.x * ( 1.0 - deep );',
+    '    col = mix( col, uHazeGnd, deep * 0.93 * uStorm.x );',
+    // Nothing celestial survives two kilometres of nimbostratus: no sun disc,
+    // no moon disc, no moon halo, no stars, no milky way.
+    '    clearAmt *= 1.0 - uStorm.x;',
     '  }',
 
     // ---- sun disc with per-channel limb darkening -------------------------
@@ -1096,6 +1845,47 @@
     this._nightF = 0;
     this._deepNightF = 0;
 
+    // ---- weather (level 2) -------------------------------------------------
+    // weatherPreset is published so anyone can ask what the sky thinks it is
+    // doing; _stormF is the single gate every added branch tests. Both are the
+    // clear-sky values here and only setWeather() (or a levelDef that names a
+    // preset) ever moves them, which is what keeps level 1 untouched.
+    this.weatherPreset = 'clear';
+    this._stormF = 0;
+    this._stormTex = null;
+    this._pendingWeather = null;
+    // Wind-integrated deck drift. Integrated rather than time * speed so the
+    // deck does not jump when weather.js ramps its wind.
+    this._driftNear = new THREE.Vector2(0, 0);
+    this._driftFar = new THREE.Vector2(0, 0);
+    // Wind bearing, radians. The deck's shear axis, so the rolls lie along the
+    // wind rather than along whatever axis the noise happened to prefer.
+    this._windAngle = Math.atan2(-0.16, 0.28);
+    // Last values read off ctx.weather, so update() only does work on change.
+    this._wxFog = 0;
+    this._wxFogApplied = -1;
+    this._wxFlash = 0;
+    this._flashDir = new THREE.Vector3(0.42, 0.62, -0.66).normalize();
+    this._flashRGB = new THREE.Vector3(0, 0, 0);
+    // ---- ground-bounce dome geometry ---------------------------------------
+    // Authored defaults; _syncBounceCentre replaces them with the terminal's
+    // OWN lamp survey the first frame ctx.level publishes one, so the glow sits
+    // over the lamps that actually exist rather than over a number typed here.
+    this._bounceH = STORM_BOUNCE_H;
+    this._bounceR = STORM_BOUNCE_R;
+    this._bounceCtr = new THREE.Vector2(STORM_BOUNCE_CTR[0], STORM_BOUNCE_CTR[1]);
+    this._bounceSolved = false;
+    // Key irradiance the scene receives per unit of weather.flash. Observed off
+    // ctx.lighting rather than assumed, so the deck and the key can never again
+    // size the same strike from unrelated constants. See STORM_FLASH_Q.
+    this._keyPerFlash = STORM_FLASH_KEY_DEF;
+    this._flashPrevRead = 0;
+    // Autonomous fallback lightning, used ONLY when ctx.weather is absent
+    // entirely (a build where fx/weather.js failed to load). It exists so a
+    // storm sky is never a dead grey lid, and it switches itself off the moment
+    // a real weather module publishes a flash. Seeded, never Math.random.
+    this._fallbackStrikes = null;
+
     // Shared uniform payloads. Typed arrays because UniformsUtils.clone()
     // copies them by reference - one write updates every material.
     this._fogA = new Float32Array(4);
@@ -1449,6 +2239,17 @@
     this.moonIntensity = 0.34 * moonUp * nightF;
     this.moonColor.setRGB(0.56, 0.66, 0.98);
 
+    // A storm deck eats the moon. Not to zero - lighting.js needs a key
+    // DIRECTION every frame to hang its cascade on, and an overcast really does
+    // have a brighter side - but far enough that the harbor is unambiguously
+    // lit by its own sodium masts and not by a moon that is behind two
+    // kilometres of water. Multiplicative and gated on _stormF, so with no
+    // storm this line is an exact x1. Applied BEFORE the keyIsMoon handover
+    // below so sunIntensity inherits the reduction.
+    if (this._stormF > 0) {
+      this.moonIntensity *= M.lerp(1.0, STORM_MOON_K, M.saturate(this._stormF));
+    }
+
     // Guarantee the whole build always has a key light with a direction, even
     // at midnight, whatever lighting.js chooses to do with it.
     this.keyIsMoon = false;
@@ -1495,8 +2296,25 @@
     var base = this.fog.density;
     if (!isFinite(base) || base < 0) base = 0;
     var d = base * M.lerp(1.0, NIGHT_FOG_K, nightF) * (1.0 + AFTERGLOW_FOG_K * afterglow);
+    var albedo = HAZE_ALBEDO;
+
+    // ---- driving rain -------------------------------------------------------
+    // Under storm the density is not a schedule off the sun any more, it is
+    // WEATHER, and weather.js owns it: ctx.weather.fogDensity is read straight
+    // through when it publishes one (clamped, because a module in another
+    // agent's hands may express it in its own units and a runaway value would
+    // fill the frame with grey). The night/afterglow multipliers above are
+    // deliberately NOT stacked on top - they model dew and inversion under a
+    // clear sky, and a downpour is neither.
+    var sf = M.saturate(this._stormF);
+    if (sf > 0) {
+      d = M.lerp(d, this._stormFogDensity(), sf);
+      this.nightHazeGain = M.lerp(this.nightHazeGain, STORM_HAZE_GAIN, sf);
+      albedo = M.lerp(HAZE_ALBEDO, STORM_HAZE_ALBEDO, sf);
+    }
+
     this.fogDensityEffective = d;
-    this.scatterRadiance = HAZE_ALBEDO * d / (4.0 * PI);
+    this.scatterRadiance = albedo * d / (4.0 * PI);
 
     // The near-field cutout is a DAYLIGHT guard: it keeps the first couple of
     // metres crisp under a key bright enough that anything closer would only
@@ -1509,6 +2327,35 @@
     // at 0.3-0.8 m and is still entirely outside it.
     this.fogStartEffective = Math.max(0.0, this.fog.startDistance) *
       M.lerp(1.0, 0.45, deepF);
+    if (sf > 0) {
+      this.fogStartEffective = M.lerp(this.fogStartEffective,
+        STORM_FOG.startDistance, sf);
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // The storm's fog density target: whatever weather.js publishes, or the
+  // authored default until it does. Clamped hard - this number multiplies a
+  // distance, so a wrong one by an order of magnitude is either no fog at all
+  // or a white screen, and neither should be reachable from another module's
+  // units mismatch.
+  // --------------------------------------------------------------------------
+  Sky.prototype._stormFogDensity = function () {
+    var d = this._wxFog;
+    if (isFinite(d) && d > 0) return M.clamp(d, 0.008, 0.045);
+    return STORM_FOG.density;
+  };
+
+  // Blend one authored fog parameter toward its storm counterpart. Returns the
+  // authored value EXACTLY (not a lerp by zero) when there is no storm, so the
+  // market's uniforms are untouched down to the last bit.
+  Sky.prototype._fogParam = function (key) {
+    var base = this.fog[key];
+    var sf = M.saturate(this._stormF);
+    if (!(sf > 0)) return base;
+    var storm = STORM_FOG[key];
+    if (!isFinite(storm)) return base;
+    return M.lerp(base, storm, sf);
   };
 
   // --------------------------------------------------------------------------
@@ -1581,6 +2428,21 @@
     // only lit air left is 40 km up and behind a very long slant path.
     var afterglow = M.smoothstep(9, 1, degEl) * M.smoothstep(-13, -3, degEl);
     var nightF = M.smoothstep(-1, -9, degEl);
+
+    // ---- what a cloud deck does to the authored night layers ----------------
+    // Exactly 1.0 with no storm, so every existing capture is bit-identical.
+    //
+    // Under one, both authored layers have to come DOWN, and the second reason
+    // is the one that was measured rather than reasoned about. The airglow is
+    // obvious: it is emitted 90 km up and a nimbostratus deck is opaque to it.
+    // The city skyglow is subtler and it is a DOUBLE COUNT: NIGHT_SODIUM models
+    // lamplight scattered back off aerosol, and the storm deck's underglow
+    // models exactly the same lamplight scattered back off cloud. Leaving both
+    // on put the LUT horizon at 0.042 radiance against a deck of 0.012, so
+    // wherever the deck thinned it revealed something four times BRIGHTER
+    // behind it - a hot white band along the skyline, under a dark lid, which
+    // is the one place in the frame the eye goes first.
+    var stormK = 1.0 - 0.90 * M.saturate(this._stormF);
 
     // Shoulder target for the physical daylight terms, in the same HDR units as
     // everything else. keyRef is the radiance of a mid-grey horizontal surface
@@ -1732,9 +2594,9 @@
           var azFall = Math.pow(Math.max(0.0, Math.cos(az)), 2.2);
           var upFall = Math.exp(-Math.max(0.0, viewEl) / 0.13);
           var dnFall = Math.exp(Math.min(0.0, viewEl) / 0.055);
-          var wLow = afterglow * upFall * dnFall * (0.16 + 0.84 * azFall) * SKY_SCALE;
+          var wLow = afterglow * upFall * dnFall * (0.16 + 0.84 * azFall) * SKY_SCALE * stormK;
           var wHigh = afterglow * Math.exp(-Math.max(0.0, viewEl - 0.10) / 0.38) *
-                      dnFall * (0.30 + 0.70 * azFall) * 0.55 * SKY_SCALE;
+                      dnFall * (0.30 + 0.70 * azFall) * 0.55 * SKY_SCALE * stormK;
           iso0 += AFTERGLOW_LOW[0] * wLow + AFTERGLOW_HIGH[0] * wHigh;
           iso1 += AFTERGLOW_LOW[1] * wLow + AFTERGLOW_HIGH[1] * wHigh;
           iso2 += AFTERGLOW_LOW[2] * wLow + AFTERGLOW_HIGH[2] * wHigh;
@@ -1743,7 +2605,7 @@
         // --- night airglow floor (never let the sky go to pure black) --------
         if (nightF > 0.001) {
           var hzf = Math.exp(-Math.max(0.0, viewEl) / 0.32) * Math.exp(Math.min(0.0, viewEl) / 0.10);
-          var nf = nightF * SKY_SCALE;
+          var nf = nightF * SKY_SCALE * stormK;
           iso0 += nf * (NIGHT_ZENITH[0] + hzf * NIGHT_HORIZON[0]);
           iso1 += nf * (NIGHT_ZENITH[1] + hzf * NIGHT_HORIZON[1]);
           iso2 += nf * (NIGHT_ZENITH[2] + hzf * NIGHT_HORIZON[2]);
@@ -1991,6 +2853,173 @@
       if (this._fogSun[c] < floor) this._fogSun[c] = floor;
       if (this._fogGnd[c] < floor * 0.7) this._fogGnd[c] = floor * 0.7;
     }
+
+    // Last, so it can override everything above with values that came from the
+    // deck instead of from a clear column. No-op without a storm.
+    this._applyStormAmbient();
+  };
+
+  // --------------------------------------------------------------------------
+  // The storm deck's own radiance at one elevation, in its MEAN noise state.
+  //
+  // This mirrors the shader's deck exactly, minus the texture lookups. It has
+  // to: _deriveAmbient integrates the LUT to decide what the scene is LIT by,
+  // and the LUT knows nothing about the deck, so without this the harbor would
+  // be lit by the clear night sky it cannot see while being shown a storm.
+  // That split is precisely the bug this file's DAY_GAIN comment warns about,
+  // in reverse - and it is the reason wet metal is the first thing that gives
+  // an overcast away: nearly all of its value is reflected sky.
+  //
+  // "Exactly" is now enforced rather than asserted. Every coefficient below is
+  // the same named constant the GLSL string is built from, and every noise
+  // channel is replaced by its MEAN (thickness, cell bulge, macro and - new -
+  // the azimuthal glow lobe, whose average over a full turn of the compass is
+  // what the scene is lit by even though only the lobes are what you see). The
+  // previous version carried its own hand-copied numbers and had drifted 1.74x
+  // away from the shader, so the IBL was lighting the terminal with a deck
+  // nearly a stop brighter than the one on screen.
+  // --------------------------------------------------------------------------
+  Sky.prototype._stormDeckRadiance = function (elevSin, out) {
+    var up = Math.max(elevSin, 0.0);
+    var horiz = Math.exp(-up * 3.2);
+    var thick = STORM_MEAN_THICK;
+    // Cold term. STORM_BAND_* has mean 1.0 by construction, so it drops out.
+    var k = STORM_DECK_MIN + STORM_DECK_RANGE * STORM_MEAN_TRANS;
+    // Hue tint (luminance-neutral, so it only shifts the balance).
+    var tR = 0.88 + (1.08 - 0.88) * thick;
+    var tG = 0.99 + (1.00 - 0.99) * thick;
+    var tB = 1.17 + (0.90 - 1.17) * thick;
+    // Warm term: elevation falloff x mean azimuthal lobe x macro x back-scatter
+    // saturation x mean cell bulge.
+    var refl = thick * (STORM_REFL_A - STORM_REFL_B * thick);
+    var bulge = STORM_CELL_LO + STORM_CELL_HI * STORM_MEAN_BULGE;
+    var glow = Math.exp(-up / STORM_GLOW_FALL) * STORM_MEAN_AZ *
+      (STORM_MACRO_LO + STORM_MACRO_HI * 0.5) * refl * bulge;
+    // Ground-bounce dome, evaluated for an eye standing ON the terminal (the
+    // only place the IBL is ever sampled from). The shader intersects the view
+    // ray with the cloud base in world space; the mirror does the same thing in
+    // closed form, because from the centre of the lit patch the horizontal
+    // distance to the intersection is just h/tan(elevation).
+    var dome = 0;
+    var sEl = Math.max(up, 0.05);
+    var cEl = Math.sqrt(Math.max(0.0, 1.0 - sEl * sEl));
+    var rr = (this._bounceH - 1.7) * cEl / sEl / Math.max(this._bounceR, 1e-3);
+    dome = 1.0 / (1.0 + rr * rr);
+    dome *= (STORM_BOUNCE_AZ_LO + STORM_BOUNCE_AZ_HI * STORM_MEAN_AZ) * refl * bulge;
+    for (var c = 0; c < 3; c++) {
+      var amb = STORM_ZENITH[c] + (STORM_HORIZON[c] - STORM_ZENITH[c]) * horiz;
+      var d = amb * k * (c === 0 ? tR : (c === 1 ? tG : tB)) +
+        STORM_GLOW[c] * glow + STORM_BOUNCE[c] * dome;
+      // Same soft toe the shader applies, so the IBL sees the deck that is
+      // actually drawn rather than an idealised one two stops down in the dark.
+      var f = STORM_DECK_FLOOR[c];
+      out[c] = f + d * d / Math.max(d + f, 1e-6);
+    }
+    return out;
+  };
+
+  // --------------------------------------------------------------------------
+  // Replace every LIGHT term the clear-sky path derived with one taken off the
+  // storm deck. Runs at the very end of _deriveAmbient and returns immediately
+  // when _stormF is 0.
+  //
+  // The magnitudes are authored absolutes rather than multiples of keyRef - see
+  // the STORM WEATHER header for why a key reference is meaningless at 02:00
+  // under nimbostratus - but the SHAPE is integrated, not guessed: the
+  // hemisphere fill is a genuine cosine-weighted integral of the same deck the
+  // player is looking at, so the sodium underglow (which lives low, where the
+  // cosine weight is small) contributes to the fill exactly as much as it
+  // physically should and no more.
+  // --------------------------------------------------------------------------
+  var _stormRad = [0, 0, 0];
+  Sky.prototype._applyStormAmbient = function () {
+    var sf = M.saturate(this._stormF);
+    if (!(sf > 0.001)) return;
+    var EL = 24, j, c;
+
+    // Cosine-weighted upper-hemisphere mean (the irradiance the sky delivers)
+    // and a full-hemisphere mean (what a rough surface reflects).
+    var ambR = 0, ambG = 0, ambB = 0, ambW = 0;
+    var fillR = 0, fillG = 0, fillB = 0, fillW = 0;
+    for (j = 0; j < EL; j++) {
+      var el = (PI * 0.5) * (j + 0.5) / EL;
+      var s = Math.sin(el), cw = Math.cos(el) * s;
+      this._stormDeckRadiance(s, _stormRad);
+      ambR += _stormRad[0] * cw; ambG += _stormRad[1] * cw; ambB += _stormRad[2] * cw;
+      ambW += cw;
+      // The "fill" a surface down in a container canyon sees is the strip of
+      // sky above it, so it is weighted toward the zenith the same way the
+      // clear-sky path weights it.
+      var fw = Math.cos(el) * Math.pow(s, 3.0);
+      fillR += _stormRad[0] * fw; fillG += _stormRad[1] * fw; fillB += _stormRad[2] * fw;
+      fillW += fw;
+    }
+    if (ambW > 0) { ambR /= ambW; ambG /= ambW; ambB /= ambW; }
+    if (fillW > 0) { fillR /= fillW; fillG /= fillW; fillB /= fillW; }
+
+    var lum = 0.2126 * fillR + 0.7152 * fillG + 0.0722 * fillB;
+
+    this.ambientColor.setRGB(
+      M.lerp(this.ambientColor.r, ambR, sf),
+      M.lerp(this.ambientColor.g, ambG, sf),
+      M.lerp(this.ambientColor.b, ambB, sf));
+    this.skyColor.setRGB(
+      M.lerp(this.skyColor.r, STORM_SKY_HUE[0], sf),
+      M.lerp(this.skyColor.g, STORM_SKY_HUE[1], sf),
+      M.lerp(this.skyColor.b, STORM_SKY_HUE[2], sf));
+    this.zenithColor.setRGB(
+      M.lerp(this.zenithColor.r, STORM_ZENITH_HUE[0], sf),
+      M.lerp(this.zenithColor.g, STORM_ZENITH_HUE[1], sf),
+      M.lerp(this.zenithColor.b, STORM_ZENITH_HUE[2], sf));
+    // The lower hemisphere of a lit terminal is not a sand bounce - it is a
+    // black wet apron with sodium pools on it, so the bounce is warm, and it is
+    // the ONLY warm term left in the rig now that the moon has gone.
+    this.groundColor.setRGB(
+      M.lerp(this.groundColor.r, STORM_GND_HUE[0], sf),
+      M.lerp(this.groundColor.g, STORM_GND_HUE[1], sf),
+      M.lerp(this.groundColor.b, STORM_GND_HUE[2], sf));
+
+    this.fillRadiance = M.lerp(this.fillRadiance, lum, sf);
+    this.ambientIntensity = M.clamp(this.fillRadiance * PI * 1.36, 0.035, 0.95);
+
+    // horizonColor is what lighting.js uses as the WARM half of the night key
+    // (see its _readSky). Handing it the deck's underglow rather than a
+    // twilight band is what keeps that key from reading as a sunset.
+    this._stormDeckRadiance(0.02, _stormRad);
+    this.horizonColor.setRGB(
+      M.lerp(this.horizonColor.r, _stormRad[0], sf),
+      M.lerp(this.horizonColor.g, _stormRad[1], sf),
+      M.lerp(this.horizonColor.b, _stormRad[2], sf));
+
+    // ---- inscatter --------------------------------------------------------
+    // Authored hue, authored magnitude, no cap against keyRef. The cap upstream
+    // measures the haze against a mid-grey card in the key; under this sky that
+    // card is lit by nothing at all, so the cap would drive the far end of the
+    // terminal to black - the exact failure NIGHT_HAZE_K was added to fix, one
+    // step worse. The reference that governs these three numbers is the
+    // lamp-lit ground, and they are all comfortably under it.
+    this._stormFogColor(this._fogSky, STORM_HAZE_HUE, STORM_FOG_SKY_LUM, sf, 0.0);
+    this._stormFogColor(this._fogSun, STORM_HAZE_HUE, STORM_FOG_SUN_LUM, sf, 0.45);
+    // Only half-way to sodium. The bounce off a lamp-lit wet apron is warm, but
+    // pure #ff9a3c below the horizon put a saturated amber floor under the
+    // whole dome on the probe, and this triple is also what tints every
+    // downward-looking fog ray in the level.
+    this._stormFogColor(this._fogGnd, STORM_HAZE_HUE, STORM_FOG_GND_LUM, sf, 0.55);
+  };
+
+  // Blend one inscatter triple toward `hue` (max-normalised) at the given
+  // luminance, optionally warmed toward sodium by `warm`.
+  var _stormHue = [0, 0, 0];
+  Sky.prototype._stormFogColor = function (dst, hue, targetLum, sf, warm) {
+    var c, l = 0;
+    for (c = 0; c < 3; c++) {
+      _stormHue[c] = hue[c] + (STORM_SODIUM_HUE[c] - hue[c]) * warm;
+    }
+    l = 0.2126 * _stormHue[0] + 0.7152 * _stormHue[1] + 0.0722 * _stormHue[2];
+    var k = targetLum / Math.max(l, 1e-6);
+    for (c = 0; c < 3; c++) {
+      dst[c] = dst[c] + (_stormHue[c] * k - dst[c]) * sf;
+    }
   };
 
   // Scale an RGB triple in place so its luminance does not exceed `maxLum`,
@@ -2011,6 +3040,10 @@
     try {
       this._makeLutTextures();
       this._makeDome();
+      // Resolve the weather BEFORE the first LUT build, so the derived ambient,
+      // every fog colour and the IBL are all generated once, in the right
+      // condition, instead of being generated clear and then thrown away.
+      this._resolveWeather(ctx);
       if (GAME.yieldFrame) await GAME.yieldFrame();
 
       this._buildLut();
@@ -2068,7 +3101,27 @@
       uCloud: { value: new THREE.Vector4(CLOUD_COVER, CLOUD_AMOUNT, CLOUD_BEER, 0) },
       uCloudSun: { value: new THREE.Vector3(0.42, 0.36, 0.28) },
       uCloudAmb: { value: new THREE.Vector3(0.09, 0.10, 0.13) },
-      uDay: { value: new THREE.Vector4(1.0, 1e9, 2e9, CLOUD_SCALE) }
+      uDay: { value: new THREE.Vector4(1.0, 1e9, 2e9, CLOUD_SCALE) },
+      // ---- storm deck. uStorm.x = 0 makes the whole block dead code. -------
+      // The texture stays null until setWeather() asks for one: generating a
+      // 256^2 four-channel noise field costs about half a second and the market
+      // level must not pay it. three binds its own empty texture for a null
+      // sampler (the dust field's uShadowMap has relied on that for two
+      // rounds), so an unused sampler here is safe.
+      uStormTex: { value: null },
+      uStorm: { value: new THREE.Vector4(0, STORM_COVER, STORM_DETAIL, 0) },
+      uStormDrift: { value: new THREE.Vector4(0, 0, 0, 0) },
+      uStormLow: { value: new THREE.Vector3(STORM_HORIZON[0], STORM_HORIZON[1], STORM_HORIZON[2]) },
+      uStormHigh: { value: new THREE.Vector3(STORM_ZENITH[0], STORM_ZENITH[1], STORM_ZENITH[2]) },
+      uStormGlow: { value: new THREE.Vector3(STORM_GLOW[0], STORM_GLOW[1], STORM_GLOW[2]) },
+      uStormBounce: { value: new THREE.Vector3(STORM_BOUNCE[0], STORM_BOUNCE[1], STORM_BOUNCE[2]) },
+      uStormBase: {
+        value: new THREE.Vector4(STORM_BOUNCE_H,
+          1.0 / (STORM_BOUNCE_R * STORM_BOUNCE_R),
+          STORM_BOUNCE_CTR[0], STORM_BOUNCE_CTR[1])
+      },
+      uFlash: { value: new THREE.Vector4(0, 0, 0, STORM_FLASH_TIGHT) },
+      uFlashDir: { value: new THREE.Vector3(0.42, 0.62, -0.66).normalize() }
     };
 
     var mat = this._skyMaterial = new THREE.ShaderMaterial({
@@ -2165,6 +3218,138 @@
     this.dustParticles.receiveShadow = false;
   };
 
+  // ==========================================================================
+  // STORM CLOUD FIELD
+  //
+  // One 256x256 RGBA data texture, built on the CPU out of GAME.Noise, sampled
+  // three times at different scales and drifts by the dome shader.
+  //
+  // WHY A TEXTURE AND NOT PURE GLSL. The obvious implementation is fbm in the
+  // fragment shader, and it is the wrong one here. A convincing storm base
+  // needs four octaves of fbm plus a worley layer per sample and three samples
+  // per pixel; on the software rasteriser the capture harness runs that is
+  // roughly eighty hash evaluations for every sky pixel in a 1280x720 frame,
+  // and the sky is 40% of this level's pixels. Baking it costs half a second
+  // once, at load, and turns the per-pixel cost into three texture fetches -
+  // which are also MIPMAPPED, and that matters more than the speed: the deck
+  // projection compresses toward the horizon without limit, and a procedural
+  // fbm has no way to filter itself there. It aliases into a crawling band
+  // along the skyline. The mip chain solves that for free.
+  //
+  // CHANNELS
+  //   r  base masses      fbm, 3 octaves, low frequency - the deck itself
+  //   g  mid structure    fbm, 4 octaves - the rolls and rifts inside it
+  //   b  cells            inverted worley - the sagging cells of the base,
+  //                       which is what the sodium underglow lands on
+  //   a  wisps            ridged fbm - torn scud, the highest frequency layer
+  //
+  // SEAMLESSNESS. GAME.Noise's lattice has a period of 256 units, so the
+  // obvious "sample one whole period" trick would need 256 cells across the
+  // texture, i.e. white noise. Instead each channel is evaluated four times,
+  // at (x, y), (x-F, y), (x, y-F) and (x-F, y-F), and bilinearly blended by
+  // (u, v). At u = 1 the first term's argument is x = F and the second's is 0,
+  // so opposite edges are the same sample by construction and the tile is exact
+  // for ANY frequency. It costs 4x the noise evaluations and slightly flattens
+  // the contrast mid-tile, which the curve below puts back.
+  //
+  // A visible seam in a sky is a straight line across the whole frame. There is
+  // no such thing as an acceptable one.
+  // ==========================================================================
+  Sky.prototype._makeStormTexture = function () {
+    if (this._stormTex) return this._stormTex;
+    try {
+      var S = STORM_TEX_SIZE;
+      var noise = new GAME.Noise(0x57C10D);
+      var data = new Uint8Array(S * S * 4);
+
+      // Hoisted so the inner loop allocates nothing.
+      var fBase = function (x, y) { return noise.fbm2(x, y, 3, 2.0, 0.52); };
+      var fMid = function (x, y) { return noise.fbm2(x, y, 4, 2.0, 0.50); };
+      // worley2 returns { f1, f2, edge }, not a scalar. f1 is the distance to
+      // the nearest feature point, so 1 - f1 is bright at cell CENTRES - which
+      // is what a sagging cloud cell is: a bulge, brightest where it hangs
+      // lowest and closest to the lamps.
+      var fCell = function (x, y) {
+        var w = noise.worley2(x, y, 1.0);
+        return 1.0 - Math.min(1.0, w.f1);
+      };
+      var fWisp = function (x, y) { return noise.ridged2(x, y, 3); };
+
+      var FB = 3, FM = 7, FC = 5, FW = 11;   // cells across the tile per channel
+
+      var i, j, o, u, v;
+      var a0, a1, a2, a3, w0, w1, w2, w3;
+      for (j = 0; j < S; j++) {
+        v = j / S;
+        for (i = 0; i < S; i++) {
+          u = i / S;
+          o = (j * S + i) * 4;
+          w0 = (1 - u) * (1 - v); w1 = u * (1 - v);
+          w2 = (1 - u) * v;       w3 = u * v;
+
+          // r ---------------------------------------------------------------
+          a0 = fBase(u * FB, v * FB);
+          a1 = fBase(u * FB - FB, v * FB);
+          a2 = fBase(u * FB, v * FB - FB);
+          a3 = fBase(u * FB - FB, v * FB - FB);
+          data[o] = _stormByte((a0 * w0 + a1 * w1 + a2 * w2 + a3 * w3) * 1.55 + 0.5, 1.25);
+
+          // g ---------------------------------------------------------------
+          a0 = fMid(u * FM, v * FM);
+          a1 = fMid(u * FM - FM, v * FM);
+          a2 = fMid(u * FM, v * FM - FM);
+          a3 = fMid(u * FM - FM, v * FM - FM);
+          data[o + 1] = _stormByte((a0 * w0 + a1 * w1 + a2 * w2 + a3 * w3) * 1.75 + 0.5, 1.10);
+
+          // b ---------------------------------------------------------------
+          a0 = fCell(u * FC, v * FC);
+          a1 = fCell(u * FC - FC, v * FC);
+          a2 = fCell(u * FC, v * FC - FC);
+          a3 = fCell(u * FC - FC, v * FC - FC);
+          data[o + 2] = _stormByte(a0 * w0 + a1 * w1 + a2 * w2 + a3 * w3, 0.85);
+
+          // a ---------------------------------------------------------------
+          a0 = fWisp(u * FW, v * FW);
+          a1 = fWisp(u * FW - FW, v * FW);
+          a2 = fWisp(u * FW, v * FW - FW);
+          a3 = fWisp(u * FW - FW, v * FW - FW);
+          data[o + 3] = _stormByte(a0 * w0 + a1 * w1 + a2 * w2 + a3 * w3, 1.35);
+        }
+      }
+
+      var tex = new THREE.DataTexture(data, S, S, THREE.RGBAFormat,
+        THREE.UnsignedByteType);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.generateMipmaps = true;
+      tex.anisotropy = 4;
+      // Density/structure data, not albedo. sRGB here would gamma-crush the
+      // thin patches - the exact detail the deck's depth is carried by.
+      tex.colorSpace = THREE.NoColorSpace;
+      tex.needsUpdate = true;
+      this._stormTex = tex;
+      if (this._skyUniforms && this._skyUniforms.uStormTex) {
+        this._skyUniforms.uStormTex.value = tex;
+      }
+      return tex;
+    } catch (e) {
+      GAME.logError('sky.stormTexture', e);
+      return null;
+    }
+  };
+
+  // Remap a blended noise value into a byte with a contrast curve that puts
+  // back what the four-corner tiling blend takes out.
+  function _stormByte(v, contrast) {
+    var t = M.saturate(v);
+    if (contrast !== 1.0) {
+      t = M.saturate(0.5 + (t - 0.5) * contrast);
+    }
+    return Math.round(t * 255);
+  }
+
   Sky.prototype._installScene = function (ctx) {
     if (!ctx || !ctx.scene) return;
     if (this.mesh) ctx.scene.add(this.mesh);
@@ -2221,15 +3406,21 @@
     // f.density - setFog() would be overwritten and repeated calls would
     // compound the multiplier.
     var d = f.enabled ? this.fogDensityEffective : 0.0;
+    // _fogParam() returns the authored value unchanged with no storm, and
+    // blends toward STORM_FOG with one. A downpour is not a thicker version of
+    // dust haze: it fills the whole column rather than hugging the ground
+    // (heightScale), it scatters almost isotropically because there is no key
+    // to forward-scatter from (mieG), and it eats chroma at distance far
+    // harder than dry air does (desaturate).
     this._fogA[0] = d;
-    this._fogA[1] = 1.0 / Math.max(0.5, f.heightScale);
+    this._fogA[1] = 1.0 / Math.max(0.5, this._fogParam('heightScale'));
     this._fogA[2] = f.baseY;
     this._fogA[3] = isFinite(this.fogStartEffective)
       ? this.fogStartEffective : Math.max(0.0, f.startDistance);
-    this._fogB[0] = M.saturate(f.maxOpacity);
-    this._fogB[1] = M.clamp(f.mieG, 0.0, 0.92);
-    this._fogB[2] = Math.max(0.0, f.glowGain);
-    this._fogB[3] = M.saturate(f.desaturate);
+    this._fogB[0] = M.saturate(this._fogParam('maxOpacity'));
+    this._fogB[1] = M.clamp(this._fogParam('mieG'), 0.0, 0.92);
+    this._fogB[2] = Math.max(0.0, this._fogParam('glowGain'));
+    this._fogB[3] = M.saturate(this._fogParam('desaturate'));
     this._fogDir[0] = this.sunDirection.x;
     this._fogDir[1] = this.sunDirection.y;
     this._fogDir[2] = this.sunDirection.z;
@@ -2294,8 +3485,36 @@
         this.skyColor.b * amb);
       if (u.uCloud) {
         u.uCloud.value.x = CLOUD_COVER;
-        u.uCloud.value.y = CLOUD_AMOUNT;
+        // The clear sky's broken cirrus band has no business under a storm
+        // deck, and leaving it on would put a second, differently-lit cloud
+        // layer inside the first. Exactly CLOUD_AMOUNT when _stormF is 0.
+        u.uCloud.value.y = CLOUD_AMOUNT * (1.0 - M.saturate(this._stormF));
         u.uCloud.value.z = CLOUD_BEER;
+      }
+
+      // ---- storm deck ------------------------------------------------------
+      if (u.uStorm) {
+        var sf = M.saturate(this._stormF);
+        u.uStorm.value.set(sf, STORM_COVER, STORM_DETAIL, this._windAngle);
+        if (sf > 0 && this._stormTex && u.uStormTex) {
+          u.uStormTex.value = this._stormTex;
+        }
+        u.uStormLow.value.set(STORM_HORIZON[0], STORM_HORIZON[1], STORM_HORIZON[2]);
+        u.uStormHigh.value.set(STORM_ZENITH[0], STORM_ZENITH[1], STORM_ZENITH[2]);
+        u.uStormGlow.value.set(STORM_GLOW[0], STORM_GLOW[1], STORM_GLOW[2]);
+        if (u.uStormBounce) {
+          u.uStormBounce.value.set(STORM_BOUNCE[0], STORM_BOUNCE[1], STORM_BOUNCE[2]);
+        }
+        if (u.uStormBase) {
+          u.uStormBase.value.set(this._bounceH,
+            1.0 / (this._bounceR * this._bounceR),
+            this._bounceCtr.x, this._bounceCtr.y);
+        }
+        u.uStormDrift.value.set(this._driftNear.x, this._driftNear.y,
+          this._driftFar.x, this._driftFar.y);
+        u.uFlash.value.set(this._flashRGB.x, this._flashRGB.y, this._flashRGB.z,
+          STORM_FLASH_TIGHT);
+        u.uFlashDir.value.copy(this._flashDir);
       }
     }
 
@@ -2455,6 +3674,356 @@
     }
   };
 
+  // ==========================================================================
+  // WEATHER
+  // ==========================================================================
+  /**
+   * Select the atmospheric condition.
+   *
+   *   sky.setWeather('clear')    the default, and every previous behaviour of
+   *                              this module, unchanged.
+   *   sky.setWeather('storm')    a full nimbostratus deck: no stars, no moon
+   *                              disc, no sun disc, a very low cold ambient, a
+   *                              sodium underglow on the cloud base, dense
+   *                              cold rain haze, and an IBL regenerated from
+   *                              that dome so wet surfaces and metal reflect an
+   *                              overcast instead of a night sky.
+   *   sky.setWeather('drizzle')  the same deck at 55% - thinner, some sky
+   *                              still showing through, lighter haze.
+   *   sky.setWeather('overcast') the deck without the rain fog levels.
+   *
+   * Safe to call before build() (the state is applied and build() picks it up)
+   * and safe to call repeatedly with the same value (it returns immediately
+   * rather than regenerating the environment). Never throws.
+   *
+   * This is the ONLY door into the storm path. Nothing in this module changes
+   * behaviour without it, which is why level 1 is guaranteed unchanged.
+   */
+  Sky.prototype.setWeather = function (preset) {
+    try {
+      var name = (typeof preset === 'string') ? preset.toLowerCase() : 'clear';
+      var f = 0;
+      if (name === 'storm') f = 1.0;
+      else if (name === 'overcast') f = 0.85;
+      else if (name === 'drizzle') f = 0.55;
+      else name = 'clear';
+
+      if (this.weatherPreset === name && this._built) return;
+      this.weatherPreset = name;
+      this._stormF = f;
+      if (f > 0) this._makeStormTexture();
+
+      // Cheap: sun/moon geometry has not moved, only what the deck does to it.
+      this._computeLightingTerms();
+      if (!this._built) {
+        // Remember it so _resolveWeather does not overrule an explicit
+        // pre-build call with the level registry's declaration.
+        this._pendingWeather = name;
+        return;
+      }
+
+      // The LUT itself is unchanged by weather (the deck is a separate layer),
+      // but _deriveAmbient hangs off it and now has to run the storm override,
+      // so go through _buildLut rather than calling _deriveAmbient directly -
+      // _buildLut is also what re-runs the haze schedule the caps depend on.
+      this._buildLut();
+      this._pushUniforms();
+      // The whole point of the exercise: metals and wet concrete get nearly all
+      // their visible value from what they reflect, so a storm sky that is not
+      // in the probe is a storm sky that does not exist as far as every wet
+      // surface in the terminal is concerned.
+      this._regenerateEnvironment();
+    } catch (e) { GAME.logError('sky.setWeather', e); }
+  };
+
+  /**
+   * Decide the condition at build time.
+   *
+   * Precedence: an explicit setWeather() call before build() wins; then the
+   * level registry's own declaration (main.js publishes ctx.levelDef.weather,
+   * which is null for the market and 'storm' for the harbor); then ctx.levelId
+   * as a last resort in case a level ships without declaring one.
+   *
+   * The market's levelDef declares weather: null, so this resolves to 'clear'
+   * and every line of the storm path stays dead for level 1.
+   */
+  Sky.prototype._resolveWeather = function (ctx) {
+    try {
+      var want = this._pendingWeather;
+      // ?weather=storm on the capture URL. A QA hook, not a default: it exists
+      // so the dome, the IBL and the haze can be photographed and graded on
+      // their own, without waiting on a level module, and so a critic can put
+      // the same sky over two different sets of geometry. Nothing sets it
+      // unless someone types it.
+      if (!want && GAME.params && typeof GAME.params.weather === 'string') {
+        want = GAME.params.weather;
+      }
+      if (!want && ctx && ctx.levelDef && typeof ctx.levelDef.weather === 'string') {
+        want = ctx.levelDef.weather;
+      }
+      if (!want && ctx && ctx.levelId === 'harbor') want = 'storm';
+      if (!want) return;
+      this._pendingWeather = null;
+      // Not setWeather(): _built is still false, so this only lands the state
+      // and lets build()'s own _buildLut / _pushUniforms / environment pass
+      // pick it up. Calling the public method here would work but would
+      // regenerate the PMREM twice.
+      var name = String(want).toLowerCase();
+      var f = name === 'storm' ? 1.0
+            : name === 'overcast' ? 0.85
+            : name === 'drizzle' ? 0.55 : 0.0;
+      if (f <= 0) return;
+      this.weatherPreset = name;
+      this._stormF = f;
+      this._makeStormTexture();
+      this._computeLightingTerms();
+    } catch (e) { GAME.logError('sky.resolveWeather', e); }
+  };
+
+  // --------------------------------------------------------------------------
+  // Per-frame read of the weather contract (src/fx/weather.js).
+  //
+  // weather.js is built AFTER this module and updated after it too, so what we
+  // read here is one frame old. That is correct and deliberate: a flash lasts
+  // 60-180 ms, i.e. 4-11 frames, so a one-frame lag is invisible, and trying to
+  // read it earlier in the frame would mean depending on a system that may not
+  // exist yet.
+  //
+  // Everything is guarded field by field. weather.js is another agent's module;
+  // a missing field must degrade, never throw out of the frame loop.
+  // --------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
+  // The key irradiance the scene is receiving from THIS frame's strike.
+  //
+  // lighting.js already computes it (Lighting.keyIntensity, from its own harbor
+  // budget minus whatever weather.js's flash light is spending), so the honest
+  // thing is to read it rather than to re-derive it from constants that live in
+  // a different file and are retuned by a different agent. That is the whole
+  // point of the fix: ONE number sizes the strike, and it is the one the scene
+  // actually gets lit by.
+  //
+  // The one wrinkle is ORDER. sky.js updates before lighting.js, so
+  // lighting.keyIntensity on entry belongs to the flash value this module read
+  // LAST frame, not to the one it is about to publish. Using it directly would
+  // put the deck one frame behind the ground on a 4-11 frame event, i.e.
+  // visibly wrong on exactly the two frames that matter (the rise and the
+  // peak). So what is observed is the RATIO - irradiance per unit of flash,
+  // which is a property of lighting.js's budget and changes only when someone
+  // retunes it - and this frame's own flash is applied to that. Linear, exact
+  // while lighting.js's own expression is linear (it is: a max of three terms
+  // proportional to `raw`), and self-correcting the moment it is not.
+  //
+  // Everything degrades: no ctx.lighting, no keyIntensity, a NaN, a zero, or a
+  // build where fx/weather.js never fires - any of them leaves the authored
+  // fallback coefficient in place and the deck still flashes.
+  Sky.prototype._strikeKey = function (ctx, flash) {
+    var lg = ctx && ctx.lighting;
+    var ki = (lg && isFinite(lg.keyIntensity)) ? lg.keyIntensity : NaN;
+    var prev = this._flashPrevRead;
+    if (isFinite(ki) && ki > 0.05 && prev > 0.12) {
+      this._keyPerFlash = M.clamp(ki / prev,
+        STORM_FLASH_KEY_MIN, STORM_FLASH_KEY_MAX);
+    }
+    var k = this._keyPerFlash * M.saturate(flash);
+    return isFinite(k) ? k : 0;
+  };
+
+  // --------------------------------------------------------------------------
+  // Put the ground-bounce dome over the lamps that actually exist.
+  //
+  // sky.js is built BEFORE the level, so this cannot happen at build time; it
+  // runs from the frame loop, latches the first time the level publishes a lamp
+  // survey, and costs one boolean test after that. Reads `anchors.masts` first
+  // (level_harbor's own survey, documented as available immediately) and falls
+  // back to `practicalLights`, which every level publishes.
+  //
+  // The centroid is intensity-weighted because the dome is a light, not a
+  // bounding box: two quay masts at 720 and 760 candela-units pull the glow
+  // seaward, which is where it belongs and which no unweighted average would
+  // find. The radius is the weighted RMS spread with a floor - light spreads
+  // sideways inside the deck, so the patch on the base is always broader than
+  // the patch on the ground, and a lit area that measured tighter than the
+  // cloud is high would produce a hard disc overhead instead of a dome.
+  // --------------------------------------------------------------------------
+  Sky.prototype._syncBounceCentre = function (ctx) {
+    if (this._bounceSolved) return;
+    try {
+      var lv = ctx && ctx.level;
+      if (!lv) return;
+      var list = (lv.anchors && lv.anchors.masts) || lv.practicalLights;
+      if (!list || !list.length) return;
+      var sx = 0, sz = 0, sw = 0, i, e, p, w;
+      for (i = 0; i < list.length; i++) {
+        e = list[i];
+        if (!e) continue;
+        p = e.head || e.position || e.base || e.centre;
+        if (!p || !isFinite(p.x) || !isFinite(p.z)) continue;
+        w = isFinite(e.I) ? e.I : (isFinite(e.intensity) ? e.intensity : 1);
+        if (!(w > 0)) w = 1;
+        sx += p.x * w; sz += p.z * w; sw += w;
+      }
+      if (!(sw > 0)) { this._bounceSolved = true; return; }
+      var cx = sx / sw, cz = sz / sw;
+      var vr = 0;
+      for (i = 0; i < list.length; i++) {
+        e = list[i];
+        if (!e) continue;
+        p = e.head || e.position || e.base || e.centre;
+        if (!p || !isFinite(p.x) || !isFinite(p.z)) continue;
+        w = isFinite(e.I) ? e.I : (isFinite(e.intensity) ? e.intensity : 1);
+        if (!(w > 0)) w = 1;
+        var dx = p.x - cx, dz = p.z - cz;
+        vr += (dx * dx + dz * dz) * w;
+      }
+      var spread = Math.sqrt(Math.max(0, vr / sw));
+      var oldR = this._bounceR;
+      this._bounceCtr.set(cx, cz);
+      // Never tighter than the base is high, never wider than four times it.
+      this._bounceR = M.clamp(spread * 2.6 + STORM_BOUNCE_H * 0.55,
+        STORM_BOUNCE_H, STORM_BOUNCE_H * 4.0);
+      this._bounceSolved = true;
+      var u = this._skyUniforms;
+      if (u && u.uStormBase) {
+        u.uStormBase.value.set(this._bounceH,
+          1.0 / (this._bounceR * this._bounceR),
+          this._bounceCtr.x, this._bounceCtr.y);
+      }
+      // The IBL and every derived fill are integrated off the CPU mirror of the
+      // deck, and the mirror depends on the RADIUS (the centre only moves the
+      // picture, since the probe is captured from the middle of the terminal
+      // either way). So the expensive half only runs when the survey actually
+      // disagrees with the authored default, which on the shipped harbor it
+      // barely does - and never runs more than once per level load.
+      if (this._built && Math.abs(this._bounceR - oldR) > oldR * 0.05) {
+        this._deriveAmbient();
+        this._regenerateEnvironment();
+      }
+    } catch (e2) { this._bounceSolved = true; }
+  };
+
+  Sky.prototype._syncWeather = function (dt, ctx) {
+    if (!(this._stormF > 0)) return;
+    var w = ctx && ctx.weather;
+    var t = (ctx && ctx.time) || 0;
+
+    // ---- wind-driven deck drift --------------------------------------------
+    // Integrated, not t * speed, so a wind that ramps does not teleport the
+    // deck. The far layer moves at 0.38 of the near one: same wind, a longer
+    // lever arm, which is exactly what makes the two read as different
+    // distances rather than as one texture sampled twice.
+    var wx = 0.28, wy = -0.16, ws = 9.0;
+    if (w) {
+      if (w.windDir && isFinite(w.windDir.x) && isFinite(w.windDir.y)) {
+        wx = w.windDir.x; wy = w.windDir.y;
+      }
+      if (isFinite(w.windSpeed)) ws = M.clamp(w.windSpeed, 0, 45);
+    }
+    this._windAngle = Math.atan2(wy, wx);
+    var step = M.clamp(dt, 0, 0.2) * ws * STORM_DRIFT_K;
+    this._driftNear.x += wx * step;
+    this._driftNear.y += wy * step;
+    this._driftFar.x += wx * step * 0.38;
+    this._driftFar.y += wy * step * 0.38;
+
+    // ---- lightning ----------------------------------------------------------
+    var flash = 0;
+    if (w && isFinite(w.flash)) {
+      flash = M.saturate(w.flash);
+      if (w.flashDir && isFinite(w.flashDir.x)) {
+        this._flashDir.set(w.flashDir.x, w.flashDir.y, w.flashDir.z);
+        if (this._flashDir.lengthSq() < 1e-8) this._flashDir.set(0.4, 0.6, -0.7);
+        this._flashDir.normalize();
+        // The strike is IN the deck, so whatever convention weather.js uses for
+        // its direction, the part of the sky that lights up is above the
+        // horizon. Lift a downward vector rather than discarding it.
+        if (this._flashDir.y < 0.10) {
+          this._flashDir.y = 0.10;
+          this._flashDir.normalize();
+        }
+      }
+    } else if (!w) {
+      flash = this._fallbackFlash(t);
+    }
+    // ---- how bright the cloud is, DERIVED from the key the scene receives ---
+    // See STORM_FLASH_Q. The cloud is the emitter and the ground is lit by it,
+    // so the deck's radiance is fixed by the irradiance lighting.js is actually
+    // spending (E = pi * L for a uniform emitter) rather than by a constant in
+    // this file that nothing keeps in step with it.
+    var keyI = this._strikeKey(ctx, flash);
+    var em = STORM_FLASH_Q * keyI / PI;
+    if (!isFinite(em) || em < 0) em = 0;
+    this._flashPrevRead = flash;
+    this._wxFlash = flash;
+    this._flashRGB.set(STORM_FLASH_HUE[0] * em, STORM_FLASH_HUE[1] * em,
+      STORM_FLASH_HUE[2] * em);
+    this._syncBounceCentre(ctx);
+
+    // ---- fog density --------------------------------------------------------
+    // Only re-derive when weather.js actually moves it; _scheduleHaze feeds the
+    // caps and the published scatterRadiance, so it must not be run per frame
+    // for a value that changes once a minute.
+    if (w && isFinite(w.fogDensity) && w.fogDensity > 0) {
+      this._wxFog = w.fogDensity;
+      if (Math.abs(this._wxFog - this._wxFogApplied) > this._wxFog * 0.02) {
+        this._wxFogApplied = this._wxFog;
+        this._scheduleHaze();
+        this._pushUniforms();
+        return;                       // _pushUniforms already published the rest
+      }
+    }
+
+    var u = this._skyUniforms;
+    if (u && u.uStorm) {
+      u.uStorm.value.w = this._windAngle;
+      u.uStormDrift.value.set(this._driftNear.x, this._driftNear.y,
+        this._driftFar.x, this._driftFar.y);
+      u.uFlash.value.set(this._flashRGB.x, this._flashRGB.y, this._flashRGB.z,
+        STORM_FLASH_TIGHT);
+      u.uFlashDir.value.copy(this._flashDir);
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // Fallback sheet lightning, used ONLY when ctx.weather does not exist at all.
+  //
+  // A storm sky with no lightning in it is a grey lid, and this module has to
+  // be able to stand on its own if fx/weather.js is missing or failed to build.
+  // The instant a weather module publishes a `flash` field this is never
+  // consulted again, so there is no risk of two systems flashing at once.
+  //
+  // The schedule is precomputed from a seeded RNG and then evaluated as a pure
+  // function of ctx.time, so it is identical on every run of a given seed -
+  // which is the whole point of the no-Math.random rule.
+  // --------------------------------------------------------------------------
+  Sky.prototype._fallbackFlash = function (t) {
+    var s = this._fallbackStrikes;
+    if (!s) {
+      s = this._fallbackStrikes = [];
+      var rng = (this.ctx && this.ctx.rng && this.ctx.rng.fork)
+        ? this.ctx.rng.fork(0x5709) : new GAME.RNG(0x5709);
+      var at = 0.35;
+      for (var i = 0; i < 24; i++) {
+        s.push({ t: at, dur: rng.range(0.06, 0.18), az: rng.range(0, M.TAU),
+                 el: rng.range(0.18, 0.62), amp: rng.range(0.55, 1.0) });
+        at += rng.range(3.0, 8.0);
+      }
+    }
+    var out = 0;
+    for (var j = 0; j < s.length; j++) {
+      var e = s[j];
+      var dtl = t - e.t;
+      if (dtl < 0 || dtl > e.dur) continue;
+      // Two sub-strokes with a gap, then a decay: a real flash flickers.
+      var u = dtl / e.dur;
+      var env = Math.exp(-u * 3.4) * (u < 0.34 ? 1.0 : (u < 0.46 ? 0.25 : 0.8));
+      out = Math.max(out, env * e.amp);
+      var ce = Math.cos(e.el);
+      this._flashDir.set(Math.sin(e.az) * ce, Math.sin(e.el), -Math.cos(e.az) * ce)
+        .normalize();
+    }
+    return M.saturate(out);
+  };
+
   /**
    * Change aerosol load. This is the BACKGROUND Mie optical depth; the
    * near-ground dust layer scales with it (see DUST_RATIO), because a hazy
@@ -2530,6 +4099,10 @@
         if (this._skyUniforms.uCloud) this._skyUniforms.uCloud.value.w = t * 0.0035;
       }
 
+      // Storm deck: wind drift, in-cloud lightning, weather-driven fog. Returns
+      // immediately when _stormF is 0, so level 1 pays one comparison a frame.
+      this._syncWeather(dt, ctx);
+
       var du = this._dustUniforms;
       if (du && cam) {
         du.uCamPos.value.copy(cam.position);
@@ -2546,7 +4119,14 @@
       }
       if (this.dustParticles) {
         // Dust is a luxury: the first thing to drop when quality is low.
-        this.dustParticles.visible = !(ctx && ctx.quality && ctx.quality.particles === 0);
+        // It is also a DRY-AIR phenomenon lit by a shaft of sun. In a downpour
+        // there is no shaft, the motes would be scattering a key that is not
+        // there, and weather.js owns everything visible in that air anyway - so
+        // the field switches off entirely rather than laying an unmotivated
+        // additive haze over a level built on pools of light and darkness.
+        this.dustParticles.visible =
+          !(ctx && ctx.quality && ctx.quality.particles === 0) &&
+          !(this._stormF > 0.35);
         // Nobody else knows this hook exists, so drive it here rather than
         // waiting for a caller that will never come.
         if (this.dustParticles.visible) this.bindKeyShadow(ctx && ctx.lighting);
@@ -2571,6 +4151,7 @@
       if (this._dustMaterial) this._dustMaterial.dispose();
       if (this.mesh && this.mesh.geometry) this.mesh.geometry.dispose();
       if (this.dustParticles && this.dustParticles.geometry) this.dustParticles.geometry.dispose();
+      if (this._stormTex) this._stormTex.dispose();
       if (this._cubeRT) this._cubeRT.dispose();
       if (this._pmremRT) this._pmremRT.dispose();
       if (this._pmrem) this._pmrem.dispose();

@@ -49,6 +49,7 @@ global `GAME` namespace. **Never declare a global `var`/`let`/`const`/`function`
 | 0 | `src/core/util.js` | **[FOUNDATION — do not edit]** namespace, RNG, math, pools, events |
 | 0 | `src/game/main.js` | **[INTEGRATION — do not edit]** bootstrap, frame loop, wiring |
 | 0 | `index.html` | **[INTEGRATION — do not edit]** script order |
+| 0 | `src/game/scenarios.js` | **[INTEGRATION — do not edit]** capture framings, material chart |
 | 1 | `src/render/textures.js` | procedural PBR texture generation |
 | 2 | `src/render/materials.js` | material library, triplanar, detail/parallax |
 | 3 | `src/render/sky.js` | atmosphere, sun, IBL environment, fog |
@@ -63,6 +64,19 @@ global `GAME` namespace. **Never declare a global `var`/`let`/`const`/`function`
 | 12 | `src/audio/audio.js` | procedural weapon/world audio |
 | 13 | `src/ai/ai.js` | enemy AI + procedural character animation |
 | 14 | `src/ui/hud.js` | HUD, crosshair, hitmarkers, killfeed |
+| 15 | `src/world/level_harbor.js` | LEVEL 2 geometry + collision (Cold Harbor) |
+| 16 | `src/world/props_harbor.js` | LEVEL 2 props, clutter, containers dressing |
+| 17 | `src/fx/weather.js` | rain, storm, lightning; **owns the weather contract** |
+
+A **level** is a `Level`+`Props` pair registered in the `LEVELS` table in
+`main.js` and selected at boot with `?level=<id>`. `market` maps to
+`Level`/`Props`, `harbor` to `LevelHarbor`/`PropsHarbor`. Every level satisfies
+the same contract in §5, so no other system needs to know which one is loaded;
+systems branch on `ctx.levelId` / `ctx.levelDef`, never on a class name.
+
+**Level 1 is shipped and frozen.** Any change to a shared module must be gated
+on `ctx.levelId === 'harbor'`, on the presence of `ctx.weather`, or on an
+explicit preset — never by changing the default path.
 
 If you need something from another module, **call its documented API** below.
 If the API you need is missing, code defensively (`if (ctx.foo && ctx.foo.bar)`)
@@ -229,6 +243,25 @@ hud.damageIndicator(worldDirection)
 HUD is **DOM + CSS overlay** (crisp text, no font files — use system font
 stacks). Do not render HUD in WebGL.
 
+### `weather` — `GAME.Weather`
+`src/fx/weather.js` **owns** this state. Everyone else reads it; nobody else
+writes it. Always guard — a level with no weather leaves `ctx.weather` inert.
+
+```js
+weather.wetness          // 0..1 global surface wetness
+weather.rainIntensity    // 0..1
+weather.windDir          // THREE.Vector2, normalised (x = world X, y = world Z)
+weather.windSpeed        // m/s
+weather.flash            // 0..1 lightning intensity THIS frame (0 most frames)
+weather.flashDir         // THREE.Vector3 TOWARD the flash (same convention as
+                         // sky.sunDirection, so dot(n, flashDir) is the lambert term)
+weather.fogDensity       // the fog density the current storm implies
+weather.setPreset(name)  // 'storm' | 'drizzle' | 'clear'
+weather.strike()         // force a strike now (capture determinism)
+```
+On any level that is not the harbor the preset is `clear`, and `clear` is
+*absent*: no geometry, no texture, no light, nothing added to the scene.
+
 ---
 
 ## 6. Collision format
@@ -273,17 +306,31 @@ stacks). Do not render HUD in WebGL.
 `main.js` exposes this; systems just need to behave deterministically.
 
 ```
-index.html?scenario=NAME&t=SECONDS&w=1920&h=1080&hud=1&seed=12345
+index.html?scenario=NAME&level=market&t=SECONDS&w=1920&h=1080&hud=1&seed=12345
 ```
 
 The page simulates deterministically at a fixed 1/60 timestep to `t`, renders,
 then sets `document.title = 'READY'` and `window.__READY__ = true`.
 
-Scenarios: `overview`, `street`, `interior`, `alley`, `rooftop`, `ads`,
-`firefight`, `muzzleflash`, `weapon_closeup`, `enemy_closeup`, `explosion`,
-`night`, `dusk`, `materials` (a material test chart).
+Scenarios are per level, because a market framing pointed at the harbor just
+photographs a wall:
 
-Capture with `python tools/shoot.py <scenario> [--t 3] [--w 1920] [--h 1080]`.
+| Level | Scenarios |
+|---|---|
+| `market` | `overview`, `street`, `interior`, `alley`, `rooftop`, `dusk`, `night`, `materials` |
+| `harbor` | `harbor_overview`, `quay`, `containers`, `warehouse`, `crane`, `gangway`, `lightning`, `rain_closeup` |
+| both | `ads`, `weapon_closeup`, `muzzleflash`, `firefight`, `enemy_closeup`, `explosion` |
+
+The six shared ones resolve their standpoint through `baseShot()` in
+`scenarios.js`, which asks the loaded level for a framing instead of assuming
+one. A shared scenario must never hard-code a world coordinate: the same mark
+cannot be 16 m in front of the camera in two different levels.
+
+Capture with:
+```
+python tools/shoot.py <scenario> [--level harbor] [--t 3] [--w 1920] [--h 1080]
+python tools/shoot.py --all --level harbor
+```
 
 ---
 

@@ -624,7 +624,7 @@
   // --------------------------------------------------------------------------
   var _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
   var _v4 = new THREE.Vector3(), _v5 = new THREE.Vector3(), _v6 = new THREE.Vector3();
-  var _q1 = new THREE.Quaternion();
+  var _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
   var _c1 = new THREE.Color(), _c2 = new THREE.Color();
   var _c3 = new THREE.Color(), _c4 = new THREE.Color();
   var _c5 = new THREE.Color();
@@ -732,6 +732,554 @@
   var HALO_GAIN = 0.85;          // additive brightness per unit of light output
   var BULB_GAIN = 2.6;           // emissive brightness per unit of light output
   var MAX_WINDOWS = 6;           // lit window cards on the facades
+
+  // ==========================================================================
+  // LEVEL 2 - "COLD HARBOR" : a rig with NO SUN
+  // --------------------------------------------------------------------------
+  // Everything below this line is gated on ctx.levelId === 'harbor'. Level 1 is
+  // finished and must render byte-for-byte as it does today, so not one default
+  // path changes: the market never sets levelId 'harbor', never has ctx.weather,
+  // and every harbor branch is an `if (this.isHarbor)` around an ADDITION.
+  //
+  // WHY THE RIG INVERTS. The market is a key-led rig: one directional sun, four
+  // cascades wrapped around the player, practicals as accents. The harbor has no
+  // sun, no moon and a storm overcast, so there is no key at all for ~97% of the
+  // frames. The picture is made entirely of:
+  //
+  //   - sodium mast lamps, ~2000K, HARD inverse-square falloff, each one a real
+  //     fixture with emissive glass, an additive halo AND a volumetric cone. The
+  //     round-3 lesson from level 1 - "a light without a visible source is not a
+  //     light" - is worth more here than there, because after dark the sources
+  //     ARE the composition. A mast lamp with no visible cone in a downpour is
+  //     on ART_DIRECTION_HARBOR's instant-fail list.
+  //   - mercury/LED floods at ~5600K on the warehouse and the crane. The
+  //     2000K-against-5600K split is the single biggest colour idea in the level
+  //     and it has to be LIT, not graded: two temperatures of real light with
+  //     genuine darkness between their pools.
+  //   - lightning, which is a real DirectionalLight (below).
+  //
+  // SHADOW STRATEGY - the deliberate decision the brief asks for.
+  //   CSM is built around a directional light. With no sun there is nothing for
+  //   it to fit, so instead of deleting it the whole 4-cascade rig is REPURPOSED
+  //   AS THE LIGHTNING CASTER: same cascades, same texel snapping, same PCSS
+  //   filter, direction taken from ctx.weather.flashDir. That buys full-terminal
+  //   shadows from the flash for zero extra shadow maps, and because the cascade
+  //   maps are only re-rendered while a flash is actually on (see
+  //   _scheduleShadowUpdates) the shadow budget between strikes is literally
+  //   ZERO instead of 4 depth passes a frame.
+  //   On top of that exactly TWO of the twelve practicals cast shadows - the two
+  //   hero masts that appear in the most framings - at 1024^2, refreshed
+  //   round-robin every fourth frame. Everything else is unshadowed. Twelve
+  //   shadow-casting lights would be twelve depth passes; two amortised ones is
+  //   ~0.5 passes a frame, and the eye cannot tell which lamps in a container
+  //   yard are the ones with shadows.
+  // ==========================================================================
+  var HARBOR_SODIUM_K = 2000;    // deep orange mast lamps
+  var HARBOR_MERCURY_K = 5600;   // cold mercury / LED floods
+  var HARBOR_FLASH_K = 7000;     // lightning
+
+  // ART_DIRECTION_HARBOR palette, declared as sRGB hex exactly as the document
+  // writes it so the numbers here can be diffed against the bible.
+  var HPAL = {
+    sodium: new THREE.Color(0xff9a3c),
+    mercury: new THREE.Color(0xcfe6ff),
+    lightning: new THREE.Color(0xdceaff),
+    stormSky: new THREE.Color(0x39434d),   // "steam / rain haze"
+    wetGround: new THREE.Color(0x0e1418),  // wet concrete, near black
+    ambient: new THREE.Color(0x16303a),    // cold cyan-green shadow floor
+    coldFill: new THREE.Color(0x3d5a68)
+  };
+
+  // Magnitudes. Every one of these is an EFFECTIVE value out on the open apron
+  // (the sky-visibility compensation is applied on top, exactly as in level 1).
+  //
+  // The floor is deliberately non-zero: ART_DIRECTION_HARBOR's instant-fail list
+  // forbids "crushed pure-black shadows with no detail whatsoever" in the same
+  // breath as it asks for "deep near-blacks". The way to have both is a small
+  // COLD unconditional term plus a warm sodium bounce off the wet apron, and a
+  // very hard practical falloff on top - contrast from the ratio between the
+  // pools and the floor, not from taking the floor to zero.
+  // ---- THE DYNAMIC-RANGE BUDGET (measured, and the reason these moved) ------
+  // A mast head runs 1420 cd at 12 m, so the apron under it collects ~10 lux.
+  // The previous fill put roughly 0.02 lux on a surface no lamp reached. That is
+  // a 500:1 scene ratio, and NO tone curve holds 500:1 - the unlit half simply
+  // falls off the bottom of the toe. Measured on the shipped frames: every cell
+  // of an 8x8 grid that no cone touched printed 0.036-0.041 sRGB, i.e. the
+  // postfx black level, EXACTLY the same value whether it contained a container
+  // flank, the apron or nothing at all. 45% of the containers frame and 27% of
+  // the quay frame were that number. It was never a missing light; it was a
+  // missing floor.
+  //
+  // A photographic night exterior runs 30:1 to 60:1 between its pools and its
+  // shadow detail, so the fill is sized to land there: pools stay at ~10 lux and
+  // the unlit floor comes up to ~0.20-0.30 lux. That still reads as "pools of
+  // light with genuine darkness between them" - the pools are two orders of
+  // magnitude up - while a container flank turned away from every lamp keeps its
+  // corrugation instead of becoming a silhouette.
+  //
+  // WHICH TERM DOES WHICH SURFACE (they are not interchangeable):
+  //   ambient  - unconditional, omnidirectional. The flattest thing in the rig,
+  //              so it moves least. Cold cyan, the art-directed shadow hue.
+  //   hemi     - sky above / wet apron below. Up-facing surfaces and, at 50/50,
+  //              the vertical ones.
+  //   bounce   - travels UP. Underside of a container lip, the crane boom, chins.
+  //              Contributes NOTHING to a vertical face (dot(n, up) == 0), which
+  //              is why raising it alone never moved the canyon walls.
+  //   fillA/B  - the cross-canyon pair, arriving ~16 deg above the horizon. This
+  //              is the ONLY term with a real cosine on a container flank
+  //              (0.68 against 0.20 on the ground), so it is the term that makes
+  //              a canyon read, and it was the one sitting at 0.030.
+  //
+  // ---- WHY THOSE THREE ARE HEMISPHERES HERE AND DIRECTIONALS IN LEVEL 1 -----
+  // All three used to be THREE.DirectionalLights in this level as well, and
+  // they were the single worst artefact in the build: every container flank and
+  // the whole freighter hull printed a hard vertical barcode with red/green/blue
+  // fringing, coherent across entire walls at 20-40 m. Proven by experiment -
+  // zeroing exactly those three removed all of it, cost 0.006 mean luma and
+  // IMPROVED dynamic range.
+  //
+  // The cause is physical, not a tuning error. A DirectionalLight is a
+  // zero-solid-angle source, so on a wet (roughness ~0.10) surface carrying a
+  // high-frequency corrugation normal it produces a delta specular lobe whose
+  // GGX highlight is sub-pixel and, because the source is INFINITE, lands at
+  // the same phase of the corrugation over an entire wall. Two of them with
+  // different colours arriving from opposite azimuths put their spikes one
+  // pixel apart, which is the rainbow.
+  //
+  // But the requirement these three terms exist for is a COSINE ON A VERTICAL
+  // FACE, i.e. an irradiance requirement - not a specular one. three's
+  // hemisphere path writes straight into `irradiance` in lights_fragment_begin
+  // and never reaches RE_Direct or RE_IndirectSpecular, so a HemisphereLight
+  // with a HORIZONTAL axis (set via .position) delivers exactly the same
+  // mix(ground, sky, dot(n,axis)*0.5+0.5) gradient - a real 0.97-vs-0.03
+  // wall-to-wall ratio, the warm/cold cross-canyon split carried in the
+  // color/groundColor pair - with mathematically zero specular aliasing.
+  // Level 1 keeps its directionals untouched: dry chalky plaster at roughness
+  // 0.8 has no delta lobe to alias, and that level is frozen.
+  //
+  // MEASURED, twice. At (ambient 0.32, hemi 0.135, fill 0.030) the containers
+  // frame printed dead_cell 23.4% / vertical_imbalance 3.70. At
+  // (0.58, 0.46, 0.20) it printed 20.3% / 1.83 - the imbalance was solved but
+  // the surviving dead cells sat at 0.040-0.043 sRGB against a 0.045 floor,
+  // i.e. a hair short, and they are all container flank. The numbers below are
+  // that same shape carried the rest of the way, weighted toward the two terms
+  // with a cosine on a vertical face.
+  //
+  // AND WHERE IT STOPS. A third pass took these to (0.92, 0.95, env 0.52, fill
+  // 0.46) and the measurement got WORSE, not better: containers dead 12.5% ->
+  // 18.8%, quay 15.6% -> 17.2%, both imbalances up, while the frame mean moved
+  // by 0.02 and the upper rows barely changed at all. postfx meters the frame,
+  // so a uniform lift of every indirect term is very close to a null operation -
+  // the exposure gives it straight back and the only lasting effect is that the
+  // toe drops further under the darkest cells. Global fill is not a lever on
+  // this image past the point where the unlit half stops being crushed; the
+  // levers that remain are all LOCAL (a lamp whose pool reaches the near field)
+  // or RATIO (how much of the frame a pool covers). These are the measured
+  // optimum and they are deliberately not the largest values tried.
+  var HB = {
+    // ambientFlash is the only unconditionally-COLD term in the rig, so it is
+    // the one that sets the tint of the shadow side during a strike. It was
+    // probed at 0.50 / 0.70 / 1.00 against the `lightning` capture chasing that
+    // frame's residual grade inversion (shadow +0.009 RED under a +0.004 BLUE
+    // highlight) and the metric moved the WRONG way at every step - because the
+    // warm content in that frame's shadow band is the sodium pools and sky.js's
+    // sodium-tinted fog, neither of which this file owns, and lifting the floor
+    // only re-sorts which pixels land in the shadow percentile. Left at the
+    // value that measured best rather than tuned to a metric it cannot reach.
+    // ---- the *Flash numbers are ONE POOLED BUDGET --------------------------
+    // See _harborFill. They are no longer five independent lifts: they are
+    // summed into `omniBudget`, weather.js's own flash hemisphere is subtracted
+    // from that sum, and the remainder is what any of them actually spends. So
+    // the number to reason about is the TOTAL - ~1.3 at comp 1.2 - against
+    // weather's flash fill, which runs 1.1-1.5 at a close strike. In practice
+    // the other module pays for the whole omnidirectional half of the strike
+    // and these are the headroom for a build where it does not exist.
+    //
+    // They came down 2-4x to get there, and the reason is measured rather than
+    // aesthetic: with the previous values the two perpendicular canyon walls
+    // lifted x5.66 and x5.42 on a strike while the apron - the only surface
+    // facing a bolt 53 degrees up - lifted x4.23. Lightning that lifts the
+    // surfaces facing away from it harder than the one facing it is a
+    // full-screen fade, which ART_DIRECTION_HARBOR fails instantly.
+    ambient: 0.76, ambientFlash: 0.26,   // AmbientLight, cold cyan
+    hemi: 0.72, hemiFlash: 0.40,         // storm cloud above / wet apron below
+    env: 0.34, envFlash: 0.16,           // PMREM dome
+    bounce: 0.145, bounceFlash: 0.10,    // warm sodium bounced UP off the apron
+    fill: 0.36, fillFlash: 0.10,         // cross-canyon hemisphere pair (walls)
+    fillBRatio: 1.00,                    // the cold -X side against the warm +X
+    // How dark the OPPOSITE half of each cross-canyon hemisphere is. Zero would
+    // put a hard terminator down the middle of every box; this is the shadow
+    // side of a wall that is still in the same weather as the lit side.
+    fillBack: 0.08,
+    key: 9.5,                            // peak lightning directional
+    // ---- THE FLASH IS DIRECTIONAL OR IT IS NOTHING -------------------------
+    // Every *Flash number above came down by roughly 3x, and the reason is
+    // measured: with the previous values a strike lifted the left wall x6.96,
+    // the right wall x4.73, the far wall x4.98 and the ground x6.38 - four
+    // mutually-perpendicular orientations inside a factor of 1.5, which is the
+    // definition of "no direction". The omnidirectional half of the strike
+    // (ambient + hemisphere + environment, plus weather.js's own flash
+    // hemisphere) was lifting by 3.4x while the terminator on the apron was
+    // only 2.5:1. Lightning that relights a scene without moving its shadows is
+    // on ART_DIRECTION_HARBOR's instant-fail list.
+    //
+    // The energy did not move to this module's key - it was already being spent
+    // by weather.js and double-billed (see _findExternalFlash). It simply stops
+    // being spent twice.
+    //
+    // weather.js also runs a lightning light of its own. Only directional light
+    // INDEX 0 has shadows in this build - that is what the CSM shader patch
+    // buys - but weather's is a shadow-casting SPOT, and the spot path in that
+    // chunk is untouched, so BOTH halves of the strike genuinely cast. This is
+    // the floor the cascade rig keeps no matter how much the other light is
+    // spending, so a strike always moves the cascades as well.
+    keyMin: 3.0,
+    // Additive cone brightness. There is no tone curve between this number and
+    // the HDR buffer, so it clips very early: at 0.105 + 0.165 the first quay
+    // capture printed four solid white wedges with visible rims - cone-shaped
+    // OBJECTS, not beams. The shell is DoubleSide, so the on-axis pixel pays
+    // this twice; the target is a combined ~0.18 against a frame whose mean
+    // luminance is ~0.15, i.e. luminous but never clipped.
+    coneBase: 0.030,                     // additive cone brightness, dry
+    coneRain: 0.050,                     // extra at rainIntensity 1
+    // ---- and how far away it is still worth paying for --------------------
+    // The shells used to be billed identically at 8 m and at 60 m: no
+    // transmittance, no tone curve, no distance term. From the elevated
+    // `harbor_overview` standpoint the camera looks down the AXIS of a dozen
+    // cones at once - exactly where |N.V| and therefore the shell opacity are
+    // maximal - and ~19 additive shells up to 34 m long summed into a flat
+    // milky veil over the whole midground: measured +0.52 luma locally, +0.040
+    // at p95 and +0.020 mean over the y380-520 band, on the one frame in the
+    // level that has to read as a wide establishing shot (textured 9.0%
+    // against 32-38% on every first-person framing).
+    //
+    // Scattered light obeys the same extinction law as everything else in the
+    // frame, so the fix is not a fudge: the cone now carries the SAME
+    // exponential transmittance the surfaces get from sky.js's fog, plus a
+    // geometric 1/(1+d) term for the fact that a distant cone subtends less of
+    // the pixel's solid angle. Both are normalised at coneRef metres so the
+    // hero beams in `containers` / `gangway` keep the brightness they were
+    // tuned to and only the far field pays.
+    coneNear: 12.0,              // metres before the distance term starts
+    coneFall: 30.0,              // ... and its half-value distance beyond that
+    coneRef: 14.0,               // the range the authored brightness refers to
+    // Ceiling on the SUM of the shells' estimated screen solid angle x
+    // amplitude (see the cap in _updateHarbor). MEASURED off the live rig at
+    // every published framing rather than chosen:
+    //   warehouse 0.27, crane 1.01, containers 1.85, quay 2.54,
+    //   rain_closeup 2.54, gangway 2.61, harbor_overview 2.97
+    // The elevated establishing shot is the top of that list, which is the
+    // whole point - it is the framing where a dozen shells stack end-on and the
+    // one that measured a milky midground. 2.30 leaves the three tightest
+    // framings untouched (scale 1.00) and takes the wide shot to 0.77, the
+    // gangway to 0.88 and the quay to 0.91: a ceiling, not a dimmer.
+    coneCap: 2.30,
+    shaftLux: 3.4,                       // irradiance in a harbor roof shaft
+    shaftHaze: 0.055,
+    // Gain applied to intensities a LEVEL publishes. level_harbor asks for
+    // 620 cd on a 10.4 m mast, which is 5.7 lux on the apron underneath -
+    // about a third under the pool level level 1's street lamps were tuned to
+    // (128 cd at 3.85 m = 8.6 lux) and it measured: the crane framing printed
+    // mean luma 0.107 against ART_DIRECTION_HARBOR's 0.10-0.18 band, dynamic
+    // range 0.43 against a 0.45 floor, and 0.00% blown - i.e. all the headroom
+    // in the frame was unspent. This is the one number that buys it back, and
+    // it lands the pools exactly where the proven level-1 ones sit.
+    levelLampGain: 1.45,
+    // ---- luminaire distribution ------------------------------------------
+    // A real area floodlight is not a cookie-cutter cone. It has a bright core
+    // and a WIDE low-intensity skirt, and the skirt is most of what actually
+    // covers a yard: that is why eight masts light a whole terminal instead of
+    // eight discs. Modelling every mast as a hard 0.46-0.52 rad cone aimed
+    // straight down gave each one a ~12 m pool and NOTHING between them, and
+    // since level_harbor stands its camera poses BETWEEN the masts (measured:
+    // the nearest lamp to the `containers` eye is 10.5 m up the corridor, the
+    // nearest to the `quay` eye is 11 m behind it) the near field of every hero
+    // framing had no source over it at all.
+    //
+    // So the SpotLight angle is opened to LAMP_SKIRT x the authored cone and the
+    // penumbra is solved so full output still stops at LAMP_CORE x the authored
+    // cone. The bright core is unchanged - the pool the level asked for is still
+    // there, at the same brightness - and outside it the light falls off smoothly
+    // instead of ending at a hard edge, which is also what "visible falloff"
+    // means. The VISIBLE cone mesh keeps the authored angle (see _coneVis), so
+    // the beam you see is still the core you see on the ground; the skirt is a
+    // wash far too dim to register as air glow.
+    // The widening is a CEILING, not a multiplier, because level_harbor is
+    // allowed to author a wide beam itself and did (its masts now publish
+    // 0.50-0.90). Multiplying a 0.90 by a fixed factor took three of them past
+    // 1.30 rad - 75 degrees - which is not a luminaire any more, it is a point
+    // light, and it deletes the "genuine darkness between the pools" the brief
+    // is built on. So: open a narrow beam toward lampMax, never past it, and
+    // never narrow one the level already opened.
+    lampSkirt: 1.45,
+    lampMax: 0.92,               // ~53 deg, a real wide-flood distribution
+    lampCore: 0.88,
+    lampPenMin: 0.28             // there is always a visible falloff gradient
+  };
+
+  // A flash whose direction wanders mid-strike drags every shadow in the frame
+  // with it, which reads as a bug rather than as lightning. The direction is
+  // therefore LATCHED at the leading edge of each strike and held until it ends.
+  var FLASH_ON = 0.02;           // below this the strike counts as over
+  var HARBOR_FLASH_FALLBACK = new THREE.Vector3(-0.52, 0.62, -0.59).normalize();
+
+  // Placement table. Each lamp is authored RELATIVE TO A PUBLISHED CAMERA POSE
+  // (forward / right / height) rather than in absolute coordinates, because the
+  // poses are the one thing about level_harbor.js that is guaranteed by
+  // ART_DIRECTION_HARBOR ("level.cameraPoses must publish these") and because a
+  // lamp placed off a framing is a lamp that is IN that framing. Level 1 round 3
+  // proved the alternative: practicals transcribed from prose sat out in the
+  // street while the room they existed to light measured 0.04 sky visibility.
+  //
+  // `fb` is the fallback in NORMALISED level-bounds space (0..1 across x, 0..1
+  // across z) for a level that publishes no poses at all.
+  //
+  // Candela note: decay is 2, so the irradiance under a lamp is intensity / h^2.
+  // A mast at 11.5 m running 950 cd puts ~7.2 on the apron directly below it -
+  // roughly 24x the 0.30 ambient floor, which is what "pools of light with
+  // genuine darkness between them" costs in real units.
+  var HARBOR_LAMPS = [
+    { name: 'mast_quay', kind: 'sodium', fixture: 'mast', hero: true,
+      pose: 'quay', f: 15.0, r: -8.5, y: 11.5, fb: [0.28, 0.30],
+      kelvin: HARBOR_SODIUM_K, intensity: 980, distance: 38,
+      cone: 0.52, penumbra: 0.36, shadow: true, tilt: 2.6,
+      halo: 3.4, beam: 1.0 },
+    { name: 'mast_containers', kind: 'sodium', fixture: 'mast', hero: true,
+      pose: 'containers', f: 17.0, r: 7.5, y: 11.5, fb: [0.68, 0.52],
+      kelvin: HARBOR_SODIUM_K, intensity: 980, distance: 38,
+      cone: 0.52, penumbra: 0.36, shadow: true, tilt: 2.6,
+      halo: 3.4, beam: 1.0 },
+    // The failing lamp. Noise-driven, never a sine - see _updatePracticals.
+    { name: 'mast_apron', kind: 'sodium_failing', fixture: 'mast',
+      pose: 'overview', f: 22.0, r: -11.0, y: 11.0, fb: [0.38, 0.74],
+      kelvin: HARBOR_SODIUM_K, intensity: 860, distance: 34,
+      cone: 0.54, penumbra: 0.40, tilt: 2.4, halo: 3.2, beam: 1.0 },
+    { name: 'mast_gangway', kind: 'sodium', fixture: 'mast',
+      pose: 'gangway', f: 13.0, r: 6.5, y: 11.0, fb: [0.80, 0.20],
+      kelvin: HARBOR_SODIUM_K, intensity: 860, distance: 34,
+      cone: 0.52, penumbra: 0.38, tilt: 2.4, halo: 3.2, beam: 1.0 },
+    // ---- the cold half of the palette --------------------------------------
+    { name: 'flood_warehouse', kind: 'mercury', fixture: 'flood',
+      pose: 'warehouse', f: 9.0, r: -5.5, y: 7.2, fb: [0.14, 0.62],
+      kelvin: HARBOR_MERCURY_K, intensity: 430, distance: 26,
+      cone: 0.46, penumbra: 0.42, aim: 'poseForward', aimDist: 7.5,
+      halo: 2.6, beam: 0.85 },
+    // ---- THE CRANE ----------------------------------------------------------
+    // Both of these are `supp`, so they survive a level that publishes its own
+    // lamp set (level_harbor does), and both are resolved from level.anchors -
+    // NOT from a camera pose. The previous crane flood was authored
+    // `pose:'crane', fromPose:true` with a downward aim, and that class of
+    // placement cannot work for a framing that looks UP: the crane pose is
+    // pitched up 21 degrees at 70 degrees vertical FOV, so its horizon sits at
+    // ndc y = -0.55 and NO point on the apron can land above the bottom fifth
+    // of that frame. The lamp put the level's brightest cold source under the
+    // gun and the crane capture was the only one still under the exposure
+    // floor. See the guard in _harborLampDefs.
+    //
+    // The answer is the answer a crane engineer would give: the floods go on
+    // the PORTAL BEAM, at sill height, and they throw down-lane at the working
+    // strip - which is both physically correct for a ship-to-shore crane and
+    // lands the pool 25-40 m out where the frame can see it, with the beam
+    // itself crossing the middle third on its way there.
+    { name: 'crane_portal_flood', kind: 'mercury', fixture: 'flood', supp: true,
+      prio: 10,
+      anchor: 'crane_portal', aimAnchor: 'crane_lane',
+      kelvin: HARBOR_MERCURY_K, intensity: 4300, distance: 62,
+      cone: 0.30, penumbra: 0.40, halo: 3.0, haloGain: 0.34, beam: 0.42 },
+    // The gantry itself. A 30 m lattice at 02:00 against an unlit storm sky is
+    // black on black - the crane framing measured its own subject as pure
+    // negative space - and no amount of global fill can fix that, because fill
+    // lifts the cloud behind it by the same amount. What turns a silhouette
+    // into a subject is a GRAZING key: a flood on the A-frame throwing down the
+    // LANDWARD LEG picks out every chord and lacing member at a few degrees of
+    // incidence. It carries almost no volumetric (the camera looks nearly along
+    // its axis, where a shell is at its brightest) and it is cold, so it is also
+    // the crane framing's cool half of the palette.
+    { name: 'crane_boom_rake', kind: 'mercury', fixture: 'none', supp: true,
+      prio: 16,
+      anchor: 'crane_rake_mount', aimAnchor: 'crane_rake_aim',
+      kelvin: HARBOR_MERCURY_K, intensity: 7600, distance: 66,
+      cone: 0.24, penumbra: 0.52, halo: 2.2, haloGain: 0.26, beam: 0.16 },
+    // ---- THE NEAR FIELD OF THE FIRST-PERSON STANDPOINT ---------------------
+    // Seven of the fourteen harbor captures - ads, weapon_closeup, muzzleflash,
+    // firefight, enemy_closeup, explosion and `containers` itself - are shot
+    // from the SAME standpoint, and it had no source within reach of it.
+    // Measured on the live rig at that eye: irradiance on the apron 3 m ahead
+    // 2.0, at 6 m 4.9, at 10 m 32 - but on a VERTICAL face 3 m ahead 0.00 and
+    // at 6 m 0.07. Every lamp in the terminal is 5-14 m up and aimed DOWN and
+    // AWAY, so the first six metres of every first-person frame contained no
+    // light at all, and the militiaman in enemy_closeup - who stands 3.4 m from
+    // the lens - measured 0.25 on his chest against 5.7 on the top of his head.
+    // He printed as a black silhouette with a lit scalp, which is exactly what
+    // the frame shows.
+    //
+    // It has to be BEHIND the eye, and that is optics rather than taste: the
+    // portrait solver stands its subject between the camera and the brightest
+    // lamp it can find, so every lamp that is in front of the camera is behind
+    // the subject. Only a source on the camera's side of him can put light on
+    // the side of him the camera sees. So this is a wall pack on the stack at
+    // the mouth of the corridor, a metre behind and four metres above the
+    // player's shoulder, throwing down the lane - the off-camera key, motivated
+    // by a fixture that genuinely belongs on a container stack. It carries no
+    // volumetric cone at all (`beam: 0`): a shell whose apex is behind the near
+    // plane fills the whole frame with additive haze.
+    //
+    // Its output is deliberately capped BELOW the lighting tower's, because
+    // scenarios.js ranks portrait keys by intensity / height^2 and picks the
+    // winner: at 430 cd on a 5.0 m mount this scores 17 against the tower's 32,
+    // so the tower stays the key that sets the framing and this stays the fill
+    // that makes the subject readable. Raising it past ~800 would silently
+    // relocate the whole portrait.
+    // It is also deliberately SMALL. At 430 cd on a 51-degree flood the first
+    // pass washed both canyon walls from cap to sill and took the framing to
+    // mean luminance 0.232 and saturation 0.455 against ART_DIRECTION_HARBOR's
+    // 0.10-0.18 - a foreground lit by an on-camera flash, which is the opposite
+    // failure to the one it was fixing. 250 cd through a 25-degree core lands a
+    // pool on the near apron and a raking edge on the stacks and leaves the rest
+    // of the canyon to the masts. 200, finally, rather than 250: the framing's
+    // mean luminance runs 0.167 with no near-field source at all, 0.202 at 250
+    // and 0.232 at 430, against ART_DIRECTION_HARBOR's 0.10-0.18 low-key band -
+    // so the last step down is what keeps the fix inside the exposure the level
+    // is authored to.
+    { name: 'lane_wallpack', kind: 'sodium', fixture: 'none', supp: true,
+      prio: 8,
+      anchor: 'floor_containers', anchorY: 5.0, anchorBack: -7.0, anchorSide: -1.2,
+      pose: 'containers', f: -1.0, r: -1.2, y: 5.0, fb: [0.48, 0.82],
+      kelvin: HARBOR_SODIUM_K, intensity: 200, distance: 22,
+      cone: 0.44, penumbra: 0.42, aim: 'poseForward', aimDist: 8.0,
+      halo: 0.9, haloGain: 0.30, beam: 0 },
+    // Warehouse interior spilling out of the open roller door.
+    { name: 'door_spill', kind: 'fluoro_cold', fixture: 'none',
+      pose: 'warehouse', f: 3.5, r: 0.4, y: 3.1, fb: [0.16, 0.60],
+      kelvin: 4300, intensity: 130, distance: 20,
+      cone: 0.80, penumbra: 0.55, aim: 'poseBack', aimDist: 8.0,
+      halo: 1.2, haloGain: 0.30, beam: 0.7 },
+    // Forklift / bowser headlight, low and raking - the one light in the level
+    // at eye height, which is what gives the container canyon a floor.
+    // `anchor` beats `pose`: it is resolved against real geometry (see
+    // _harborAnchors), so the vehicle stands ON the apron in the corridor the
+    // framing looks down instead of five metres inside the stack, which is
+    // where the pose offset had put it after level_harbor moved.
+    { name: 'vehicle_head', kind: 'mercury', fixture: 'none', supp: true,
+      prio: 14,
+      anchor: 'floor_containers', anchorY: 1.05, anchorBack: 3.0, anchorSide: -1.1,
+      pose: 'containers', f: 6.0, r: -5.5, y: 1.05, fb: [0.60, 0.66],
+      kelvin: 5200, intensity: 190, distance: 26,
+      cone: 0.34, penumbra: 0.30, aim: 'poseForward', aimDist: 14.0,
+      halo: 0.55, haloGain: 0.22, beam: 0.8 },
+    // ---- PORTABLE LIGHTING TOWERS ------------------------------------------
+    // Standard yard plant, and the honest answer to the thing the measurement
+    // found: level_harbor's eight masts are 11-12 m high and stand at the EDGES
+    // of the working areas, so every published framing looks down a corridor
+    // from a standpoint no mast reaches - the nearest lamp to the `containers`
+    // eye is 10.5 m up the corridor, the nearest to `quay` is 11 m behind the
+    // camera. A terminal solves exactly this with wheeled light towers dropped
+    // where the night shift is working, and a tower is a REAL fixture this
+    // module can build: base, telescopic mast, twin heads, halo and cone.
+    // Positions are the derived open-floor anchors, so they move with the level.
+    //
+    // These are the level's COLD half and they used to be authored as 4600K
+    // 'led', which is a warm white pulled only 38% toward #cfe6ff - i.e. it read
+    // as a slightly paler sodium. Measured over pixels above 0.40 luma the
+    // containers framing came back 59.2% warm against 3.5% cool and the crane
+    // framing 59.1% against 2.8%: the two-temperature idea, which the art
+    // direction calls the biggest colour idea in the level, existed only as a
+    // tint on the ambient. They are now genuine 5600K mercury, and they are
+    // anchored to the SAME open-floor points the sodium masts light, so the two
+    // pools abut on the apron and you can see the boundary. Two temperatures
+    // read only where they touch.
+    // Aimed ALONG the framing's own sightline rather than tilted toward the
+    // middle of the yard. A tower standing in a 3.8 m corridor and tilted 3.4 m
+    // sideways washes the wall it is leaning on from a metre away; throwing it
+    // 9 m down the lane instead lands a cold pool ON THE APRON just short of
+    // where the sodium mast's pool begins, so the two temperatures meet at a
+    // visible boundary in the middle of the frame. Two temperatures read only
+    // where their pools touch - a cold lamp on the far side of the yard from
+    // every warm one just makes two separate monochrome regions.
+    //
+    // ---- AND THEY WERE 1.7x TOO BRIGHT ------------------------------------
+    // 850 / 800 / 720 cd on a 5.2 m mount is 31 / 30 / 27 lux directly under
+    // the head, against 6-7 under a 1000 cd mast at 13 m: five times the pool
+    // level of every other lamp in the terminal, from the fixture that stands
+    // CLOSEST to the camera in three of the six framings. Two of the three had
+    // never actually shipped (they were falling off the end of the practical
+    // cap - see MAX_PRACTICALS_HARBOR), so the number had never been measured in
+    // a frame; the first capture with all three alive printed the quay's wet
+    // steel pole as a hard white stripe from cap to base and took blown_white
+    // from 0.05% to 0.56%. At ~500 cd they sit at 18-19 lux - still visibly
+    // brighter than a mast pool, which is what a work light IS - and the pole
+    // reads as wet steel catching a cold light instead of as a clipped bar.
+    { name: 'tower_containers', kind: 'mercury', fixture: 'tower', supp: true,
+      prio: 12,
+      anchor: 'floor_containers', anchorY: 5.2, anchorBack: 2.2, anchorSide: 1.0,
+      pose: 'containers', f: 7.0, r: 0.0, y: 5.2, fb: [0.50, 0.55],
+      kelvin: HARBOR_MERCURY_K, intensity: 540, distance: 26,
+      cone: 0.62, penumbra: 0.45, aim: 'poseForward', aimDist: 7.0,
+      halo: 1.5, haloGain: 0.20, beam: 0.10 },
+    { name: 'tower_quay', kind: 'mercury', fixture: 'tower', supp: true,
+      prio: 20,
+      anchor: 'floor_quay', anchorY: 5.2, anchorBack: 2.2, anchorSide: 1.8,
+      pose: 'quay', f: 8.0, r: 2.0, y: 5.2, fb: [0.40, 0.35],
+      kelvin: HARBOR_MERCURY_K, intensity: 500, distance: 28,
+      cone: 0.66, penumbra: 0.45, aim: 'poseForward', aimDist: 8.0,
+      halo: 1.6, haloGain: 0.20, beam: 0.10 },
+    { name: 'tower_gangway', kind: 'mercury', fixture: 'tower', supp: true,
+      prio: 24,
+      anchor: 'floor_gangway', anchorY: 5.0, anchorBack: 2.2, anchorSide: -1.8,
+      pose: 'gangway', f: 8.0, r: -2.0, y: 5.0, fb: [0.60, 0.25],
+      kelvin: HARBOR_MERCURY_K, intensity: 460, distance: 24,
+      cone: 0.64, penumbra: 0.45, aim: 'poseForward', aimDist: 8.0,
+      halo: 1.5, haloGain: 0.20, beam: 0.10 },
+    // ---- unshadowed point practicals ---------------------------------------
+    { name: 'portacabin', kind: 'tungsten', fixture: 'none',
+      pose: 'overview', f: 14.0, r: 12.0, y: 2.45, fb: [0.86, 0.78],
+      kelvin: 3000, intensity: 28, distance: 11, halo: 1.4 },
+    { name: 'deck_freighter', kind: 'mercury', fixture: 'none', supp: true,
+      prio: 30,
+      anchor: 'hull_b', anchorY: 0.35,
+      pose: 'gangway', f: 9.0, r: -4.0, y: 8.5, fb: [0.72, 0.10],
+      kelvin: HARBOR_MERCURY_K, intensity: 95, distance: 24, halo: 2.2 }
+    // NO navigation-light or reefer-bank PRACTICAL. Both used to be here at 18
+    // and 24 cd, both were beyond the practical cap and therefore silently
+    // dropped every single run, and neither would have lit anything if it had
+    // survived: a masthead nav light and a reefer indicator are SOURCES, not
+    // luminaires. They are in the picture as HARBOR_EMITTERS dots, which is what
+    // they actually are, and the two slots they were consuming now carry the
+    // crane rig - which is 30 m of the level's most photogenic object.
+  ];
+
+  // level_harbor publishes 20 of its own (10 masts, 2 high masts, 3 raking
+  // floods, 2 crane floods, 2 boom floods, 1 warehouse tube) and the supporting
+  // set this module appends has to fit as well or the last ones silently fall
+  // off the end of the table - which is exactly what had happened: probed
+  // against the live rig, all three lighting towers and the freighter deck lamp
+  // were being cut, and the cold half of the palette went with them. The cap is
+  // sized so the five ranked supporting lamps (see `prio`) always survive that
+  // number, and the ranking makes the cut deterministic if the level grows
+  // again. Every one is unshadowed, so the marginal cost is a few instructions
+  // per fragment - but it IS a per-fragment cost on every material in the
+  // terminal, which is why this is not simply raised until nothing is ever cut.
+  //
+  // 28, not 25, and the number is derived rather than chosen. level_harbor now
+  // publishes 21 lamps; the ranked supporting set is 8. At 25 the last three
+  // ranked lamps were silently dropped, and PROBED AGAINST THE LIVE RIG they
+  // were `tower_quay`, `tower_gangway` and `deck_freighter` - i.e. the cold
+  // half of the palette was missing from two of the six hero framings for
+  // exactly the reason the comment above says it must not be. 28 keeps
+  // everything down to `tower_gangway` (prio 24) and cuts only the 95 cd
+  // freighter deck lamp, which is a glow card in every frame that can see it
+  // anyway. If level_harbor publishes more, the `prio` ranking decides what
+  // goes, and the diag publishes `dropped` so the next author can see it.
+  var MAX_PRACTICALS_HARBOR = 28;
+
+  // The one gate. `levelDef.weather === 'storm'` is a second key on the same
+  // lock so a future stormy level inherits the rig; the market publishes
+  // `weather: null`, so it can never be true there.
+  function isHarborCtx(ctx) {
+    if (!ctx) return false;
+    if (ctx.levelId === 'harbor') return true;
+    return !!(ctx.levelDef && ctx.levelDef.weather === 'storm');
+  }
 
   // --------------------------------------------------------------------------
   // Practical (placed) light definitions.
@@ -851,6 +1399,11 @@
     this.bounce = null;
     this.hemi = null;
     this.ambient = null;
+    // COLD HARBOR only - the specular-free replacements for bounce/fillA/fillB.
+    // Null on every other level; see _buildFill.
+    this.hFillA = null;
+    this.hFillB = null;
+    this.hBounce = null;
     this.practicals = [];
     this.enabled = true;
 
@@ -911,6 +1464,30 @@
     this._svGate = 0;            // shader gate as applied to the world scene
     this._svDiag = null;
 
+    // ---- COLD HARBOR state --------------------------------------------------
+    // Every one of these is inert for level 1: isHarbor is false, so nothing
+    // reads them and no harbor code path is ever entered.
+    this.isHarbor = isHarborCtx(ctx);
+    this.flash = 0;                        // smoothed lightning intensity
+    this.flashDirection = new THREE.Vector3().copy(HARBOR_FLASH_FALLBACK);
+    this._flashPrev = 0;
+    this._flashFrames = 0;
+    this._flashLatch = new THREE.Vector3().copy(HARBOR_FLASH_FALLBACK);
+    this._harborBuilt = false;
+    this._harborF = null;                  // level frame (bounds + ground)
+    this._harborWindows = null;            // glow cards consumed by _findLitWindows
+    this._harborEmitters = null;           // indicator / nav / beacon dots
+    this._harborEmitDefs = null;
+    this._harborCones = null;              // volumetric lamp cones
+    this._coneScale = null;                // smoothed accumulated-cone cap
+    this._harborFixtures = null;           // merged housings / masts
+    this._harborAnchorMap = null;          // decorations, derived from the level
+    this._harborHero = [];                 // the shadow-casting practicals
+    this._harborShaftSkip = null;
+    this._heroCursor = 0;
+    // Published for a probing critic: "how many real sources are in this rig".
+    this.harborDiag = null;
+
     var seed = (ctx.seed || 20260801) ^ 0x5A17C0DE;
     this.noise = new GAME.Noise(seed);
     this.rng = ctx.rng && ctx.rng.fork ? ctx.rng.fork(0x10C17) : new GAME.RNG(seed);
@@ -922,11 +1499,17 @@
   Lighting.prototype.build = async function (ctx) {
     ctx = ctx || this.ctx;
     this.ctx = ctx;
+    this.isHarbor = isHarborCtx(ctx);
     try {
       this._configureRenderer(ctx);
       this._buildCascades(ctx);
       this._buildFill(ctx);
-      this._buildPracticals(ctx);
+      // The harbor's practicals are placed against the level's own camera poses
+      // and bounds, neither of which exist yet (level.js builds after lighting),
+      // so its rig is assembled on the first update instead - see
+      // _buildHarborRig. Building the market set here first would put nine
+      // street lamps in a container terminal for one frame.
+      if (!this.isHarbor) this._buildPracticals(ctx);
       if (ctx.scene && ctx.scene.isScene) ctx.scene.add(this.root);
       this._adoptEnvironment(ctx);
     } catch (e) {
@@ -961,6 +1544,28 @@
     // back to a single map covering the whole shadow distance. Softer, but it
     // still renders correctly instead of shadowing only the first few metres.
     if (!CSM_PATCHED) n = 1;
+    // COLD HARBOR: the cascades are the LIGHTNING caster and nothing else, so
+    // they only render during a strike - but when they do, they all render in
+    // the same frame. Two of them over 44 m is ample for a 60-180 ms event
+    // (the third and fourth exist for a sun that follows the player around all
+    // day) and it is two whole depth passes off the worst-case frame, which
+    // measured 491 draw calls against a ~500 budget.
+    //
+    // THE CAP IS 2, NOT 3, AND IT IS A CORRECTNESS LIMIT RATHER THAN A BUDGET.
+    // Every shadow-casting light costs the FRAGMENT shader one texture image
+    // unit. This level lights itself with practicals: five shadow-casting
+    // SpotLights, plus the sky-visibility volume, plus the PMREM environment,
+    // plus each surface's map/normal/roughness/ao/detail set. At three cascades
+    // that total crosses MAX_TEXTURE_IMAGE_UNITS (16 - the WebGL2 floor, and
+    // what SwiftShader and a great many real GPUs actually report), every
+    // affected program fails to validate, and three then issues
+    // `useProgram: program not valid` for it. The draw call is still counted,
+    // so the frame LOOKS healthy in the capture report while the containers,
+    // the crane and the warehouse are simply not drawn - which is exactly how
+    // this shipped unnoticed. Measured: at 4 and at 3 cascades the container
+    // canyon renders as empty apron; at 2 it renders in full, at ultra, with
+    // every post pass on. Do not raise this without re-measuring the unit count.
+    if (this.isHarbor) n = Math.min(n, 2);
 
     var res = M.clamp(Math.round(q.shadowRes || 2048), 256, 4096);
     // Packed-depth shadow maps are RGBA8: 4 bytes per texel, per cascade.
@@ -1027,6 +1632,59 @@
     this.hemi.position.set(0, 1, 0);   // three reads the hemisphere axis from this
     this.root.add(this.hemi);
 
+    // ---- COLD HARBOR: the same three fills, with no specular lobe -----------
+    // See the long note above HB. On a wet corrugated flank a DirectionalLight
+    // is a delta specular source and prints a coherent vertical barcode across
+    // an entire wall; a HemisphereLight with the same axis delivers the same
+    // diffuse gradient through `irradiance` and cannot alias, because three's
+    // hemisphere path never reaches RE_Direct or RE_IndirectSpecular.
+    //
+    // three takes the hemisphere axis from the light's POSITION (WebGLLights
+    // does setFromMatrixPosition + transformDirection), so a horizontal
+    // position is a horizontal axis - a surface whose normal points at the
+    // position collects skyColor, the opposite face collects groundColor. Both
+    // are tilted ~25 deg BELOW the horizon so the apron, whose normal is +Y,
+    // collects w = 0.29 rather than 0.5 and the pair keeps the wall-over-floor
+    // ratio the directional pair was tuned for.
+    //
+    // Built ONLY for the harbor, and the harbor's three directionals are not
+    // built at all: level 1 is frozen and must keep the exact light set - and
+    // the exact NUM_HEMI_LIGHTS / NUM_DIR_LIGHTS - it shipped with.
+    if (this.isHarbor) {
+      // The -0.418 elevation is SOLVED, not chosen: it is the tilt at which an
+      // up-facing normal collects 0.5 * (-0.418) + 0.5 = 0.291 of the pair,
+      // which is exactly the 0.192 (at HB.fill) the two directionals used to put
+      // on the apron. A flat horizontal axis would have handed the wet concrete
+      // 0.925 of the pair instead of 0.479 and printed the black mirror as flat
+      // pale grey - the substitution has to be energy-matched on the ground as
+      // well as on the walls or it trades one defect for another.
+      this.hFillA = new THREE.HemisphereLight(0xffb070, 0x0a0f14, 0);
+      this.hFillA.name = 'canyonFillWarm';
+      this.hFillA.position.set(0.900, -0.418, 0.129);
+      this.hFillB = new THREE.HemisphereLight(0xa8c8e8, 0x0a0f14, 0);
+      this.hFillB.name = 'canyonFillCold';
+      this.hFillB.position.set(-0.900, -0.418, -0.129);
+      // The ground bounce, same substitution: rays travelling UP off a soaked
+      // apron. Axis straight down, so a down-facing surface (a container lip, a
+      // boom underside, a chin) collects the whole term and an up-facing one
+      // collects none of it - which is exactly what the directional did.
+      this.hBounce = new THREE.HemisphereLight(0xff9a3c, 0x000000, 0);
+      this.hBounce.name = 'apronBounce';
+      this.hBounce.position.set(0, -1, 0);
+      this.root.add(this.hFillA, this.hFillB, this.hBounce);
+      // No bounce/fillA/fillB directionals here at all. Three fewer entries in
+      // NUM_DIR_LIGHTS is also three fewer per-fragment loops in every material
+      // in the terminal.
+      this.bounce = null;
+      this.fillA = null;
+      this.fillB = null;
+      this.fill = null;
+      this.ambient = new THREE.AmbientLight(0x24384a, 0.06);
+      this.ambient.name = 'shadowFloor';
+      this.root.add(this.ambient);
+      return;
+    }
+
     // ---- cheap approximate GI: warm bounce off the ground --------------------
     // A directional light whose rays travel UPWARD. It lights the undersides of
     // awnings, crates, the wrecked car and character chins with sand-coloured
@@ -1075,13 +1733,26 @@
     this.root.add(this.ambient);
   };
 
+  Lighting.prototype._maxPracticals = function () {
+    return this.isHarbor ? MAX_PRACTICALS_HARBOR : MAX_PRACTICALS;
+  };
+
   Lighting.prototype._buildPracticals = function (ctx, defs) {
     defs = defs || PRACTICALS;
-    for (var i = 0; i < defs.length && i < MAX_PRACTICALS; i++) {
+    var cap = this._maxPracticals();
+    for (var i = 0; i < defs.length && i < cap; i++) {
       var d = defs[i];
       var pos = d.pos || [0, 2, 0];
-      var col = GAME.Color.kelvin(d.kelvin || 2800, new THREE.Color());
-      if (d.kind === 'sodium') {
+      // A def may carry a fully-resolved colour (the harbor rig mixes its
+      // blackbody toward the art-directed sodium/mercury hues before it gets
+      // here). Anything without one keeps the level-1 kelvin + kind chain
+      // untouched, which is what makes this edit invisible to the market.
+      var col = (d.color && d.color.isColor)
+        ? d.color.clone()
+        : GAME.Color.kelvin(d.kelvin || 2800, new THREE.Color());
+      if (d.color && d.color.isColor) {
+        /* already resolved */
+      } else if (d.kind === 'sodium') {
         // Low-pressure sodium is far more saturated than a blackbody of the
         // same temperature - push the blue channel down. Not all the way to a
         // pure monochromatic amber though: with eight of these lit at night the
@@ -1108,7 +1779,11 @@
         light = new THREE.SpotLight(0xffffff, 0, dist, M.clamp(d.cone, 0.15, 1.4),
           d.penumbra != null ? d.penumbra : 0.40, 2);
         light.target.name = (d.name || 'practical') + '_target';
-        light.target.position.set(pos[0], pos[1] - 3.0, pos[2]);
+        if (d.aimPos && d.aimPos.length === 3) {
+          light.target.position.set(d.aimPos[0], d.aimPos[1], d.aimPos[2]);
+        } else {
+          light.target.position.set(pos[0], pos[1] - 3.0, pos[2]);
+        }
         this.root.add(light.target);
       } else {
         light = new THREE.PointLight(0xffffff, 0, dist, 2);
@@ -1116,6 +1791,21 @@
       light.name = d.name || ('practical_' + i);
       light.color.copy(col);
       light.castShadow = false;   // point shadows are 6 renders each - not worth it
+      // The two hero masts are the ONLY shadow-casting practicals in the build,
+      // and only in the harbor. A spot shadow is one extra depth pass of the
+      // whole scene, so two of them amortised over four frames is the entire
+      // practical shadow budget - see the header of the COLD HARBOR block.
+      if (d.shadow && this.isHarbor && light.isSpotLight) {
+        light.castShadow = true;
+        light.shadow.mapSize.set(1024, 1024);
+        light.shadow.bias = -0.0008;
+        light.shadow.normalBias = 0.045;
+        light.shadow.radius = 3;
+        light.shadow.camera.near = 0.6;
+        light.shadow.camera.far = dist * 1.05;
+        light.shadow.autoUpdate = false;
+        light.shadow.needsUpdate = true;
+      }
       light.position.set(pos[0], pos[1], pos[2]);
       this.root.add(light);
       this.practicals.push({
@@ -1136,6 +1826,31 @@
         // in by _buildLampVisuals once the practicals have been placed.
         visual: -1,
         haloScale: d.haloScale != null ? d.haloScale : HALO_SCALE,
+        // ---- harbor-only decoration (all undefined for level 1) -------------
+        // haloMax  : humid air makes a much larger halo than dry desert air, so
+        //            the market's 2.8 m ceiling has to be liftable per lamp.
+        // fixed    : this lamp has FIXTURE GEOMETRY built at its coordinates, so
+        //            _clampPracticals must not quietly slide the light out from
+        //            under its own housing.
+        // aimed    : the spot target was solved by the harbor rig; the enclosure
+        //            pass must not reset it to "3 m straight down".
+        // bulbR/bulbFlat/bulbAxis : the emissive source is a flattened LENS on
+        //            the fixture axis here, not a bare bulb.
+        haloMax: d.haloMax != null ? d.haloMax : null,
+        // HALO_GAIN was tuned against level 1's sodium, whose linear colour is
+        // (1.00, 0.19, 0.01) - only the red channel ever gets near the ceiling.
+        // A near-white 4800K LED halo at the same gain is (0.85, 0.85, 0.85)
+        // additive, which printed as a white ball filling an eighth of the quay
+        // frame. Cool practicals therefore carry their own gain. Null for every
+        // level-1 lamp, so its halos are bit-identical.
+        haloGain: d.haloGain != null ? d.haloGain : null,
+        fixed: !!d.fixed,
+        aimed: !!(d.aimPos && d.aimPos.length === 3),
+        bulbR: d.bulbR != null ? d.bulbR : null,
+        bulbFlat: d.bulbFlat != null ? d.bulbFlat : 1,
+        bulbAxis: d.bulbAxis || null,
+        bulbGain: d.bulbGain != null ? d.bulbGain : 1,
+        beam: null,
         phase: this.rng.range(0, 100)
       });
     }
@@ -1532,8 +2247,11 @@
       // headroom the practicals need back is correspondingly modest.
       p.boost = 1 + 0.55 * p.enclosure;
       // A spot practical's target has to follow it, or a lamp that _anchorPracticals
-      // relocated goes on pointing at where it used to be.
-      if (p.light.isSpotLight && p.light.target) {
+      // relocated goes on pointing at where it used to be. A lamp the harbor rig
+      // AIMED is exempt: its target was solved against the level (a wall flood
+      // rakes forward, a headlight throws down a lane) and resetting it to "3 m
+      // straight down" would point every flood at its own foot.
+      if (p.light.isSpotLight && p.light.target && !p.aimed) {
         p.light.target.position.set(p.base.x, p.base.y - 3.0, p.base.z);
       }
     }
@@ -1659,8 +2377,11 @@
       // Anchored lights were placed against this very grid a moment ago, with a
       // deliberate preference for sitting high and tight under a ceiling.
       // Re-clamping them for "clearance" would just pull them back into the
-      // middle of the room and undo that.
-      if (p.relocated) continue;
+      // middle of the room and undo that. `fixed` lamps have real FIXTURE
+      // GEOMETRY standing at their coordinates (harbor mast heads, floods), and
+      // a light that slides 2 m out of its own housing is a worse defect than
+      // one pressed slightly close to a container flank.
+      if (p.relocated || p.fixed) continue;
       var x0 = p.base.x, y0 = p.base.y, z0 = p.base.z;
       // Trigger only on genuinely buried or wall-hugging fixtures. A brazier
       // 0.7 m off the ground and a lamp head under an awning are both correct
@@ -1721,6 +2442,30 @@
   // prop happens to have been dropped on it since the number was written down.
   Lighting.prototype._probeRoadwayVisibility = function (lvl) {
     if (!this.skyVis) return SV_REF;
+    // The station list below is the MARKET's carriageway (x = 0, z = +8..-30).
+    // In a 90 x 70 m container terminal those coordinates are just as likely to
+    // land inside a stack as on the apron, so the harbor probes what it actually
+    // has: its own spawn point and every framing it publishes. Same idea - "what
+    // does open ground measure here" - measured against the right ground.
+    if (this.isHarbor) {
+      var hsum = 0, hn = 0, hv;
+      var hsp = lvl && lvl.spawnPoints && lvl.spawnPoints[0];
+      if (hsp && hsp.position) {
+        _v1.set(hsp.position.x, hsp.position.y + 1.6, hsp.position.z);
+        hv = this.skyVisibilityAt(_v1);
+        if (isFinite(hv) && hv > 0.08) { hsum += hv * 2; hn += 2; }
+      }
+      var hp = lvl && lvl.cameraPoses;
+      if (hp) {
+        for (var hk in hp) {
+          var hq = hp[hk] && hp[hk].position;
+          if (!hq || !isFinite(hq.x)) continue;
+          hv = this.skyVisibilityAt(hq);
+          if (isFinite(hv) && hv > 0.08) { hsum += hv; hn++; }
+        }
+      }
+      return hn ? (hsum / hn) : 0.72;   // an open quay is mostly open sky
+    }
     var zs = [8, 2, -6, -14, -22, -30];
     var sum = 0, n = 0;
     var poses = lvl && lvl.cameraPoses;
@@ -1811,6 +2556,11 @@
 
   Lighting.prototype._findLitWindows = function (G) {
     var out = [];
+    // The harbor authors its own glow cards (portacabin windows, the open
+    // roller door, reefer doors, the freighter's deck spill) against real
+    // published poses, so the street-facade march below - which assumes a
+    // 7-25 m wide canyon centred on x = 0 - must not run there.
+    if (this.isHarbor) return this._harborWindows || out;
     if (!G || !G.occ) return out;
     var rng = this.rng;
     // Alternating sides, receding down the street. A line of warm windows going
@@ -1900,15 +2650,25 @@
         for (var w = 0; w < wins.length; w++) {
           var d = wins[w];
           // Facing inward across the street: a quad's normal is +Z, so a yaw of
-          // +/- 90 degrees turns it to face -/+ X.
-          _q1.setFromAxisAngle(_upY, d.sign > 0 ? -Math.PI * 0.5 : Math.PI * 0.5);
-          m.compose(_v1.set(d.x, d.y, d.z), _q1, _v2.set(d.w * 2.2, d.h * 2.2, 1));
+          // +/- 90 degrees turns it to face -/+ X. A card may instead publish
+          // its own `yaw` (the harbor's openings face every which way); the
+          // market never does, so its matrices are bit-identical to before.
+          var wyaw = (d.yaw != null && isFinite(d.yaw))
+            ? d.yaw : (d.sign > 0 ? -Math.PI * 0.5 : Math.PI * 0.5);
+          var wsc = (d.scale != null && isFinite(d.scale)) ? d.scale : 2.2;
+          _q1.setFromAxisAngle(_upY, wyaw);
+          m.compose(_v1.set(d.x, d.y, d.z), _q1, _v2.set(d.w * wsc, d.h * wsc, 1));
           winMesh.setMatrixAt(w, m);
           d.color = GAME.Color.kelvin(d.kelvin, new THREE.Color());
+          if (d.tint && d.tint.isColor) d.color.lerp(d.tint, d.tintAmt != null ? d.tintAmt : 0.5);
           // Each window also gets a halo entry - glass spills into the air.
+          var hox = (d.hox != null && isFinite(d.hox)) ? d.hox : -(d.sign || 0) * 0.10;
+          var hoy = (d.hoy != null && isFinite(d.hoy)) ? d.hoy : 0;
+          var hoz = (d.hoz != null && isFinite(d.hoz)) ? d.hoz : 0;
+          var hs = (d.haloSize != null && isFinite(d.haloSize)) ? d.haloSize : d.w * 4.0;
           _q1.identity();
-          m.compose(_v1.set(d.x - d.sign * 0.10, d.y, d.z), _q1,
-            _v2.set(d.w * 4.0, d.w * 4.0, 1));
+          m.compose(_v1.set(d.x + hox, d.y + hoy, d.z + hoz), _q1,
+            _v2.set(hs, hs, 1));
           halos.setMatrixAt(n + w, m);
         }
         winMesh.instanceMatrix.needsUpdate = true;
@@ -1949,15 +2709,28 @@
       for (i = 0; i < n && i < vis.bulbs.count; i++) {
         p = this.practicals[i];
         lit = M.clamp(p.light.intensity / Math.max(p.intensity, 1e-3), 0, 2.2);
-        var r = BULB_RADIUS * (0.85 + 0.35 * M.saturate(lit));
-        m.makeScale(r, r, r);
-        m.setPosition(p.light.position.x, p.light.position.y, p.light.position.z);
+        var r = (p.bulbR != null ? p.bulbR : BULB_RADIUS) *
+          (0.85 + 0.35 * M.saturate(lit));
+        if (p.bulbAxis) {
+          // A mast head's visible source is the LENS in the bottom of a
+          // reflector, not a bare bulb: a flattened, axis-aligned disc of glass.
+          // Squashing the sphere along the beam axis is what makes it read as a
+          // fitting instead of as a floating pearl.
+          // _q2, NOT _q1: _q1 already holds the camera orientation the halo
+          // loop below is about to billboard every card with.
+          _q2.setFromUnitVectors(_upZ, p.bulbAxis);
+          _v2.set(r, r, r * (p.bulbFlat || 1));
+          m.compose(p.light.position, _q2, _v2);
+        } else {
+          m.makeScale(r, r, r);
+          m.setPosition(p.light.position.x, p.light.position.y, p.light.position.z);
+        }
         vis.bulbs.setMatrixAt(i, m);
         // Emissive level tracks the light's own live output, so a stuttering
         // sodium head and a gusting brazier flicker in the glass as well as on
         // the ground - the give-away that a "light source" is really a decal is
         // that it stays put while the light it claims to emit moves.
-        _c1.copy(p.light.color).multiplyScalar(BULB_GAIN * lit);
+        _c1.copy(p.light.color).multiplyScalar(BULB_GAIN * lit * (p.bulbGain || 1));
         vis.bulbs.setColorAt(i, _c1);
       }
       vis.bulbs.instanceMatrix.needsUpdate = true;
@@ -1968,11 +2741,17 @@
       for (i = 0; i < n && i < vis.halos.count; i++) {
         p = this.practicals[i];
         lit = M.clamp(p.light.intensity / Math.max(p.intensity, 1e-3), 0, 2.2);
-        var s = M.clamp((p.distance || 10) * (p.haloScale || HALO_SCALE) * 0.34, 0.7, 2.8) *
+        // A halo is the light scattered out of the beam by whatever is in the
+        // air between the lamp and the eye. In dry desert air that is a small
+        // disc; in a harbor downpour it is several metres across, so the ceiling
+        // is per-lamp. `haloMax` is null for every level-1 practical.
+        var s = M.clamp((p.distance || 10) * (p.haloScale || HALO_SCALE) * 0.34,
+          0.7, p.haloMax != null ? p.haloMax : 2.8) *
           (0.8 + 0.3 * M.saturate(lit));
         m.compose(p.light.position, _q1, _v2.set(s, s, 1));
         vis.halos.setMatrixAt(i, m);
-        _c1.copy(p.light.color).multiplyScalar(HALO_GAIN * lit);
+        _c1.copy(p.light.color).multiplyScalar(
+          HALO_GAIN * lit * (p.haloGain != null ? p.haloGain : 1));
         vis.halos.setColorAt(i, _c1);
       }
       for (var w = 0; w < vis.wins.length; w++) {
@@ -1991,7 +2770,8 @@
         var d2 = vis.wins[v2];
         // A slow, shallow drift so the row of windows is not a set of identical
         // static rectangles - somebody is moving around behind each of them.
-        var fl = 1 + this.noise.perlin2(this._t * 0.23 + v2 * 13.7, 3.3) * 0.11;
+        var fl = 1 + this.noise.perlin2(this._t * 0.23 + v2 * 13.7, 3.3) *
+          0.11 * (d2.flick != null ? d2.flick : 1);
         _c1.copy(d2.color).multiplyScalar(1.35 * d2.gain * lampOn * fl);
         vis.windows.setColorAt(v2, _c1);
       }
@@ -2036,7 +2816,16 @@
     if (!Array.isArray(defs) || !defs.length) return;
     try {
       var poses = (lvl && lvl.cameraPoses) || null;
-      for (var i = 0; i < defs.length && this._shafts.length < 2; i++) {
+      var skip = this._harborShaftSkip;
+      // Every published entry that is not already a lamp gets built. The old
+      // cap of 2 was written when the market published exactly one shaft; a
+      // level that publishes three real apertures should not silently lose one.
+      // Only the first casts a shadow - that is the whole shaft shadow budget.
+      var cap2 = this.isHarbor ? 4 : 2;
+      for (var i = 0; i < defs.length && this._shafts.length < cap2; i++) {
+        // An entry the harbor rig already turned into a mast lamp must not also
+        // become a shaft - it would stand a second cone inside the first.
+        if (skip && skip[i]) continue;
         var solved = this._solveShaft(G, defs[i], poses);
         if (solved) this._makeShaft(solved, this._shafts.length === 0);
       }
@@ -2075,6 +2864,15 @@
     var pp = pose && pose.position;
     var ex = def.origin.x, ey = def.origin.y, ez = def.origin.z;
     var best = null;
+    // The market's shafts are SOLAR: the aperture in the roofline is incidental
+    // and the beam only has to land somewhere the framing can see, so it is
+    // re-solved against the pose. A harbor shaft is a FIXTURE - level_harbor
+    // publishes the crane's own lighting rig this way - so its published origin
+    // is the answer and moving it would take the beam off the machine it is
+    // bolted to. A container terminal is also vertical: a 10.5 m ceiling on the
+    // run is a market constraint, not a physical one.
+    var LEN_MAX = this.isHarbor ? 22.0 : 10.5;
+    if (this.isHarbor) { pose = null; pp = null; }
 
     if (pp && isFinite(pose.yaw)) {
       // forward for yaw t is ( -sin t, 0, -cos t ) - the same convention the
@@ -2120,7 +2918,7 @@
           var score = pvis * 7.0 - Math.min(run, 9.0) * 0.5 +
             Math.abs(d - 3.8) * 0.9 + Math.abs(lat + 1.0) * 0.5;
           if (!best || score < best.score) {
-            best = { score: score, fx: px, fy: fy, fz: pz, run: Math.min(run, 10.5) };
+            best = { score: score, fx: px, fy: fy, fz: pz, run: Math.min(run, LEN_MAX) };
           }
         }
       }
@@ -2128,15 +2926,16 @@
 
     if (!best) {
       // No usable pose: fall back to the published aperture and just trace down.
-      var hit = svTrace(G, ex, ey, ez, bx, by, bz, 22.0);
+      var hit = svTrace(G, ex, ey, ez, bx, by, bz,
+        this.isHarbor ? LEN_MAX + 12.0 : 22.0);
       if (hit < 0) return null;
       best = {
         fx: ex + bx * hit, fy: ey + by * hit + 0.03, fz: ez + bz * hit,
-        run: Math.min(hit, 10.5)
+        run: Math.min(hit, LEN_MAX)
       };
     }
 
-    var len = M.clamp(best.run, 3.0, 10.5);
+    var len = M.clamp(best.run, 3.0, LEN_MAX);
     // Final guard: shorten until the aperture genuinely has clearance. The
     // occupancy lattice is 0.5 m, so the analytic stand-off above can still land
     // a spot half inside a parapet, and a shadow-casting spot that starts inside
@@ -2289,20 +3088,46 @@
     // of, and leaving one lit is the single most obvious "the lighting does not
     // know what time it is" tell there is.
     var amt = this.dayFactor * M.saturate(1 - this.duskFactor * 0.75);
+    // ---- COLD HARBOR ------------------------------------------------------
+    // There is no sun to make a shaft of, so a harbor shaft is not solar: it is
+    // the mercury flood outside spilling through the hole in the warehouse roof
+    // - which is exactly the framing ART_DIRECTION_HARBOR describes ("pooled
+    // water under a hole in the roof with rain coming through and a shaft of
+    // light"). It is therefore always on, cold, and driven off a fixed
+    // irradiance budget instead of off a key that spends most of its life at 0.
+    var harbor = this.isHarbor;
+    var hRain = 0.85;
+    if (harbor) {
+      amt = 1;
+      var hw = this.ctx && this.ctx.weather;
+      if (hw && isFinite(hw.rainIntensity)) hRain = M.clamp(hw.rainIntensity, 0, 1);
+      _c1.copy(HPAL.mercury).lerp(HPAL.lightning, 0.55 * this.flash);
+    }
     for (var i = 0; i < list.length; i++) {
       var sh = list[i];
       var d = sh.def;
       var on = amt * d.strength;
       // Spot intensity is candela, so the budget has to carry the r-squared the
       // inverse-square falloff is about to take back out.
-      sh.light.intensity = this.keyIntensity * d.len * d.len * SHAFT_GAIN * on;
-      sh.light.color.copy(this.keyColor);
+      if (harbor) {
+        sh.light.intensity = HB.shaftLux * d.len * d.len * on;
+        sh.light.color.copy(_c1);
+      } else {
+        sh.light.intensity = this.keyIntensity * d.len * d.len * SHAFT_GAIN * on;
+        sh.light.color.copy(this.keyColor);
+      }
       sh.light.visible = on > 0.02;
       if (sh.haze) {
         sh.haze.visible = on > 0.02;
-        sh.haze.material.uniforms.uColor.value.copy(this.keyColor);
-        sh.haze.material.uniforms.uAmt.value =
-          M.clamp(this.keyIntensity * SHAFT_HAZE, 0, 1.1) * on;
+        if (harbor) {
+          sh.haze.material.uniforms.uColor.value.copy(_c1);
+          sh.haze.material.uniforms.uAmt.value =
+            HB.shaftHaze * (0.55 + 0.75 * hRain) * on;
+        } else {
+          sh.haze.material.uniforms.uColor.value.copy(this.keyColor);
+          sh.haze.material.uniforms.uAmt.value =
+            M.clamp(this.keyIntensity * SHAFT_HAZE, 0, 1.1) * on;
+        }
       }
     }
   };
@@ -2333,6 +3158,1992 @@
     chain(ctx.viewScene, false);
   };
 
+  // ==========================================================================
+  // COLD HARBOR - the rig
+  // ==========================================================================
+
+  // ---- the volumetric lamp cone --------------------------------------------
+  // ART_DIRECTION_HARBOR: "The light cone through rain is the single most
+  // important effect in this level. A mast lamp with no visible volumetric cone
+  // in a downpour is a fail."
+  //
+  // There is no depth texture available to this module for a soft-particle
+  // term: postfx renders the scene INTO the target whose depth attachment
+  // would have to be sampled, and reading a bound depth attachment in the same
+  // pass is a feedback loop, not an optimisation problem. What replaces it is
+  // (a) an ordinary depth TEST - the shell is transparent with depthWrite off,
+  // so it draws after the opaque pass and is clipped by whatever geometry is in
+  // front of it - and (b) building the shell so that its open far end is buried
+  // BELOW the apron, where that same depth test removes it. The result is the
+  // thing a soft particle buys, a beam that terminates on the surface it
+  // reaches, without the plumbing.
+  //
+  // The cone itself is an ADDITIVE SHELL whose opacity is
+  // |N.V| raised to a power: a cone is optically thickest along the view ray at
+  // its own centreline and vanishes exactly at its silhouette, which is the
+  // cheap approximation that gives a beam with no hard edge anywhere. Both ends
+  // of the shell are taken to zero in the vertex attribute, because a cone that
+  // starts or stops at a finite brightness draws its own rim and a visible rim
+  // turns a beam back into a cone-shaped object.
+  var BEAM_VERT = [
+    'attribute float aGlow;',
+    'varying float vGlow;',
+    'varying vec3 vN;',
+    'varying vec3 vV;',
+    'varying vec3 vW;',
+    'void main() {',
+    '  vec4 wp = modelMatrix * vec4( position, 1.0 );',
+    '  vec4 mv = viewMatrix * wp;',
+    '  vN = normalMatrix * normal;',
+    '  vV = - mv.xyz;',
+    '  vW = wp.xyz;',
+    '  vGlow = aGlow;',
+    '  gl_Position = projectionMatrix * mv;',
+    '}'
+  ].join('\n');
+
+  var BEAM_FRAG = [
+    'uniform vec3 uColor;',
+    'uniform float uAmt;',
+    'uniform float uTime;',
+    'uniform float uRain;',
+    'uniform vec3 uAtten;',   // x = near distance, y = falloff scale, z = fog k
+    'varying float vGlow;',
+    'varying vec3 vN;',
+    'varying vec3 vV;',
+    'varying vec3 vW;',
+    'void main() {',
+    '  // |N.V| is the optical path through the shell: 1 down the centreline,',
+    '  // 0 exactly at the silhouette. The exponent is what decides whether the',
+    '  // beam has a bright core with air around it (high) or is a flat wedge',
+    '  // with a rim (low). 1.45 printed as cardboard.',
+    '  float f = abs( dot( normalize( vN ), normalize( vV ) ) );',
+    '  f = f * f; f = f * f * ( 0.35 + 0.65 * f );',
+    '  // Rain falling THROUGH the beam. Two incommensurate vertical frequencies',
+    '  // sheared by world x/z, so it never settles into a repeating band and it',
+    '  // reads as falling water rather than as a scrolling texture.',
+    '  float r = sin( vW.y * 4.7 - uTime * 12.0 + vW.x * 2.3 ) * 0.5 +',
+    '            sin( vW.y * 9.3 - uTime * 19.0 + vW.z * 3.1 ) * 0.5;',
+    '  float shimmer = 1.0 + uRain * 0.16 * r;',
+    '  // Gusts crossing the beam. Without this the cone has a mathematically',
+    '  // straight silhouette, which is the one thing no real beam in weather',
+    '  // has; the modulation runs across the beam, not along it, so it reads',
+    '  // as rain density rather than as a scrolling texture.',
+    '  float gust = 0.82 + 0.18 * sin( vW.x * 1.9 + vW.z * 2.4 - uTime * 1.3 ) *',
+    '               ( 0.5 + 0.5 * sin( vW.x * 4.3 - vW.z * 3.1 + uTime * 0.7 ) );',
+    '  // ---- what the eye actually receives from this much air ---------------',
+    '  // Scattered light obeys the same extinction law as reflected light, and',
+    '  // this shell used to ignore both terms: a cone 60 m away was billed',
+    '  // exactly like one 8 m away, with no transmittance and no tone curve',
+    '  // between it and the HDR buffer. From an elevated wide shot the camera',
+    '  // looks down the AXIS of many cones at once - the |N.V| maximum - and',
+    '  // ~19 shells summed into a flat milky veil over the whole midground.',
+    '  //   uAtten.z is the SAME fog density the surfaces get from sky.js, in',
+    '  //   the same exp( -(d*k)^2 ) law, so a beam and the wall behind it fade',
+    '  //   together instead of the beam floating in front of it;',
+    '  //   uAtten.x/y are the geometric term - a distant cone subtends less of',
+    '  //   the pixel, so it deposits less radiance in it.',
+    '  // Both are normalised on the CPU at HB.coneRef metres, so the hero beams',
+    '  // keep the brightness they were tuned to and only the far field pays.',
+    '  float dCam = length( vW - cameraPosition );',
+    '  float fk = uAtten.z * dCam;',
+    '  float atten = ( uAtten.y / ( uAtten.y + max( dCam - uAtten.x, 0.0 ) ) ) *',
+    '                exp( - fk * fk );',
+    '  gl_FragColor = vec4( uColor * ( uAmt * vGlow * f * shimmer * gust * atten ), 1.0 );',
+    '}'
+  ].join('\n');
+
+  function makeBeamMaterial() {
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        uColor: { value: new THREE.Color(1, 1, 1) },
+        uAmt: { value: 0 },
+        uTime: { value: 0 },
+        uRain: { value: 1 },
+        uAtten: { value: new THREE.Vector3(HB.coneNear, HB.coneFall, 0.010) }
+      },
+      vertexShader: BEAM_VERT,
+      fragmentShader: BEAM_FRAG,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+      // `fog: false` stays: three's fog chunk would MIX toward the fog colour,
+      // which on an additive pass means adding grey haze on top of the beam.
+      // The transmittance above is the correct operator for an emissive volume
+      // and it is applied to the beam's own energy, not blended over it.
+      fog: false
+    });
+  }
+
+  // Open truncated cone, built directly in WORLD space with an identity object
+  // transform - the lamps never move, so there is no reason to carry one.
+  function buildBeamGeometry(apex, dir, len, r0, r1, seg, ring) {
+    var ax = dir.clone().normalize();
+    var up = Math.abs(ax.y) > 0.98 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+    var u = new THREE.Vector3().crossVectors(up, ax).normalize();
+    var v = new THREE.Vector3().crossVectors(ax, u).normalize();
+    var pos = new Float32Array(seg * ring * 3);
+    var nrm = new Float32Array(seg * ring * 3);
+    var glow = new Float32Array(seg * ring);
+    var idx = [];
+    var j, i;
+    for (j = 0; j < ring; j++) {
+      var t = j / (ring - 1);
+      var rr = r0 + (r1 - r0) * t;
+      var cx = apex.x + ax.x * len * t;
+      var cy = apex.y + ax.y * len * t;
+      var cz = apex.z + ax.z * len * t;
+      // Brightest just under the lens and falling away: the beam is spreading
+      // over t^2 of area while the scatterers thin out, so a linear taper is
+      // far too flat and prints as a solid wedge.
+      //
+      // ---- BUT IT HAS TO REACH THE GROUND ----------------------------------
+      // This used to be `(1 - smoothstep(0.62, 1.0, t)) / (1 + 2.6t)`, which is
+      // ZERO over the last 38% of the drop and already down to 38% of the apex
+      // value where the fade begins. On an 11.5 m mast that put the end of the
+      // visible glow 4-5 m above its own pool: grey haze columns hanging in
+      // mid-air with dark ground underneath them and lamp heads that read as
+      // bright objects with nothing below them. ART_DIRECTION_HARBOR calls a
+      // mast lamp with no visible cone an instant fail and separately forbids
+      // "cones of fog"; that managed to be both at once.
+      //
+      // The taper is now mild all the way down (0.45 of apex at the far end
+      // before the 1/(1+1.4t) spread term), and the shell itself is built ~1.3 m
+      // PAST the aim point by _buildHarborCones, so its open far end is buried
+      // under the apron and clipped by the depth test. The beam therefore
+      // terminates exactly on the ellipse where it meets the ground - the same
+      // ellipse the pool edge is on, because both are built from _coneVis - and
+      // there is no rim anywhere. The last 12% still fades to zero for the
+      // lamps whose aim point is NOT the floor (the raking floods), where the
+      // far end really is in open air.
+      var g = M.smoothstep(0.0, 0.07, t) * (1 - M.smoothstep(0.88, 1.0, t)) *
+        M.lerp(1.0, 0.45, t) / (1 + 1.4 * t);
+      for (i = 0; i < seg; i++) {
+        var a = i / seg * Math.PI * 2;
+        var ca = Math.cos(a), sa = Math.sin(a);
+        var nx = u.x * ca + v.x * sa;
+        var ny = u.y * ca + v.y * sa;
+        var nz = u.z * ca + v.z * sa;
+        var o = (j * seg + i) * 3;
+        pos[o] = cx + nx * rr; pos[o + 1] = cy + ny * rr; pos[o + 2] = cz + nz * rr;
+        nrm[o] = nx; nrm[o + 1] = ny; nrm[o + 2] = nz;
+        glow[j * seg + i] = g;
+      }
+    }
+    for (var j2 = 0; j2 < ring - 1; j2++) {
+      for (var i2 = 0; i2 < seg; i2++) {
+        var a0 = j2 * seg + i2, b0 = j2 * seg + ((i2 + 1) % seg);
+        idx.push(a0, b0, a0 + seg, b0, b0 + seg, a0 + seg);
+      }
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+    geo.setAttribute('aGlow', new THREE.BufferAttribute(glow, 1));
+    geo.setIndex(idx);
+    geo.computeBoundingSphere();
+    return geo;
+  }
+
+  // --------------------------------------------------------------------------
+  // Where the level actually is. Nothing below assumes a coordinate: the frame
+  // is read from level.bounds and the ground from the player spawn, with a
+  // 90 x 70 m fallback taken from ART_DIRECTION_HARBOR for a level that failed
+  // to build at all (a missing level must dim the rig, not crash it).
+  // --------------------------------------------------------------------------
+  Lighting.prototype._harborFrame = function (ctx) {
+    var lvl = ctx && ctx.level;
+    var b = lvl && lvl.bounds;
+    var F = { minX: -45, maxX: 45, minZ: -40, maxZ: 30, gy: 0 };
+    if (b && b.min && b.max) {
+      if (isFinite(b.min.x) && isFinite(b.max.x) && b.max.x - b.min.x > 8) {
+        F.minX = b.min.x; F.maxX = b.max.x;
+      }
+      if (isFinite(b.min.z) && isFinite(b.max.z) && b.max.z - b.min.z > 8) {
+        F.minZ = b.min.z; F.maxZ = b.max.z;
+      }
+    }
+    var sp = lvl && lvl.spawnPoints && lvl.spawnPoints[0];
+    if (sp && sp.position && isFinite(sp.position.y)) F.gy = sp.position.y;
+    else if (b && b.min && isFinite(b.min.y)) F.gy = b.min.y + 1;
+    F.w = F.maxX - F.minX;
+    F.d = F.maxZ - F.minZ;
+    F.cx = (F.minX + F.maxX) * 0.5;
+    F.cz = (F.minZ + F.maxZ) * 0.5;
+    return F;
+  };
+
+  // Resolve a pose-relative placement into world space, and hand back the pose
+  // basis so the aim can be solved in the same frame of reference.
+  Lighting.prototype._harborResolve = function (ctx, def, forceFallback) {
+    var F = this._harborF;
+    var poses = ctx && ctx.level && ctx.level.cameraPoses;
+    var p = (poses && def.pose && !forceFallback) ? poses[def.pose] : null;
+    var out = {
+      pos: new THREE.Vector3(), fx: 0, fz: -1, rx: 1, rz: 0,
+      pose: false, eye: null
+    };
+    if (p && p.position && isFinite(p.position.x) && isFinite(p.position.z)) {
+      // forward for yaw t is ( -sin t, 0, -cos t ) - the convention every pose
+      // in this build is authored in - and right is ( -fz, 0, fx ).
+      var yaw = isFinite(p.yaw) ? p.yaw : 0;
+      var fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+      out.fx = fx; out.fz = fz; out.rx = -fz; out.rz = fx;
+      out.pose = true;
+      out.eye = p.position;
+      out.pos.set(
+        p.position.x + fx * (def.f || 0) + out.rx * (def.r || 0),
+        def.fromPose ? (p.position.y + (def.y || 0)) : (F.gy + (def.y || 0)),
+        p.position.z + fz * (def.f || 0) + out.rz * (def.r || 0));
+      return out;
+    }
+    // No such pose: fall back to normalised level-bounds coordinates and face
+    // the middle of the terminal.
+    var fb = def.fb || [0.5, 0.5];
+    out.pos.set(F.minX + fb[0] * F.w,
+      F.gy + (def.fbY != null ? def.fbY : (def.y || 0)),
+      F.minZ + fb[1] * F.d);
+    var dx = F.cx - out.pos.x, dz = F.cz - out.pos.z;
+    var dl = Math.sqrt(dx * dx + dz * dz);
+    if (dl > 1e-3) { out.fx = dx / dl; out.fz = dz / dl; out.rx = -out.fz; out.rz = out.fx; }
+    return out;
+  };
+
+  // Where a lamp throws. Extracted from _harborLampDefs so the pose-offset guard
+  // can preview exactly the answer the rig is about to use instead of
+  // approximating it - a guard that checks a different point from the one that
+  // ships is worse than no guard.
+  Lighting.prototype._harborAim = function (d, R, anchors, out) {
+    var F = this._harborF;
+    var pos = R.pos;
+    var ad = isFinite(d.aimDist) ? d.aimDist : 8;
+    var ax, az, ay = F.gy;
+    var aimA = (d.aimAnchor && anchors) ? anchors[d.aimAnchor] : null;
+    if (aimA && isFinite(aimA.x)) {
+      // Aimed at a GEOMETRY-DERIVED point, the same way it is mounted at one.
+      // This is the only aim mode that survives the level moving: a crane flood
+      // aimed down its own lane stays aimed down its own lane.
+      ax = aimA.x; ay = aimA.y; az = aimA.z;
+    } else if (d.aim === 'poseForward') {
+      ax = pos.x + R.fx * ad; az = pos.z + R.fz * ad;
+    } else if (d.aim === 'poseBack') {
+      ax = pos.x - R.fx * ad; az = pos.z - R.fz * ad;
+    } else if (d.aimPos && d.aimPos.length === 3) {
+      ax = d.aimPos[0]; ay = d.aimPos[1]; az = d.aimPos[2];
+    } else {
+      // A working mast lamp leans in over the area it is there to light.
+      var tx = F.cx - pos.x, tz = F.cz - pos.z;
+      var tl = Math.sqrt(tx * tx + tz * tz);
+      var tilt = isFinite(d.tilt) ? d.tilt : 0;
+      ax = pos.x + (tl > 1e-3 ? tx / tl * tilt : 0);
+      az = pos.z + (tl > 1e-3 ? tz / tl * tilt : 0);
+    }
+    if (!(ay < pos.y - 0.4)) ay = pos.y - 2.0;   // never aim up
+    return out.set(ax, ay, az);
+  };
+
+  // Is a world point inside the frustum of one of the level's published camera
+  // poses? Used by the pose-offset guard. Returns TRUE when it cannot tell (no
+  // such pose, no camera) - a guard that fires on missing information would
+  // relocate every lamp in the level the first time a pose was renamed.
+  //
+  // The margins are deliberately tighter than the frustum: a pool 1 px inside
+  // the bottom edge is in the frame and still invisible, because the viewmodel
+  // occupies the bottom fifth of every first-person framing.
+  Lighting.prototype._poseSees = function (ctx, poseName, pt) {
+    var poses = ctx && ctx.level && ctx.level.cameraPoses;
+    var p = (poses && poseName) ? poses[poseName] : null;
+    if (!p || !p.position || !isFinite(p.position.x) || !pt) return true;
+    var cam = ctx.camera;
+    var fovY = (cam && isFinite(cam.fov) && cam.fov > 5) ? cam.fov : 70;
+    var asp = (cam && isFinite(cam.aspect) && cam.aspect > 0.2) ? cam.aspect : 16 / 9;
+    var yaw = isFinite(p.yaw) ? p.yaw : 0;
+    var pitch = isFinite(p.pitch) ? p.pitch : 0;
+    var sy = Math.sin(yaw), cyw = Math.cos(yaw);
+    var sp = Math.sin(pitch), cp = Math.cos(pitch);
+    // forward for yaw t is ( -sin t, 0, -cos t ), pitched about the right axis.
+    var fX = -sy * cp, fY = sp, fZ = -cyw * cp;
+    var rX = cyw, rZ = -sy;                       // right = cross( forward, up )
+    var uX = sy * sp, uY = cp, uZ = cyw * sp;     // up    = cross( right, forward )
+    var dx = pt.x - p.position.x, dy = pt.y - p.position.y, dz = pt.z - p.position.z;
+    var zf = dx * fX + dy * fY + dz * fZ;
+    if (!(zf > 0.5)) return false;                // behind the camera
+    var th = Math.tan(fovY * 0.5 * M.DEG);
+    if (!(th > 1e-4)) return true;
+    var ny = (dx * uX + dy * uY + dz * uZ) / zf / th;
+    var nx = (dx * rX + dz * rZ) / zf / (th * asp);
+    return Math.abs(nx) <= 0.92 && Math.abs(ny) <= 0.78;
+  };
+
+  // --------------------------------------------------------------------------
+  // Build the harbor lamp definition list.
+  //
+  // PRECEDENCE, and why. level_harbor.js knows where its own containers are and
+  // this module does not, so anything it publishes wins:
+  //   1. level.practicalLights / level.mastLamps - full override (the documented
+  //      cross-module contract, already honoured for level 1).
+  //   2. level.lightShafts entries flagged { lamp: true } or kind 'lamp'/'mast'
+  //      - explicit mast positions. Unflagged shaft entries keep their existing
+  //      meaning (a real shaft of light, e.g. through the warehouse roof hole)
+  //      and are still built by _buildShafts; silently re-purposing a documented
+  //      field is exactly how cross-module contracts break.
+  //   3. the pose-relative table above.
+  // --------------------------------------------------------------------------
+  Lighting.prototype._harborLampDefs = function (ctx) {
+    var F = this._harborF;
+    var lvl = ctx && ctx.level;
+    var src = null, fromLevel = false, k;
+    if (lvl && Array.isArray(lvl.practicalLights) && lvl.practicalLights.length) {
+      src = lvl.practicalLights; fromLevel = true;
+    } else if (lvl && Array.isArray(lvl.mastLamps) && lvl.mastLamps.length) {
+      src = lvl.mastLamps; fromLevel = true;
+    }
+
+    // ---- AUDIT level.lightShafts : every published entry must end up as -----
+    // ---- something visible --------------------------------------------------
+    // level_harbor.js publishes one lightShafts entry PER MAST as the cone spec
+    // for that mast, plus the crane/quay and warehouse shafts. Each mast entry
+    // normally pairs with a practicalLights entry at the same head, and in that
+    // case it must NOT also become a shaft (a second cone inside the first) or a
+    // second lamp - the volumetric cone is built from that SpotLight's own angle
+    // further down, so the beam you see and the pool you see can never disagree.
+    //
+    // The pairing is now VERIFIED rather than assumed. A mast entry with no
+    // published lamp within PAIR_R of it is an ORPHAN: the level asked for a
+    // lamp there and nothing in the build was making one. Orphans are adopted
+    // here and get the full treatment - light, mast fixture, emissive lens, halo
+    // and cone. The audit is published in harborDiag so a probing critic can see
+    // shafts_published == shafts_paired + shafts_adopted + shafts_asShaft.
+    var extra = [];
+    var PAIR_R2 = 1.6 * 1.6;
+    var shaftsTotal = 0, shaftsPaired = 0, shaftsAdopted = 0;
+    this._harborShaftSkip = {};
+    if (lvl && Array.isArray(lvl.lightShafts)) {
+      for (var s = 0; s < lvl.lightShafts.length; s++) {
+        var sd = lvl.lightShafts[s];
+        if (!sd || !sd.origin || !isFinite(sd.origin.x)) continue;
+        shaftsTotal++;
+        // Does the level already run a light at this aperture? Tested for EVERY
+        // kind, not just the ones tagged 'mast'. level_harbor publishes its low
+        // raking beams as BOTH a practicalLight and a lightShaft at the same
+        // origin, and taking the kind tag at face value stood a second, dimmer
+        // cone inside the first one - two beams, one lamp, slightly different
+        // angles, which reads as a rendering fault rather than as a beam.
+        var paired = false;
+        if (fromLevel && src) {
+          for (var pj = 0; pj < src.length && !paired; pj++) {
+            var pd2 = src[pj];
+            if (!pd2 || !pd2.pos || !isFinite(pd2.pos[0])) continue;
+            var ddx = pd2.pos[0] - sd.origin.x;
+            var ddy = pd2.pos[1] - sd.origin.y;
+            var ddz = pd2.pos[2] - sd.origin.z;
+            if (ddx * ddx + ddy * ddy + ddz * ddz <= PAIR_R2) paired = true;
+          }
+        }
+        if (paired) { this._harborShaftSkip[s] = 1; shaftsPaired++; continue; }
+        // Not paired, and not tagged as a lamp head: it is a real aperture and
+        // _buildShafts owns it.
+        if (!(sd.lamp === true || sd.kind === 'lamp' || sd.kind === 'mast' ||
+              sd.kind === 'mast_lamp')) continue;
+        // Tagged as a lamp head with no lamp behind it. The level asked for a
+        // fixture here and nothing in the build was making one, so adopt it.
+        this._harborShaftSkip[s] = 1;
+        shaftsAdopted++;
+        extra.push({
+          name: sd.name || ('mast_lamp_' + s), kind: 'sodium', fixture: 'mast',
+          pos: [sd.origin.x, sd.origin.y, sd.origin.z],
+          kelvin: HARBOR_SODIUM_K,
+          intensity: isFinite(sd.intensity) ? sd.intensity : 980,
+          distance: isFinite(sd.distance) ? sd.distance
+            : M.clamp((isFinite(sd.length) ? sd.length : 12) * 3.0, 16, 40),
+          // The level publishes the cone as a WIDTH at the floor and a LENGTH,
+          // which is a better spec than an angle because it survives the mast
+          // being moved. Turn it back into a half-angle.
+          cone: isFinite(sd.cone) ? sd.cone
+            : (isFinite(sd.width) && isFinite(sd.length) && sd.length > 0.5
+              ? M.clamp(Math.atan((sd.width * 0.5) / sd.length) * 2.2, 0.25, 0.7)
+              : 0.52),
+          penumbra: 0.36, shadow: false,
+          tilt: 2.6, halo: 3.4, beam: isFinite(sd.strength) ? sd.strength : 1.0
+        });
+      }
+    }
+    this._shaftAudit = {
+      published: shaftsTotal, paired: shaftsPaired, adopted: shaftsAdopted
+    };
+
+    var table = [];
+    for (k = 0; k < extra.length; k++) table.push(extra[k]);
+    var base = fromLevel ? src : HARBOR_LAMPS;
+    for (k = 0; k < base.length; k++) {
+      var bd = base[k];
+      if (!bd) continue;
+      // The level authored its own masts; do not stack ours on top of them.
+      if (extra.length && !fromLevel && bd.fixture === 'mast') continue;
+      table.push(bd);
+    }
+    // A level that publishes its own lamp set publishes the KEY lamps - masts,
+    // floods, interiors. It does not publish the small stuff the brief calls
+    // for (a freighter deck row, a blinking navigation light, a reefer bank, a
+    // vehicle headlight), and those are what stop a terminal from reading as
+    // four lamp posts in a car park. They are appended, not substituted, and
+    // only up to the practical cap.
+    // ORDERED BY `prio`, and that ordering is load-bearing rather than tidy.
+    // The cap is a hard cut at the end of the table, so whichever supporting
+    // lamps happen to sit last in source order are the ones that silently do
+    // not exist - and level_harbor grew from 16 published lamps to 20 during
+    // this round, which quietly deleted all three lighting towers and the
+    // freighter deck lamp without changing a line in this file. That is exactly
+    // how the cold half of the palette went missing: measured over pixels above
+    // 0.40 luma the containers framing came back 3.5% cool, and the reason was
+    // not the tuning, it was that the cold lamp was not being built at all.
+    // Ranking them explicitly means the two that get cut are always the two
+    // that matter least, whatever the level publishes next.
+    if (fromLevel) {
+      var supp = [];
+      for (k = 0; k < HARBOR_LAMPS.length; k++) {
+        if (HARBOR_LAMPS[k].supp) supp.push(HARBOR_LAMPS[k]);
+      }
+      supp.sort(function (a, b) {
+        return (isFinite(a.prio) ? a.prio : 50) - (isFinite(b.prio) ? b.prio : 50);
+      });
+      for (k = 0; k < supp.length; k++) table.push(supp[k]);
+    }
+    // Published in harborDiag so "how many lamps did the cap silently eat" is a
+    // number a critic can read instead of a thing that has to be re-derived.
+    this._harborWanted = table.length;
+
+    var out = [];
+    var cap = this._maxPracticals();
+    var upY = new THREE.Vector3(0, 1, 0);
+    // Resolved once, off the level as it is right now (see _harborAnchors).
+    var anchors = this._harborAnchorMap ||
+      (this._harborAnchorMap = this._harborAnchors(ctx));
+    for (k = 0; k < table.length && out.length < cap; k++) {
+      var d = table[k];
+      if (!d) continue;
+      // A lamp that names an aim anchor the level does not have this run has
+      // nothing to point at, and a big flood pointing at the default (straight
+      // down, from 15 m up inside a gantry) is worse than an absent one.
+      if (d.aimAnchor &&
+          !(anchors && anchors[d.aimAnchor] && isFinite(anchors[d.aimAnchor].x))) continue;
+      var R;
+      var anch = (d.anchor && anchors) ? anchors[d.anchor] : null;
+      if (d.pos && d.pos.length === 3 && isFinite(d.pos[0])) {
+        R = { pos: new THREE.Vector3(d.pos[0], d.pos[1], d.pos[2]),
+              fx: 0, fz: -1, rx: 1, rz: 0, pose: false, eye: null };
+        var dxc = F.cx - R.pos.x, dzc = F.cz - R.pos.z;
+        var dlc = Math.sqrt(dxc * dxc + dzc * dzc);
+        if (dlc > 1e-3) {
+          R.fx = dxc / dlc; R.fz = dzc / dlc; R.rx = -R.fz; R.rz = R.fx;
+        }
+      } else if (anch && isFinite(anch.x)) {
+        // A GEOMETRY-DERIVED placement. `nx/nz` points back at the framing this
+        // anchor was solved for, so `anchorBack` sets the fixture a little
+        // further from the eye than the open-floor point it was found at - a
+        // light tower belongs beside the working area, not in the lens.
+        var back = d.anchorBack || 0;
+        // `anchorSide` steps toward a wall, clamped by the clearance the anchor
+        // actually measured, so a lighting tower stands at the edge of the lane
+        // rather than in the middle of the shot. A cone is a subject at 15-40 m
+        // and a whiteout at 6, and the middle of the lane is where the camera is.
+        var side = 0;
+        if (d.anchorSide && isFinite(anch.wL) && isFinite(anch.wR)) {
+          side = d.anchorSide > 0
+            ? Math.min(d.anchorSide, Math.max(0, anch.wR - 0.85))
+            : -Math.min(-d.anchorSide, Math.max(0, anch.wL - 0.85));
+        }
+        var arx = (anch.rx != null) ? anch.rx : -anch.nz;
+        var arz = (anch.rz != null) ? anch.rz : anch.nx;
+        R = {
+          pos: new THREE.Vector3(anch.x - anch.nx * back + arx * side,
+            anch.y + (d.anchorY != null ? d.anchorY : 0),
+            anch.z - anch.nz * back + arz * side),
+          fx: -anch.nx, fz: -anch.nz, rx: anch.nz, rz: -anch.nx,
+          pose: true, eye: null
+        };
+      } else if (d.anchor) {
+        // The level does not have this feature this run. A supporting lamp
+        // floating where the feature used to be is worse than no lamp.
+        continue;
+      } else {
+        R = this._harborResolve(ctx, d);
+        // ---- THE POSE-OFFSET GUARD ------------------------------------------
+        // A lamp authored as an offset from a CAMERA POSE and aimed downward
+        // works for a framing that looks along the ground and fails for every
+        // framing that looks up - and it fails SILENTLY, which is why it stood
+        // for a whole round. Measured on the crane framing: it is pitched up 21
+        // degrees at 70 degrees vertical FOV, so its horizon sits at ndc
+        // y = -0.55 and no point on the apron can reach the middle third at all;
+        // the old crane flood - the level's brightest cold source, 1100 cd -
+        // landed its pool at ndc y = -0.835, row 660 of 720, underneath the gun
+        // and the hands, and the crane capture was the only frame in the level
+        // still under the exposure floor.
+        //
+        // If the aim point falls outside the frustum of the very pose the lamp
+        // was authored against, the authoring is wrong for that framing, so fall
+        // back to the level-bounds placement rather than shipping a lamp that
+        // lights nothing anyone will see. Anchored lamps skip this: they are
+        // resolved from geometry and are not claiming to be for a framing.
+        if (d.fromPose && R.pose) {
+          this._harborAim(d, R, anchors, _v5);
+          if (!this._poseSees(ctx, d.pose, _v5)) R = this._harborResolve(ctx, d, true);
+        }
+      }
+      var pos = R.pos;
+      if (!isFinite(pos.x) || !isFinite(pos.y) || !isFinite(pos.z)) continue;
+
+      // ---- colour -----------------------------------------------------------
+      // Blackbody first (GAME.Color.kelvin), then pulled onto the art-directed
+      // hue. 2000K alone is #ff890e, a shade deeper than the bible's #ff9a3c;
+      // 5600K alone is a WARM white, and mercury/LED floods have to read cold
+      // against the sodium or the whole two-temperature idea evaporates.
+      var col = GAME.Color.kelvin(d.kelvin || 2800, new THREE.Color());
+      var kind = d.kind || 'sodium';
+      if (kind === 'sodium' || kind === 'sodium_failing') {
+        col.lerp(HPAL.sodium, 0.35);
+      } else if (kind === 'mercury') {
+        col.lerp(HPAL.mercury, 0.80);
+      } else if (kind === 'fluoro_cold') {
+        col.lerp(HPAL.mercury, 0.55);
+        col.multiply(_c1.setRGB(0.94, 1.0, 0.96));   // the sickly fluoro green
+      } else if (kind === 'led') {
+        col.lerp(HPAL.mercury, 0.38);
+      } else if (kind === 'reefer') {
+        col.lerp(HPAL.mercury, 0.90);
+      } else if (kind === 'nav') {
+        col.lerp(_c2.setRGB(0.06, 1.0, 0.42), 0.88);  // starboard green
+      } else if (kind === 'fluoro') {
+        // A level publishing its own set uses level 1's vocabulary, where
+        // 'fluoro' is the only cool kind there is - level_harbor maps its
+        // mercury quay flood onto it at 5200K. A pure blackbody at 5200K is a
+        // WARM white; the whole 2000K-against-cold idea depends on this half
+        // actually reading cold, so it is pulled onto the art-directed
+        // #cfe6ff by an amount that scales with how cool it claims to be.
+        col.lerp(HPAL.mercury, (d.kelvin || 4200) >= 4800 ? 0.78 : 0.46);
+      }
+
+      // ---- aim --------------------------------------------------------------
+      var aimPos = null, axis = null, beamLen = 0;
+      if (d.cone) {
+        this._harborAim(d, R, anchors, _v5);
+        aimPos = [_v5.x, _v5.y, _v5.z];
+        axis = new THREE.Vector3(_v5.x - pos.x, _v5.y - pos.y, _v5.z - pos.z);
+        beamLen = Math.max(axis.length(), 0.5);
+        axis.multiplyScalar(1 / beamLen);
+      }
+
+      // A level that publishes its own lamps has already built the masts,
+      // brackets and lit apertures as level geometry, so this module must NOT
+      // stand a second housing on top of them. It still contributes the beam
+      // and a live emissive lens, because the level's aperture is a static
+      // material and cannot gutter with a failing arc.
+      var levelOwned = !!(fromLevel && src && k >= extra.length &&
+        k < extra.length + src.length);
+      var fixture = levelOwned ? 'none' : (d.fixture || 'none');
+      var beamGain = isFinite(d.beam) ? d.beam : (levelOwned && d.cone ? 1.0 : 0);
+
+      // ---- core + skirt ------------------------------------------------------
+      // `coneVis` is the authored beam: the bright core, and the angle the
+      // volumetric shell is built from so the visible beam and the visible pool
+      // agree. `coneLit` opens the SpotLight past it and `penLit` is solved so
+      // full output still ends exactly at LAMP_CORE of the authored angle - the
+      // pool the level asked for, unchanged, now with a real falloff skirt round
+      // it instead of a hard edge and a black yard.
+      var coneVis = d.cone || 0;
+      var coneLit = coneVis, penLit = d.penumbra != null ? d.penumbra : 0.38;
+      if (coneVis > 0) {
+        coneLit = M.clamp(
+          Math.min(coneVis * HB.lampSkirt, Math.max(coneVis, HB.lampMax)),
+          0.15, 1.05);
+        // three fades from angle*(1-penumbra) out to angle.
+        penLit = M.clamp(1 - (coneVis * HB.lampCore) / coneLit,
+          HB.lampPenMin, 0.85);
+      }
+
+      var e = {
+        name: d.name || ('harbor_lamp_' + k),
+        kind: kind,
+        pos: [pos.x, pos.y, pos.z],
+        color: col,
+        kelvin: d.kelvin || 2800,
+        intensity: (isFinite(d.intensity) ? d.intensity : 200) *
+          (levelOwned ? HB.levelLampGain : 1),
+        distance: isFinite(d.distance) ? d.distance : 20,
+        dayBase: 1,                     // there is no day here
+        cone: coneLit,
+        penumbra: penLit,
+        aimPos: aimPos,
+        shadow: !!d.shadow,
+        // Only a lamp this module built a housing for is pinned; a supporting
+        // light placed off a camera pose is a guess and _clampPracticals is
+        // allowed to push it out of whatever container it landed in.
+        fixed: !!(levelOwned || fixture !== 'none'),
+        haloScale: isFinite(d.haloScale) ? d.haloScale : HALO_SCALE,
+        // A halo is scattering in the air BETWEEN the lamp and the eye, so a
+        // fitting at head height a few metres away has almost no air to scatter
+        // in - it gets a small tight glow. The mast heads, ten metres up in a
+        // downpour, get the big one.
+        haloMax: Math.min(isFinite(d.halo) ? d.halo : (levelOwned ? 3.2 : 2.4),
+          (pos.y - F.gy) < 3.0 ? 0.85 : 4.0),
+        haloGain: isFinite(d.haloGain) ? d.haloGain
+          : (kind === 'sodium' || kind === 'sodium_failing' ? 0.55 : 0.34),
+        // The visible source. A mast head's is the LENS in the bottom of its
+        // reflector - a flattened disc on the beam axis, not a floating pearl.
+        // A mast head IS a metre-wide reflector ten metres up and can carry a
+        // 40 cm lens; a forklift headlight or a tower head is a small fitting
+        // that the framings put 6-10 m from the lens, where a 26 cm emissive
+        // sphere prints as a 50 px white ball - the "muzzle flash is a white
+        // sphere" tell, applied to a lamp. Sized by what the fitting IS.
+        bulbR: axis ? (fixture === 'mast' ? 0.40 : (levelOwned ? 0.23 : 0.145)) : 0.10,
+        bulbFlat: axis ? 0.30 : 1,
+        bulbAxis: axis ? axis.clone() : null,
+        // BULB_GAIN is a RADIANCE, and it was tuned against level 1's 7.5 cm
+        // bare bulb. A 26 cm lens has twelve times the area, so carrying the
+        // same radiance printed the forklift headlight as a white disc 110 px
+        // across in the containers capture. A diffusing lens is also physically
+        // dimmer per unit area than the bare arc behind it, so it goes down,
+        // not just proportionally down.
+        bulbGain: axis ? (fixture === 'mast' ? 0.30 : (levelOwned ? 0.22 : 0.16)) : 0.85,
+        _fixture: fixture,
+        _beamGain: beamGain,
+        _beamLen: beamLen,
+        _coneVis: coneVis,
+        _axis: axis,
+        _lean: axis ? new THREE.Vector3(axis.x, 0, axis.z) : null,
+        _up: upY
+      };
+      if (e._lean) {
+        if (e._lean.lengthSq() < 1e-6) e._lean.set(-R.fx, 0, -R.fz);
+        e._lean.normalize();
+      }
+      out.push(e);
+    }
+
+    // ---- nominate the hero shadow casters ---------------------------------
+    // A level publishing its own lamps has no reason to know that this rig can
+    // only afford two shadow-casting practicals, so it nominates none. Pick the
+    // spot nearest each hero framing: a shadow the camera never sees is a depth
+    // pass spent on nothing.
+    var anyShadow = false;
+    for (k = 0; k < out.length; k++) if (out[k].shadow) anyShadow = true;
+    if (!anyShadow && out.length) {
+      var heroNames = ['quay', 'containers'];
+      var poses2 = lvl && lvl.cameraPoses;
+      var used = {};
+      for (var hp = 0; hp < heroNames.length; hp++) {
+        var hpp = poses2 && poses2[heroNames[hp]] && poses2[heroNames[hp]].position;
+        var bestI = -1, bestScore = Infinity;
+        for (k = 0; k < out.length; k++) {
+          if (used[k] || !out[k].cone) continue;
+          var sc;
+          if (hpp && isFinite(hpp.x)) {
+            var qx = out[k].pos[0] - hpp.x, qz = out[k].pos[2] - hpp.z;
+            sc = qx * qx + qz * qz;
+          } else {
+            sc = -out[k].intensity;         // no poses: take the brightest
+          }
+          if (sc < bestScore) { bestScore = sc; bestI = k; }
+        }
+        if (bestI >= 0) { out[bestI].shadow = true; used[bestI] = 1; }
+      }
+    }
+    return out;
+  };
+
+  // --------------------------------------------------------------------------
+  // Fixture geometry. Two merged meshes, two draw calls for the whole rig:
+  // the POLES cast shadows (a mast throwing a hard bar across its own pool is
+  // one of the most recognisable things about a container terminal at night),
+  // the HEADS do not - a housing sitting on top of its own spot would shadow-map
+  // the entire cone to black.
+  // --------------------------------------------------------------------------
+  Lighting.prototype._harborMetal = function (ctx) {
+    if (this._harborMetalMat) return this._harborMetalMat;
+    var names = ['deck_plate', 'painted_metal', 'rusted_metal', 'ship_hull'];
+    var m = null;
+    var lib = ctx && ctx.materials;
+    if (lib && typeof lib.get === 'function') {
+      for (var i = 0; i < names.length && !m; i++) {
+        try {
+          var c = lib.get(names[i], { repeat: [1.6, 1.6] });
+          if (c && c.isMaterial) m = c;
+        } catch (e) { /* try the next documented name */ }
+      }
+    }
+    if (!m) {
+      m = new THREE.MeshStandardMaterial({
+        color: 0x2b3033, roughness: 0.55, metalness: 0.72
+      });
+      m.name = 'harborLampFallback';
+      this._harborOwnMat = m;
+    }
+    this._harborMetalMat = m;
+    return m;
+  };
+
+  Lighting.prototype._buildHarborFixtures = function (ctx, defs) {
+    if (this._harborFixtures) return;
+    var poles = [], heads = [];
+    var m = new THREE.Matrix4();
+    var q = new THREE.Quaternion();
+    var one = new THREE.Vector3(1, 1, 1);
+    var upY = new THREE.Vector3(0, 1, 0);
+    var F = this._harborF;
+    var ARM = 1.55;
+    var i;
+
+    for (i = 0; i < defs.length; i++) {
+      var d = defs[i];
+      if (d._fixture !== 'mast' && d._fixture !== 'flood' && d._fixture !== 'tower') continue;
+      var P = new THREE.Vector3(d.pos[0], d.pos[1], d.pos[2]);
+      var A = d._axis || new THREE.Vector3(0, -1, 0);
+      var lean = d._lean || new THREE.Vector3(0, 0, -1);
+      // +Y of every housing piece points back UP the beam.
+      q.setFromUnitVectors(upY, _v1.copy(A).negate());
+
+      // reflector: a truncated cone, narrow end at the housing, wide end open
+      // toward the ground. CylinderGeometry runs +Y (top) to -Y (bottom), and
+      // the quaternion above maps -Y onto the beam, so radiusBottom is the mouth.
+      var rTop = d._fixture === 'mast' ? 0.22 : 0.16;
+      var rBot = d._fixture === 'mast' ? 0.62 : 0.40;
+      var rH = d._fixture === 'mast' ? 0.38 : 0.26;
+      m.compose(_v2.copy(P).addScaledVector(A, -rH * 0.5 + 0.02), q, one);
+      heads.push({ geometry: new THREE.CylinderGeometry(rTop, rBot, rH, 14, 1), matrix: m.clone() });
+
+      // housing above it, and a rim ring around the lens so the emissive disc
+      // has a dark bezel to read against instead of floating.
+      var hw = d._fixture === 'mast' ? 0.92 : 0.66;
+      var hh = d._fixture === 'mast' ? 0.30 : 0.26;
+      var hd = d._fixture === 'mast' ? 0.62 : 0.46;
+      m.compose(_v2.copy(P).addScaledVector(A, -(rH + hh * 0.5) - 0.01), q, one);
+      heads.push({ geometry: GAME.Geo.bevelBox(hw, hh, hd, 0.045), matrix: m.clone() });
+      m.compose(_v2.copy(P).addScaledVector(A, -0.02), q, one);
+      heads.push({
+        geometry: new THREE.CylinderGeometry(rBot * 0.98, rBot * 0.98, 0.07, 14, 1),
+        matrix: m.clone()
+      });
+
+      if (d._fixture === 'mast') {
+        // ---- the mast itself ------------------------------------------------
+        // The pole stands BEHIND the head, on the far side from the lean, which
+        // is what a real mast lamp does: it stands at the edge of the apron and
+        // its bracket arm reaches out over the working area.
+        var px = P.x - lean.x * ARM, pz = P.z - lean.z * ARM;
+        var top = P.y + 0.55;
+        var H = Math.max(top - F.gy, 3.0);
+        m.makeTranslation(px, F.gy + H * 0.5, pz);
+        poles.push({ geometry: new THREE.CylinderGeometry(0.16, 0.27, H, 10, 1), matrix: m.clone() });
+        m.makeTranslation(px, F.gy + 0.16, pz);
+        poles.push({ geometry: new THREE.CylinderGeometry(0.46, 0.62, 0.32, 10, 1), matrix: m.clone() });
+        // supply cable clipped to the pole - pure silhouette, but a perfectly
+        // clean cylinder is one of the tells ARCHITECTURE section 9 lists.
+        m.makeTranslation(px + 0.24, F.gy + H * 0.46, pz + 0.06);
+        poles.push({ geometry: new THREE.CylinderGeometry(0.045, 0.045, H * 0.9, 5, 1), matrix: m.clone() });
+        // bracket arm from the pole head out to the housing
+        var yaw = Math.atan2(-lean.z, lean.x);
+        q.setFromAxisAngle(upY, yaw);
+        m.compose(_v2.set((px + P.x) * 0.5, top - 0.14, (pz + P.z) * 0.5), q, one);
+        heads.push({ geometry: new THREE.BoxGeometry(ARM + 0.34, 0.16, 0.16), matrix: m.clone() });
+        // gusset under the arm
+        m.compose(_v2.set(px + lean.x * 0.45, top - 0.52, pz + lean.z * 0.45), q, one);
+        heads.push({ geometry: new THREE.BoxGeometry(0.9, 0.5, 0.09), matrix: m.clone() });
+      } else if (d._fixture === 'tower') {
+        // ---- a wheeled lighting tower ---------------------------------------
+        // Skid base with a generator canopy, a telescopic column and a short
+        // crossbar carrying the head. It is deliberately squat and industrial:
+        // this is plant that got towed into the yard tonight, not architecture.
+        var tx2 = P.x, tz2 = P.z;
+        var tH = Math.max(P.y - 0.55 - F.gy, 2.0);
+        // trailer skid + generator box
+        m.makeTranslation(tx2, F.gy + 0.24, tz2);
+        poles.push({ geometry: GAME.Geo.bevelBox(1.35, 0.48, 0.95, 0.05), matrix: m.clone() });
+        m.makeTranslation(tx2, F.gy + 0.70, tz2 - 0.10);
+        poles.push({ geometry: GAME.Geo.bevelBox(1.05, 0.46, 0.72, 0.04), matrix: m.clone() });
+        // outriggers - four stubby feet, the thing that makes it read as plant
+        for (var ofi = 0; ofi < 4; ofi++) {
+          var osx = (ofi & 1) ? 0.78 : -0.78, osz = (ofi & 2) ? 0.58 : -0.58;
+          m.makeTranslation(tx2 + osx, F.gy + 0.11, tz2 + osz);
+          poles.push({ geometry: new THREE.CylinderGeometry(0.14, 0.17, 0.22, 8, 1), matrix: m.clone() });
+        }
+        // telescopic column, two stages so it is not one clean cylinder
+        m.makeTranslation(tx2, F.gy + 0.95 + tH * 0.30, tz2);
+        poles.push({ geometry: new THREE.CylinderGeometry(0.105, 0.135, tH * 0.62, 9, 1), matrix: m.clone() });
+        m.makeTranslation(tx2, F.gy + 0.95 + tH * 0.74, tz2);
+        poles.push({ geometry: new THREE.CylinderGeometry(0.072, 0.092, tH * 0.52, 9, 1), matrix: m.clone() });
+        // crossbar under the head, square to the beam's lean
+        var tyaw = Math.atan2(-lean.z, lean.x);
+        q.setFromAxisAngle(upY, tyaw);
+        m.compose(_v2.set(tx2, P.y + 0.30, tz2), q, one);
+        heads.push({ geometry: new THREE.BoxGeometry(1.15, 0.10, 0.12), matrix: m.clone() });
+        m.compose(_v2.set(tx2, P.y + 0.16, tz2), q, one);
+        heads.push({ geometry: new THREE.BoxGeometry(0.14, 0.30, 0.14), matrix: m.clone() });
+      } else {
+        // flood: a short wall/leg bracket back up the beam axis
+        q.setFromUnitVectors(upY, _v1.copy(A).negate());
+        m.compose(_v2.copy(P).addScaledVector(A, -(rH + hh + 0.30)), q, one);
+        heads.push({ geometry: new THREE.CylinderGeometry(0.075, 0.075, 0.55, 6, 1), matrix: m.clone() });
+      }
+    }
+
+    try {
+      var mat = this._harborMetal(ctx);
+      var made = [];
+      if (poles.length) {
+        var pg = GAME.Geo.mergeAll(poles);
+        GAME.Geo.worldUV(pg, 0.85); GAME.Geo.copyUV1(pg);
+        var pm = new THREE.Mesh(pg, mat);
+        pm.name = 'harborLampMasts';
+        pm.castShadow = true; pm.receiveShadow = true;
+        this.root.add(pm);
+        made.push(pm);
+      }
+      if (heads.length) {
+        var hg = GAME.Geo.mergeAll(heads);
+        GAME.Geo.worldUV(hg, 0.85); GAME.Geo.copyUV1(hg);
+        var hm = new THREE.Mesh(hg, mat);
+        hm.name = 'harborLampHeads';
+        // NOT a caster: the housing sits directly on the spot's own origin.
+        hm.castShadow = false; hm.receiveShadow = true;
+        this.root.add(hm);
+        made.push(hm);
+      }
+      for (i = 0; i < poles.length; i++) poles[i].geometry.dispose();
+      for (i = 0; i < heads.length; i++) heads[i].geometry.dispose();
+      this._harborFixtures = made;
+    } catch (e) {
+      GAME.logError('lighting.harborFixtures', e);
+      this._harborFixtures = [];
+    }
+  };
+
+  Lighting.prototype._buildHarborCones = function (ctx, defs) {
+    if (this._harborCones) return;
+    var out = [];
+    try {
+      for (var i = 0; i < defs.length && i < this.practicals.length; i++) {
+        var d = defs[i];
+        if (!(d._beamGain > 0) || !d._axis || !(d._beamLen > 1)) continue;
+        var p = this.practicals[i];
+        var apex = new THREE.Vector3(d.pos[0], d.pos[1], d.pos[2])
+          .addScaledVector(d._axis, 0.12);
+        // PAST the aim point, not short of it. The aim point is on the floor for
+        // every mast and flood, so overshooting buries the shell's open far end
+        // under the apron where the depth test removes it, and the beam
+        // terminates ON its own pool instead of stopping in mid-air with a rim.
+        var len = M.clamp(d._beamLen + 1.3, 1.0, d.distance * 0.98);
+        // The AUTHORED angle, not the opened-up one. The shell is the bright
+        // core of the luminaire - the part with enough scattering in it to be
+        // visible as air glow - and it is also the part whose edge lands where
+        // the eye sees the pool edge. Building it from the full skirt angle
+        // would put a 12 m radius wedge round every mast and swallow the yard.
+        var r1 = Math.max(len * Math.tan(M.clamp(d._coneVis || d.cone, 0.15, 1.2)) * 0.96, 0.6);
+        // 14 rings, not 10: the taper now runs the full length instead of
+        // dying at 62%, so the far half needs enough sections for the gradient
+        // to be smooth and for the 0.88-1.0 end fade to land on more than one.
+        var geo = buildBeamGeometry(apex, d._axis, len,
+          d._fixture === 'mast' ? 0.46 : 0.30, r1, 20, 14);
+        var mesh = new THREE.Mesh(geo, makeBeamMaterial());
+        mesh.name = 'lampCone_' + d.name;
+        mesh.castShadow = false; mesh.receiveShadow = false;
+        mesh.frustumCulled = false;
+        mesh.renderOrder = 4;
+        this.root.add(mesh);
+        // The mid-point and the axis are kept so the per-frame accumulation cap
+        // can weigh this shell without walking its geometry (see _updateHarbor).
+        out.push({
+          mesh: mesh, p: p, gain: d._beamGain,
+          mid: new THREE.Vector3(
+            apex.x + d._axis.x * len * 0.45,
+            apex.y + d._axis.y * len * 0.45,
+            apex.z + d._axis.z * len * 0.45),
+          axis: d._axis.clone(),
+          // Screen footprint scales with the shell's own cross-section.
+          area: r1 * len
+        });
+      }
+    } catch (e) {
+      GAME.logError('lighting.harborCones', e);
+    }
+    this._harborCones = out;
+  };
+
+  // --------------------------------------------------------------------------
+  // Glow cards and indicator emitters - the practical VARIETY the brief asks
+  // for that does not need a light of its own. Every one of these is emissive
+  // geometry with zero shading cost: the roller door, the portacabin windows,
+  // the freighter's deck row, reefer doors, and the little coloured indicators
+  // that make a reefer stack read as machinery rather than as boxes.
+  // --------------------------------------------------------------------------
+  // ---- WHERE THEY GO IS DERIVED, NOT REMEMBERED ----------------------------
+  // The previous version of this table placed every card and indicator at a
+  // fixed offset from a published CAMERA POSE. level_harbor.js then moved four
+  // of those poses and relocated the warehouse, the reefer bank and the
+  // portacabin during its own build, and the decorations followed the poses
+  // instead of the objects. Probed against the shipped level, the two
+  // "portacabin windows" resolved to (-21.1, 2.3, 38.2) while the portacabin's
+  // own published lamp sits at (12.9, 1.95, 27.5) - 34 m apart, out in the
+  // middle of the apron. The reefer indicator bank landed at x = -35.9, five
+  // metres INSIDE the west stack.
+  //
+  // Nothing below is a coordinate any more. Every entry names an ANCHOR, and
+  // _harborAnchors resolves each anchor from something the level publishes on
+  // THIS run - its own practicalLights, its own lightShafts, its own poses -
+  // then plants it on real geometry with level.raycast. An anchor that cannot
+  // be resolved produces no decoration, which is always better than an additive
+  // rectangle hanging in mid air, and the whole set re-derives itself the next
+  // time the level moves.
+  var HARBOR_CARDS = [
+    // the open roller door - the biggest single glow in the level
+    { anchor: 'warehouse_door', w: 3.3, h: 3.8, kelvin: 4300, tint: 'mercury',
+      tintAmt: 0.45, gain: 0.42, halo: 4.2, hoff: 0.30, flick: 0.35 },
+    // portacabin office windows, either side of the cabin's own lamp
+    { anchor: 'cabin_win_a', w: 1.30, h: 0.86, kelvin: 3000, gain: 0.62,
+      halo: 1.5, hoff: 0.14, flick: 1.0 },
+    { anchor: 'cabin_win_b', w: 1.05, h: 0.86, kelvin: 2900, gain: 0.52,
+      halo: 1.4, hoff: 0.14, flick: 1.0 },
+    // the freighter's deck lights, seen as spill on the hull
+    { anchor: 'hull_a', w: 2.1, h: 0.55, kelvin: 5600, tint: 'mercury',
+      tintAmt: 0.75, gain: 0.38, halo: 2.0, hoff: 0.20, flick: 0.25 },
+    { anchor: 'hull_b', w: 2.1, h: 0.55, kelvin: 5600, tint: 'mercury',
+      tintAmt: 0.75, gain: 0.33, halo: 1.9, hoff: 0.20, flick: 0.25 },
+    // a reefer unit with its door cracked open, on the real canyon wall
+    // Cracked-open reefer door. Gain pulled back from 0.26: an additive card
+    // that close to the `containers` eye printed as a flat white slab on the
+    // stack rather than as a sliver of cold interior.
+    { anchor: 'reefer_door', w: 0.62, h: 1.55, kelvin: 6200, tint: 'mercury',
+      tintAmt: 0.85, gain: 0.17, halo: 1.1, hoff: 0.12, flick: 0.5 }
+  ];
+
+  var HARBOR_EMITTERS = [
+    // reefer indicator bank - three units, power + running + alarm
+    { anchor: 'reefer_a', dy: 0.80, dt: -0.15, c: 0x50ffd0, rad: 0.055, mode: 'steady', gain: 1.0 },
+    { anchor: 'reefer_a', dy: 0.80, dt: 0.15, c: 0x60ff80, rad: 0.048, mode: 'pulse', gain: 0.9 },
+    { anchor: 'reefer_b', dy: 0.80, dt: -0.15, c: 0x50ffd0, rad: 0.055, mode: 'steady', gain: 1.0 },
+    { anchor: 'reefer_b', dy: 0.80, dt: 0.15, c: 0xff6030, rad: 0.048, mode: 'blink', period: 1.9, duty: 0.34, gain: 1.1 },
+    { anchor: 'reefer_c', dy: 0.80, dt: -0.15, c: 0x50ffd0, rad: 0.055, mode: 'steady', gain: 1.0 },
+    { anchor: 'reefer_c', dy: 0.80, dt: 0.15, c: 0x60ff80, rad: 0.048, mode: 'pulse', gain: 0.9 },
+    // freighter deck bulbs
+    { anchor: 'hull_a', dy: 0.28, c: 0xcfe6ff, rad: 0.10, mode: 'steady', gain: 1.2 },
+    { anchor: 'hull_b', dy: 0.28, c: 0xcfe6ff, rad: 0.10, mode: 'steady', gain: 1.0 },
+    { anchor: 'hull_c', dy: 0.28, c: 0xcfe6ff, rad: 0.10, mode: 'steady', gain: 0.85 },
+    // the freighter's masthead navigation light - a slow marine flash
+    { anchor: 'nav_mast', c: 0x30ff90, rad: 0.135, mode: 'blink', period: 4.4, duty: 0.20, gain: 1.6 },
+    // ---- the crane ----------------------------------------------------------
+    // Aviation obstruction beacons at the apex and the boom tip, plus the
+    // rotating amber over the walkway. These are what put a 30 m gantry into a
+    // night frame: a red pair at 30 m against cloud reads as SCALE the instant
+    // you see it, and it costs one instanced sphere each. Radii are sized for a
+    // real obstruction light, not for the indicator LEDs above - the crane
+    // framing photographs the apex from 45 m and the boom tip from 85 m.
+    { anchor: 'crane_apex', c: 0xff2418, rad: 0.30, mode: 'pulse', gain: 1.7 },
+    { anchor: 'crane_tip', c: 0xff2418, rad: 0.26, mode: 'pulse', gain: 1.5 },
+    { anchor: 'crane_walk', c: 0xffa028, rad: 0.185, mode: 'beacon', period: 1.9, gain: 1.6 },
+    // amber beacon, on the vehicle whose headlight this rig already runs
+    { anchor: 'vehicle_beacon', c: 0xffa028, rad: 0.115, mode: 'beacon', period: 1.35, gain: 1.5 },
+    // warehouse tube ends, at the level's OWN published tube lamps
+    { anchor: 'wh_tube_a', c: 0xdff0ff, rad: 0.085, mode: 'steady', gain: 0.8 },
+    { anchor: 'wh_tube_b', c: 0xdff0ff, rad: 0.085, mode: 'pulse', gain: 0.7 }
+  ];
+
+  // Plant a glow card on real geometry.
+  //
+  // A card is an OPENING - a door, a window, a shell door in a hull - so it has
+  // to be ON the surface it is an opening in. Pose-relative placement can only
+  // put it at a plausible distance along a sightline, and a 3.4 x 3.8 m additive
+  // rectangle hanging in mid-air over the apron is a far worse defect than a
+  // missing one. level.raycast is the authoritative geometry query and every
+  // level in the build publishes it, so the card is pushed backwards along its
+  // own normal until it finds a wall and is then stood 10 cm proud of it.
+  Lighting.prototype._snapToSurface = function (ctx, pos, nx, nz, reach) {
+    var lvl = ctx && ctx.level;
+    if (!lvl || typeof lvl.raycast !== 'function') return 0;
+    try {
+      var r = lvl.raycast(pos, _v3.set(-nx, 0, -nz), reach);
+      if (r && r.hit && isFinite(r.distance) && r.distance > 0.05) {
+        pos.set(r.point.x + nx * 0.10, pos.y, r.point.z + nz * 0.10);
+        return 1;
+      }
+      // Nothing behind it: the card may have been placed INSIDE the structure,
+      // so try forward as well and stand it on the near face instead.
+      r = lvl.raycast(pos, _v3.set(nx, 0, nz), reach);
+      if (r && r.hit && isFinite(r.distance) && r.distance > 0.05) {
+        pos.set(r.point.x + nx * 0.10, pos.y, r.point.z + nz * 0.10);
+        return 1;
+      }
+    } catch (e) { /* a level without a working raycast just keeps the guess */ }
+    return 0;
+  };
+
+  // Cast a ray with the level's own geometry query and hand back the hit, or
+  // null. Every anchor below is found this way rather than transcribed, so the
+  // decorations follow the level when the level moves.
+  Lighting.prototype._harborRay = function (ctx, ox, oy, oz, dx, dy, dz, maxD) {
+    var lvl = ctx && ctx.level;
+    if (!lvl || typeof lvl.raycast !== 'function') return null;
+    try {
+      var l = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (!(l > 1e-6)) return null;
+      var r = lvl.raycast(_v4.set(ox, oy, oz), _v3.set(dx / l, dy / l, dz / l), maxD);
+      if (r && r.hit && isFinite(r.distance) && r.distance > 0.05 && r.point) return r;
+    } catch (e) { /* a level with no working raycast simply anchors nothing */ }
+    return null;
+  };
+
+  // --------------------------------------------------------------------------
+  // ANCHOR RESOLUTION - every decoration's home, read off THIS run's level.
+  //
+  // Sources, in order of authority:
+  //   1. level.practicalLights  - the level's own fixtures. A portacabin lamp IS
+  //      the portacabin; a warehouse tube IS the warehouse. Matched by name and
+  //      by kind, never by coordinate.
+  //   2. level.lightShafts      - the mast heads and the crane/warehouse shafts.
+  //   3. level.raycast          - the authoritative geometry query, used to find
+  //      the actual surface (cabin wall, canyon flank, freighter hull) and to
+  //      stand the card proud of it.
+  // Anything unresolved is simply absent.
+  // --------------------------------------------------------------------------
+  Lighting.prototype._harborAnchors = function (ctx) {
+    var A = {};
+    var lvl = ctx && ctx.level;
+    if (!lvl) return A;
+    var F = this._harborF;
+    var poses = lvl.cameraPoses || {};
+    var lamps = Array.isArray(lvl.practicalLights) ? lvl.practicalLights : [];
+    var self = this;
+    var i;
+
+    function eyeOf(name) {
+      var p = poses[name] && poses[name].position;
+      return (p && isFinite(p.x)) ? p : null;
+    }
+    // A decoration faces whoever is going to look at it: the framing it belongs
+    // to if the level published one, otherwise the middle of the terminal.
+    function facing(pos, poseName) {
+      var e = poseName ? eyeOf(poseName) : null;
+      var tx = (e ? e.x : F.cx) - pos.x, tz = (e ? e.z : F.cz) - pos.z;
+      var tl = Math.sqrt(tx * tx + tz * tz);
+      if (!(tl > 1e-3)) return { x: 0, z: 1 };
+      return { x: tx / tl, z: tz / tl };
+    }
+    function find(re, kind, lowest) {
+      var best = null;
+      for (var j = 0; j < lamps.length; j++) {
+        var d = lamps[j];
+        if (!d || !d.pos || !isFinite(d.pos[0])) continue;
+        var ok = re ? re.test(String(d.name || '')) : false;
+        if (!ok && kind && d.kind === kind) ok = true;
+        if (!ok) continue;
+        if (!best) { best = d; continue; }
+        if (lowest && d.pos[1] < best.pos[1]) best = d;
+      }
+      return best;
+    }
+    // Put a card on the wall the anchor lamp belongs to: march out from the
+    // lamp toward the viewer until the level says there is a surface.
+    function onWall(px, py, pz, poseName, reach, key) {
+      var f = facing({ x: px, z: pz }, poseName);
+      // Outward first (the fitting is inside, the wall is between it and us),
+      // then back the other way in case the lamp hangs outside its own shell.
+      var r = self._harborRay(ctx, px, py, pz, f.x, 0, f.z, reach);
+      if (!r) r = self._harborRay(ctx, px, py, pz, -f.x, 0, -f.z, reach);
+      if (!r) return;
+      A[key] = {
+        x: r.point.x + f.x * 0.10, y: py, z: r.point.z + f.z * 0.10,
+        nx: f.x, nz: f.z
+      };
+    }
+
+    // ---- THE GANTRY CRANE : read off level.anchors, not off a camera -------
+    // level_harbor publishes a SURVEY of itself in `level.anchors` and its own
+    // header says, in capitals, not to derive a world position from a camera
+    // pose. The crane entry carries legX / railA / railB / sill / apex / tipZ /
+    // centre / walkway / machineHouse, all derived from the same constants the
+    // gantry geometry is, so everything below moves when the crane moves and
+    // nothing below is a remembered coordinate.
+    //
+    // This exists because the crane framing measured its own subject as a black
+    // paper cut-out: 30 m of lattice filling the top two thirds of the frame
+    // against a 0.13 sky, no rim, no beacons, no cab, and the frame's right
+    // column at 0.057-0.085. The terminal's most photogenic object was being
+    // rendered as a hole. A structure is not lit by fill - fill raises the cloud
+    // behind it by the same amount - it is lit by a grazing key along its own
+    // members plus its own beacons and cab.
+    var CA = (lvl.anchors && lvl.anchors.crane) ? lvl.anchors.crane : null;
+    if (CA && isFinite(CA.sill) && isFinite(CA.legX) &&
+        CA.centre && isFinite(CA.centre.x)) {
+      var crC = CA.centre;
+      var crRailA = isFinite(CA.railA) ? CA.railA : crC.z - 6;
+      var crRailB = isFinite(CA.railB) ? CA.railB : crC.z + 6;
+      var crApex = isFinite(CA.apex) ? CA.apex : CA.sill + 14;
+      var crTip = isFinite(CA.tipZ) ? CA.tipZ : crRailA - 30;
+      // Landward face of the portal beam, on the east leg: a real ship-to-shore
+      // crane hangs its yard floods exactly here, and it is high enough that the
+      // beam crosses the middle third of an upward-pitched framing on its way to
+      // the ground instead of living underneath it.
+      A.crane_portal = {
+        x: crC.x + CA.legX * 0.60, y: CA.sill - 0.80, z: crRailB - 0.70,
+        nx: 0, nz: 1
+      };
+      // ... aimed down-lane at the working strip between the rails, ~25 m out.
+      A.crane_lane = {
+        x: crC.x - 3.0, y: crC.y || 0, z: (crRailA + crRailB) * 0.5 - 3.0
+      };
+      // ---- THE FLOOD THAT REVEALS THE GANTRY, AND WHY IT IS NOT ON IT -------
+      // This used to be mounted on the A-frame chord, aimed down the landward
+      // leg. Probed on the crane framing it delivered 4.7 units to the leg's
+      // UP-FACING faces and 0.006 to the faces the camera can see, and the
+      // reason is not tuning, it is geometry: the camera stands 31 m LANDWARD
+      // of the portal and looks up, so every surface it sees has a normal with
+      // a +Z component, and a source mounted on - or seaward of - that face can
+      // only ever graze it at zero. Nothing hung on the crane can light the side
+      // of the crane the crane framing photographs.
+      //
+      // So the mount is a YARD MAST, chosen off the level's own published lamps:
+      // high, well landward of the portal face, and well off the crane's
+      // centreline so the throw crosses the structure diagonally instead of
+      // flattening it head-on. That is also what a terminal actually does - the
+      // high masts are what light the crane for a night shift - and it puts the
+      // beam across the middle third of the frame on its way there.
+      //
+      // The line is RAYCAST before the anchor is published. A 7600 cd flood
+      // whose throw is interrupted by a container stack at 12 m does not light
+      // the crane, it prints a white rectangle at 53 lux; if no published mast
+      // has a clear line, no anchor is published and the lamp is simply not
+      // built (see the aimAnchor guard in _harborLampDefs).
+      var rkBest = null, rkScore = -1;
+      for (var rk2 = 0; rk2 < lamps.length; rk2++) {
+        var rl = lamps[rk2];
+        if (!rl || !rl.pos || !isFinite(rl.pos[0])) continue;
+        var rlx = rl.pos[0], rly = rl.pos[1], rlz = rl.pos[2];
+        if (!(rly > F.gy + 8)) continue;              // must be high
+        if (!(rlz > crRailB + 6)) continue;           // must be LANDWARD of it
+        if (Math.abs(rlx - crC.x) < 6) continue;      // must have a cross-angle
+        // high x landward x lateral: all three are what makes the throw graze.
+        var rsc = (rly - F.gy) * (rlz - crRailB) * Math.abs(rlx - crC.x);
+        if (rsc > rkScore) { rkScore = rsc; rkBest = rl; }
+      }
+      if (rkBest) {
+        // Aim at the FAR landward leg, at 40% of its height: the beam then runs
+        // the full diagonal of the portal and lands on the lattice rather than
+        // on the apron behind it.
+        var rkSgn = (rkBest.pos[0] >= crC.x) ? -1 : 1;
+        var rkT = { x: crC.x + rkSgn * CA.legX,
+                    y: F.gy + CA.sill * 0.42, z: crRailB + 0.6 };
+        var rkX = rkBest.pos[0], rkY = rkBest.pos[1] - 0.55, rkZ = rkBest.pos[2];
+        var rdx = rkT.x - rkX, rdy = rkT.y - rkY, rdz = rkT.z - rkZ;
+        var rlen = Math.sqrt(rdx * rdx + rdy * rdy + rdz * rdz);
+        if (rlen > 12 &&
+            !this._harborRay(ctx, rkX, rkY, rkZ, rdx, rdy, rdz, rlen - 2.5)) {
+          A.crane_rake_mount = { x: rkX, y: rkY, z: rkZ, nx: 0, nz: 1 };
+          A.crane_rake_aim = rkT;
+        }
+      }
+      // Aviation obstruction beacons at the apex and the boom tip, and the
+      // rotating amber on the walkway that every working crane carries. The
+      // operator cab is deliberately NOT decorated from here: level_harbor
+      // already builds its windows as emissive geometry, and they face SEAWARD,
+      // which is where an STS cab looks.
+      A.crane_apex = { x: crC.x, y: crApex + 0.8, z: crC.z + 1.0, nx: 0, nz: 1 };
+      A.crane_tip = { x: crC.x, y: crApex - 1.5, z: crTip + 1.4, nx: 0, nz: 1 };
+      if (CA.walkway && isFinite(CA.walkway.x)) {
+        A.crane_walk = {
+          x: CA.walkway.x + CA.legX * 0.34, y: CA.walkway.y + 1.35,
+          z: CA.walkway.z + 0.4, nx: 0, nz: 1
+        };
+      }
+    }
+
+    // ---- the portacabin : its own lamp, and the wall around it -------------
+    var cabin = find(/cabin|office|porta/i, null, false) ||
+      find(null, 'tungsten', true);
+    if (cabin) {
+      var cf = facing({ x: cabin.pos[0], z: cabin.pos[2] }, 'overview');
+      // window either side of the fitting, along the wall (perpendicular to the
+      // facing direction), at eye height for a demountable office.
+      var sx = -cf.z, sz = cf.x;
+      onWall(cabin.pos[0] + sx * 1.05, cabin.pos[1] + 0.42, cabin.pos[2] + sz * 1.05,
+        'overview', 4.5, 'cabin_win_a');
+      onWall(cabin.pos[0] - sx * 1.15, cabin.pos[1] + 0.42, cabin.pos[2] - sz * 1.15,
+        'overview', 4.5, 'cabin_win_b');
+    }
+
+    // ---- the warehouse : its own tubes, and the roller door in its face ----
+    var tubeA = find(/wh_tube_a|tube_a/i, null, false);
+    var tubeB = find(/wh_tube_b|tube_b/i, null, false);
+    if (!tubeA) tubeA = find(null, 'fluoro', false);
+    if (tubeA) A.wh_tube_a = { x: tubeA.pos[0], y: tubeA.pos[1] - 0.12, z: tubeA.pos[2], nx: 0, nz: 1 };
+    if (tubeB) A.wh_tube_b = { x: tubeB.pos[0], y: tubeB.pos[1] - 0.12, z: tubeB.pos[2], nx: 0, nz: 1 };
+    // The door is in the wall between the warehouse framing's eye and the
+    // interior lamps, so cast from the eye and take the first face.
+    var whEye = eyeOf('warehouse');
+    var whRef = tubeA || tubeB;
+    if (whEye && whRef) {
+      var wdx = whRef.pos[0] - whEye.x, wdz = whRef.pos[2] - whEye.z;
+      var wl = Math.sqrt(wdx * wdx + wdz * wdz);
+      if (wl > 1e-3) {
+        wdx /= wl; wdz /= wl;
+        var wr = this._harborRay(ctx, whEye.x, F.gy + 1.95, whEye.z, wdx, 0, wdz, wl + 6);
+        if (wr) {
+          A.warehouse_door = {
+            x: wr.point.x - wdx * 0.10, y: F.gy + 1.95, z: wr.point.z - wdz * 0.10,
+            nx: -wdx, nz: -wdz
+          };
+        }
+      }
+    }
+
+    // ---- the freighter : found by looking seaward from the gangway ---------
+    // The hull is whatever stands up out of the water on the far side of the
+    // quay edge. Sweeping the sightline rather than assuming a distance is what
+    // makes this survive the ship being moved.
+    var gwEye = eyeOf('gangway') || eyeOf('quay');
+    var gwYaw = (poses.gangway && isFinite(poses.gangway.yaw)) ? poses.gangway.yaw
+      : (poses.quay && isFinite(poses.quay.yaw) ? poses.quay.yaw : 0);
+    if (gwEye) {
+      var gfx = -Math.sin(gwYaw), gfz = -Math.cos(gwYaw);
+      var grx = -gfz, grz = gfx;
+      var hullKeys = ['hull_a', 'hull_b', 'hull_c'];
+      var lat = [-3.0, 1.0, 5.0];
+      // The hull's sheer, its freeboard and the mooring distance are all the
+      // level's business and all of them move, so the probe sweeps height as
+      // well as bearing and takes the first standing surface it finds out over
+      // the water. A single ray at one assumed deck height found nothing at all
+      // once the ship was re-moored, and the deck lights vanished with it.
+      var hullY = [8.3, 5.5, 11.0, 3.2];
+      for (i = 0; i < hullKeys.length; i++) {
+        var ax2 = gfx + grx * (lat[i] * 0.16), az2 = gfz + grz * (lat[i] * 0.16);
+        var hl = Math.sqrt(ax2 * ax2 + az2 * az2) || 1;
+        var hr = null, hy = F.gy + hullY[0];
+        for (var hyi = 0; hyi < hullY.length && !hr; hyi++) {
+          hy = F.gy + hullY[hyi];
+          var cand = this._harborRay(ctx, gwEye.x, hy, gwEye.z, ax2, 0, az2, 60);
+          if (cand && cand.distance >= 8) hr = cand;
+        }
+        if (!hr) continue;
+        A[hullKeys[i]] = {
+          x: hr.point.x - ax2 / hl * 0.12, y: hy, z: hr.point.z - az2 / hl * 0.12,
+          nx: -ax2 / hl, nz: -az2 / hl
+        };
+      }
+      if (A.hull_a) {
+        A.nav_mast = { x: A.hull_a.x, y: A.hull_a.y + 7.1, z: A.hull_a.z,
+          nx: A.hull_a.nx, nz: A.hull_a.nz };
+      }
+    }
+
+    // ---- the reefer bank : a real canyon flank near the containers framing --
+    // Cast sideways from a point up the corridor the framing looks down, so the
+    // indicators end up ON the stack rather than five metres inside it.
+    var cEye = eyeOf('containers');
+    var cYaw = (poses.containers && isFinite(poses.containers.yaw)) ? poses.containers.yaw : 0;
+    if (cEye) {
+      var cfx = -Math.sin(cYaw), cfz = -Math.cos(cYaw);
+      var crx = -cfz, crz = cfx;
+      var rk = ['reefer_a', 'reefer_b', 'reefer_c'];
+      for (i = 0; i < rk.length; i++) {
+        var along = 7.5 + i * 1.4;
+        var ox2 = cEye.x + cfx * along, oz2 = cEye.z + cfz * along;
+        // Try the left wall first, then the right - a canyon has two.
+        var rr = this._harborRay(ctx, ox2, F.gy + 1.6, oz2, -crx, 0, -crz, 9);
+        var sgn = -1;
+        if (!rr) { rr = this._harborRay(ctx, ox2, F.gy + 1.6, oz2, crx, 0, crz, 9); sgn = 1; }
+        if (!rr || rr.distance < 0.6) continue;
+        A[rk[i]] = {
+          x: rr.point.x - crx * sgn * 0.10, y: F.gy + 1.6, z: rr.point.z - crz * sgn * 0.10,
+          nx: -crx * sgn, nz: -crz * sgn,
+          tx: crz * sgn, tz: -crx * sgn
+        };
+      }
+      if (A.reefer_a) {
+        A.reefer_door = { x: A.reefer_a.x, y: F.gy + 1.55, z: A.reefer_a.z,
+          nx: A.reefer_a.nx, nz: A.reefer_a.nz };
+      }
+    }
+
+    // ---- open floor in front of each framing -------------------------------
+    // Used to stand yard plant (a forklift, a portable lighting tower) where the
+    // camera will actually see it. Derived by walking out along the framing's
+    // own sightline and asking the level for the floor, then finding the middle
+    // of whatever corridor it is in by casting both ways - so a lamp meant for a
+    // canyon ends up in the canyon and never inside the stack.
+    var names = ['containers', 'quay', 'gangway', 'warehouse', 'crane', 'overview'];
+    for (i = 0; i < names.length; i++) {
+      var pn = names[i];
+      var pe = eyeOf(pn);
+      if (!pe) continue;
+      var pyaw = (poses[pn] && isFinite(poses[pn].yaw)) ? poses[pn].yaw : 0;
+      var pfx = -Math.sin(pyaw), pfz = -Math.cos(pyaw);
+      var prx = -pfz, prz = pfx;
+      var got = null;
+      for (var step = 0; step < 6 && !got; step++) {
+        var dd = 6.0 + step * 1.6;
+        var qx = pe.x + pfx * dd, qz = pe.z + pfz * dd;
+        // Must be reachable: no wall between the eye and the spot.
+        if (this._harborRay(ctx, pe.x, pe.y, pe.z, pfx, 0, pfz, dd - 0.4)) continue;
+        // Must have a floor, and must not be a container roof six metres up.
+        var fr = this._harborRay(ctx, qx, pe.y + 0.6, qz, 0, -1, 0, 6.0);
+        var fy = fr ? fr.point.y : F.gy;
+        if (Math.abs(fy - F.gy) > 2.0) continue;
+        // Centre it in whatever corridor it landed in.
+        var hitL = this._harborRay(ctx, qx, fy + 1.4, qz, -prx, 0, -prz, 9);
+        var hitR = this._harborRay(ctx, qx, fy + 1.4, qz, prx, 0, prz, 9);
+        var off = 0;
+        if (hitL && hitR) off = (hitR.distance - hitL.distance) * 0.5;
+        else if (hitL && hitL.distance < 1.6) off = 1.6 - hitL.distance;
+        else if (hitR && hitR.distance < 1.6) off = -(1.6 - hitR.distance);
+        got = {
+          x: qx + prx * off, y: fy, z: qz + prz * off, nx: -pfx, nz: -pfz,
+          // Lateral axis and the clear width either side of the centreline, so
+          // plant can be stood AGAINST a wall instead of in the middle of the
+          // lane the player has to walk down.
+          rx: prx, rz: prz,
+          wL: hitL ? (hitL.distance + off) : 6.0,
+          wR: hitR ? (hitR.distance - off) : 6.0
+        };
+      }
+      if (got) A['floor_' + pn] = got;
+    }
+    return A;
+  };
+
+  // The beacon belongs on the vehicle whose headlight this rig is already
+  // running, so it can only be resolved once the practicals exist.
+  Lighting.prototype._harborAnchorVehicle = function () {
+    var A = this._harborAnchorMap;
+    if (!A) return;
+    for (var i = 0; i < this.practicals.length; i++) {
+      var pv = this.practicals[i];
+      if (pv && pv.light && /vehicle|forklift|bowser/i.test(pv.light.name || '')) {
+        A.vehicle_beacon = { x: pv.base.x, y: pv.base.y + 1.25, z: pv.base.z, nx: 0, nz: 1 };
+        return;
+      }
+    }
+  };
+
+  Lighting.prototype._buildHarborCards = function (ctx, authored) {
+    var out = [];
+    var A = this._harborAnchorMap || (this._harborAnchorMap = this._harborAnchors(ctx));
+    for (var i = 0; i < HARBOR_CARDS.length; i++) {
+      var c = HARBOR_CARDS[i];
+      var a = A[c.anchor];
+      // An anchor the level did not turn out to have. There is nothing for this
+      // card to be an opening IN, so it is not built - see the header above.
+      if (!a || !isFinite(a.x)) continue;
+      var tx = a.nx, tz = a.nz;
+      out.push({
+        x: a.x, y: a.y, z: a.z,
+        sign: 0, yaw: Math.atan2(tx, tz),
+        w: c.w, h: c.h, scale: 1.0,
+        kelvin: c.kelvin, gain: c.gain,
+        tint: c.tint === 'mercury' ? HPAL.mercury : (c.tint === 'sodium' ? HPAL.sodium : null),
+        tintAmt: c.tintAmt != null ? c.tintAmt : 0.5,
+        haloSize: c.halo,
+        hox: tx * (c.hoff || 0.15), hoy: 0, hoz: tz * (c.hoff || 0.15),
+        flick: c.flick != null ? c.flick : 1
+      });
+    }
+    this._harborWindows = out;
+    if (authored) { /* every card above is already geometry-derived */ }
+  };
+
+  Lighting.prototype._buildHarborEmitters = function (ctx, authored) {
+    if (this._harborEmitters) return;
+    try {
+      if (!THREE.InstancedMesh) return;
+      var A = this._harborAnchorMap || (this._harborAnchorMap = this._harborAnchors(ctx));
+      var defs = [];
+      var i;
+      for (i = 0; i < HARBOR_EMITTERS.length; i++) {
+        var e = HARBOR_EMITTERS[i];
+        var an = A[e.anchor];
+        if (!an || !isFinite(an.x)) continue;
+        // `dt` steps along the surface the anchor was found on, so a bank of
+        // indicators runs across the machine's face instead of through it.
+        var tgx = (an.tx != null) ? an.tx : -an.nz;
+        var tgz = (an.tz != null) ? an.tz : an.nx;
+        var dt = e.dt || 0;
+        defs.push({
+          pos: new THREE.Vector3(an.x + tgx * dt + an.nx * 0.04,
+            an.y + (e.dy || 0), an.z + tgz * dt + an.nz * 0.04),
+          color: new THREE.Color(e.c), rad: e.rad,
+          mode: e.mode || 'steady', period: e.period || 2,
+          duty: e.duty != null ? e.duty : 0.3,
+          gain: e.gain != null ? e.gain : 1,
+          phase: this.rng.range(0, 1)
+        });
+      }
+      if (authored) { /* anchors are geometry-derived either way */ }
+      if (!defs.length) return;
+      var geo = new THREE.SphereGeometry(1, 7, 5);
+      var mat = new THREE.MeshBasicMaterial({
+        color: 0xffffff, toneMapped: false, fog: false
+      });
+      var mesh = new THREE.InstancedMesh(geo, mat, defs.length);
+      mesh.name = 'harborEmitters';
+      mesh.castShadow = false; mesh.receiveShadow = false;
+      mesh.frustumCulled = false;
+      var m = new THREE.Matrix4();
+      for (i = 0; i < defs.length; i++) {
+        m.makeScale(defs[i].rad, defs[i].rad, defs[i].rad);
+        m.setPosition(defs[i].pos.x, defs[i].pos.y, defs[i].pos.z);
+        mesh.setMatrixAt(i, m);
+        mesh.setColorAt(i, defs[i].color);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      this.root.add(mesh);
+      this._harborEmitters = { mesh: mesh };
+      this._harborEmitDefs = defs;
+    } catch (e2) {
+      GAME.logError('lighting.harborEmitters', e2);
+      this._harborEmitters = null;
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // Assemble. level.js builds AFTER lighting, so this cannot happen in build();
+  // it runs on the first update that can see a level (or, if the level failed
+  // to build entirely, on the third frame against the fallback frame - a dead
+  // level must still leave lamps in the scene).
+  // --------------------------------------------------------------------------
+  Lighting.prototype._buildHarborRig = function (ctx) {
+    if (this._harborBuilt || !this.isHarbor) return;
+    if (!ctx.level && this._frame < 3) return;
+    this._harborBuilt = true;
+    // We consume level.practicalLights ourselves (with fixtures, cones and
+    // aiming attached), so the level-1 adoption path must not also run.
+    this._levelLampsChecked = true;
+    try {
+      this._harborF = this._harborFrame(ctx);
+      var defs = this._harborLampDefs(ctx);
+
+      // Defensive: build() skips the market set for the harbor, but if anything
+      // ever put practicals here first, clear them rather than doubling up.
+      for (var r = 0; r < this.practicals.length; r++) {
+        var old = this.practicals[r].light;
+        if (old.target && old.target.parent === this.root) this.root.remove(old.target);
+        this.root.remove(old);
+      }
+      this.practicals.length = 0;
+      this._buildPracticals(ctx, defs);
+
+      this._harborHero.length = 0;
+      for (var i = 0; i < this.practicals.length && i < defs.length; i++) {
+        this.practicals[i].beam = defs[i]._beamGain || 0;
+        if (defs[i].shadow && this.practicals[i].light.castShadow) {
+          this._harborHero.push(this.practicals[i]);
+        }
+      }
+
+      // "authored" = the level published its own lamp set, so it has real
+      // structures everywhere and a decoration that cannot find one is a
+      // decoration floating in mid-air.
+      var authored = !!(ctx.level &&
+        ((Array.isArray(ctx.level.practicalLights) && ctx.level.practicalLights.length) ||
+         (Array.isArray(ctx.level.mastLamps) && ctx.level.mastLamps.length)));
+      // The beacon anchor needs the vehicle's own light to exist first.
+      this._harborAnchorVehicle();
+      this._buildHarborCards(ctx, authored);
+      this._buildHarborFixtures(ctx, defs);
+      this._buildHarborCones(ctx, defs);
+      this._buildHarborEmitters(ctx, authored);
+      // Level 1 builds the bulbs/halos at the tail of the sky-visibility bake,
+      // because that is where its lit-window search gets its occupancy grid.
+      // The harbor's cards are authored, not searched, so the visuals must NOT
+      // be hostage to a bake that only runs if level.colliders exists - a level
+      // that publishes no colliders would otherwise render twelve lamps with no
+      // visible source anywhere. It early-outs if it has already run.
+      this._buildLampVisuals(ctx, null);
+
+      this.harborDiag = {
+        lamps: this.practicals.length,
+        spots: 0, points: 0,
+        shadowCasters: this._harborHero.length,
+        cones: this._harborCones ? this._harborCones.length : 0,
+        cards: this._harborWindows ? this._harborWindows.length : 0,
+        emitters: this._harborEmitDefs ? this._harborEmitDefs.length : 0,
+        fixtures: this._harborFixtures ? this._harborFixtures.length : 0,
+        posed: !!(ctx.level && ctx.level.cameraPoses),
+        // Accounting for every entry in level.lightShafts: paired with a lamp
+        // the level already published, adopted into a lamp of our own, or built
+        // as a real shaft by _buildShafts. published == paired + adopted +
+        // shafts, or something the level asked for is not in the picture.
+        shaftsPublished: this._shaftAudit ? this._shaftAudit.published : 0,
+        shaftsPaired: this._shaftAudit ? this._shaftAudit.paired : 0,
+        shaftsAdopted: this._shaftAudit ? this._shaftAudit.adopted : 0,
+        anchors: this._harborAnchorMap ? Object.keys(this._harborAnchorMap).join(',') : ''
+      };
+      for (var s = 0; s < this.practicals.length; s++) {
+        if (this.practicals[s].light.isSpotLight) this.harborDiag.spots++;
+        else this.harborDiag.points++;
+      }
+      // A probing critic (or the next round's author) should be able to see the
+      // whole rig without reading it back out of the scene graph, and the one
+      // thing that has caught a real defect twice now is knowing which
+      // supporting lamps SURVIVED the cap. `dropped` is that number.
+      this.harborDiag.dropped = isFinite(this._harborWanted)
+        ? Math.max(0, this._harborWanted - this.practicals.length) : 0;
+      this.harborDiag.names = [];
+      for (var q = 0; q < this.practicals.length; q++) {
+        this.harborDiag.names.push(this.practicals[q].light.name);
+      }
+    } catch (e) {
+      GAME.logError('lighting.harborRig', e);
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // LIGHTNING - a real DirectionalLight, not a post effect.
+  //
+  // The 4-cascade CSM is REPURPOSED as the strike caster. Same cascades, same
+  // texel snap, same PCSS filter; only the direction and the colour change. That
+  // is what makes the flash relight the terminal AT GEOMETRY LEVEL: every
+  // container, the crane and the freighter throw a hard shadow in a direction
+  // that has nothing to do with the mast lamps, for 60-180 ms, and then it is
+  // dark again. A screen-space white fade cannot do that and is on
+  // ART_DIRECTION_HARBOR's instant-fail list.
+  //
+  // The direction is LATCHED at the leading edge of each strike. A flash whose
+  // direction drifts mid-strike drags every shadow in the frame with it, which
+  // reads as a bug; a real bolt is over before anything can move.
+  // --------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
+  // Coordinating with weather.js's own lightning rig.
+  //
+  // Both modules were told to make lightning a real light, and both did, so the
+  // scene ends up with two strike lights and two strike hemispheres. The whole
+  // no-double-billing budget below depends on this function FINDING the other
+  // rig, and for the entire life of the level it never did:
+  //
+  //   it gated on `cand.isDirectionalLight`, and weather.js publishes
+  //   `flashLight` as a THREE.SpotLight - deliberately, with a comment
+  //   explaining why (the CSM patch at the top of this file gives shadows to
+  //   DIRECTIONAL light 0 only, so weather's light had to take the spot path or
+  //   it would have rendered a 2048 shadow map that nothing samples).
+  //
+  // So `_extFlashLight` and `_extFlashFill` were never assigned, `extI` was
+  // permanently 0, the subtraction below was silently a no-op, and both modules
+  // ran a full strike at once - two keys plus a doubled omnidirectional lift,
+  // which is precisely how you cancel directionality. Measured: the left wall,
+  // the right wall, the far wall and the ground all lifted by 4.7-7.0x on the
+  // same strike, and the apron terminator was 2.5:1 where a strike should be
+  // 15:1.
+  //
+  // The fill is now resolved INDEPENDENTLY of the key, because they are
+  // separate objects and one being unrecognisable is no reason to ignore the
+  // other.
+  //
+  // Read-only, by handle first and never by mutating another module's objects.
+  // --------------------------------------------------------------------------
+  Lighting.prototype._findExternalFlash = function (ctx) {
+    if (this._extFlashDone) return;
+    var w = ctx && ctx.weather;
+    if (!w) {
+      if (this._frame > 900) this._extFlashDone = true;
+      return;
+    }
+    var cand = w.flashLight || w.lightningLight || w._flashLight || null;
+    // A spot 200 m away with a 24-degree cone is a directional in everything
+    // but its class name, and it is the only kind of light in this build that
+    // can cast a shadow while the cascades are carrying their own key.
+    if (cand && (cand.isSpotLight || cand.isDirectionalLight)) {
+      this._extFlashLight = cand;
+    }
+    var fill = w.flashFill || w._flashFill || null;
+    if (fill && fill.isHemisphereLight) this._extFlashFill = fill;
+    if (this._extFlashLight && this._extFlashFill) {
+      this._extFlashDone = true;
+      return;
+    }
+    // weather.js builds eight systems after this one and only allocates its rig
+    // when a wet preset is selected, so keep looking for a few seconds and then
+    // stop paying for the check.
+    if (this._frame > 900) this._extFlashDone = true;
+  };
+
+  // The direction weather.js's own strike light is actually pointing, taken
+  // from the objects rather than from the published vector, so the two keys
+  // cannot end up a few degrees apart and cross-light the same wall from two
+  // azimuths. Returns false if there is nothing to read.
+  Lighting.prototype._externalFlashDir = function (out) {
+    var L = this._extFlashLight;
+    if (!L) return false;
+    var t = L.target;
+    if (t && t.position && isFinite(t.position.x)) {
+      out.set(L.position.x - t.position.x,
+        L.position.y - t.position.y,
+        L.position.z - t.position.z);
+    } else if (isFinite(L.position.x)) {
+      out.copy(L.position);
+    } else {
+      return false;
+    }
+    if (!(out.lengthSq() > 1e-6)) return false;
+    out.normalize();
+    return true;
+  };
+
+  Lighting.prototype._harborKey = function (ctx) {
+    // The harbor is 02:00 in a storm whatever the sky module believes. Pinning
+    // the clock here rather than trusting sky.js is what stops one missing
+    // setTimeOfDay call from printing a container terminal at noon.
+    this.dayFactor = 0;
+    this.duskFactor = 0;
+    this.nightFactor = 1;
+    this.keyIsMoon = false;
+
+    var w = ctx && ctx.weather;
+    var raw = (w && isFinite(w.flash)) ? M.clamp(w.flash, 0, 1) : 0;
+    this._findExternalFlash(ctx);
+    var dir = _v3;
+    // ---- THE PUBLISHED VECTOR FIRST, AND THE ORDER IS WHY ------------------
+    // Both keys have to arrive from exactly the same azimuth or the strike
+    // lights one wall from the left and the other from the right and the frame
+    // ends up with no direction in it at all.
+    //
+    // This used to read the other rig's LIGHT OBJECT first, on the reasoning
+    // that the transform is what is actually casting. It is - but it is one
+    // frame stale, and the one frame that matters is the only frame this
+    // function ever reads it on. main.js updates lighting BEFORE weather, and
+    // scenarios.js fires the strike from the tick that precedes the step, so on
+    // the LEADING EDGE of a strike weather.flash and weather.flashDir have
+    // already been set (synchronously, inside _beginStrike) while the light
+    // object is still parked where the PREVIOUS strike left it. The direction
+    // is latched on exactly that edge and held for the rest of the strike, so
+    // the whole flash ran on the stale transform.
+    //
+    // Measured on the `lightning` capture: weather published
+    // (0.073, 0.796, -0.601) and this rig latched (0.349, 0.625, -0.698) - the
+    // vector weather.js was initialised with, 26 degrees away and 11 degrees
+    // lower. Two keys 26 degrees apart is still two keys.
+    //
+    // weather.flashDir is the DOCUMENTED contract (ARCHITECTURE section 5) and
+    // it is written before `flash` goes non-zero, so it is never stale. The
+    // light object stays as the fallback for a weather module that publishes an
+    // object but no vector.
+    if (w && w.flashDir && isFinite(w.flashDir.x) && w.flashDir.lengthSq() > 1e-6) {
+      dir.copy(w.flashDir).normalize();
+    } else if (!this._externalFlashDir(dir)) {
+      dir.copy(HARBOR_FLASH_FALLBACK);
+    }
+    // A directional light under the ground plane lights the world from below.
+    if (dir.y < 0.16) { dir.y = 0.16; dir.normalize(); }
+    if (raw <= FLASH_ON || this._flashPrev <= FLASH_ON) this._flashLatch.copy(dir);
+    this._flashPrev = raw;
+
+    this.flash = raw;
+    this.flashDirection.copy(this._flashLatch);
+    this._keyDir.copy(this._flashLatch);
+    this.sunDirection.copy(this._flashLatch);
+    // The true solar vector is genuinely below the horizon: it is 02:00. Every
+    // day/night term in the file derives from this, including the practical
+    // switch-on ramp, so it must not be left pointing at a sky that is not there.
+    this.solarDirection.set(0.20, -0.88, -0.43).normalize();
+
+    GAME.Color.kelvin(HARBOR_FLASH_K, this.keyColor);
+    this.keyColor.lerp(HPAL.lightning, 0.55);
+
+    var budget = HB.key * raw;
+    var extI = (this._extFlashLight && isFinite(this._extFlashLight.intensity))
+      ? Math.max(0, this._extFlashLight.intensity) : 0;
+    // Whatever weather.js is already spending comes out of the budget, and now
+    // that the subtraction is no longer a no-op it actually subtracts: at a
+    // close strike weather runs 25-30 units and this rig drops to its floor.
+    //
+    // That floor still matters. weather's spot casts a real shadow, but it is
+    // aimed at the CAMERA with a 0.42 rad cone and its shadow camera runs
+    // 100-360 m; the cascades are fitted to the view frustum at a 1-4 cm texel
+    // and they are what puts a hard contact shadow under a container at 6 m. A
+    // strike therefore always moves the cascades as well, and both keys point
+    // the same way (see _externalFlashDir), so they reinforce instead of
+    // cancelling.
+    //
+    // The previous `extI * keyShare` term existed only to compensate for the
+    // subtraction being broken. With the subtraction working it would double the
+    // strike again, which is the defect it was written to hide.
+    this.keyIntensity = M.clamp(
+      Math.max(budget - extI, HB.keyMin * raw), 0, 20);
+  };
+
+  // --------------------------------------------------------------------------
+  // The fill rig, inverted for a level with no sun.
+  // --------------------------------------------------------------------------
+  Lighting.prototype._harborFill = function (ctx) {
+    // Every term below is a HEMISPHERE or the AmbientLight now, so they all take
+    // the full sky-visibility gate and therefore the full skylight compensation
+    // (skyComp). skyCompDir - the much smaller compensation for the weakly-gated
+    // directional bounce path - no longer applies to anything in this level.
+    var comp = (isFinite(this.skyComp) && this.skyComp > 0) ? this.skyComp : 1;
+    var f = this.flash;
+    var w = ctx && ctx.weather;
+    var wet = (w && isFinite(w.wetness)) ? M.clamp(w.wetness, 0, 1) : 0.85;
+
+    // ---- THE OMNIDIRECTIONAL HALF OF A STRIKE IS A SINGLE BUDGET -----------
+    // A bolt is ONE directional event. Everything omnidirectional a strike adds
+    // - the cloud base lighting up, the whole yard bouncing - is the SAME
+    // physical term, and it was being billed five times over: this rig raised
+    // its ambient, its hemisphere, its cross-canyon pair, its apron bounce AND
+    // scene.environmentIntensity, while weather.js separately ran a cold
+    // HemisphereLight of its own. Only the hemisphere netted weather's light
+    // out; the other four did not, so the omnidirectional total more than
+    // doubled on the strike frame.
+    //
+    // That is exactly how a bolt stops having a direction. MEASURED on the
+    // identical-camera A/B (`containers` against `lightning`): the two
+    // mutually-perpendicular canyon walls lifted x5.66 and x5.42 while the
+    // APRON - the one surface actually facing a bolt 53 degrees up - lifted
+    // x4.23. The surfaces facing away from the strike were gaining MORE than
+    // the surface facing it, which is the definition of an omnidirectional
+    // flash wearing a directional light's clothes.
+    //
+    // So the *Flash constants below are now a single pooled budget, and
+    // whatever weather.js's own flash fill is already spending comes out of it
+    // FIRST. `fOmni` is what is left, expressed as a fraction of the flash, and
+    // every omnidirectional increment is scaled by it. The COLOURS still track
+    // the real `f`: the shadow side has to go cold on the strike frame even
+    // when its magnitude barely moves, or the grade inverts (warm shadows under
+    // a cold highlight). Magnitude is budgeted; hue is not.
+    var extF = (this._extFlashFill && isFinite(this._extFlashFill.intensity))
+      ? Math.max(0, this._extFlashFill.intensity) : 0;
+    var omniBudget = HB.ambientFlash +
+      (HB.hemiFlash + HB.envFlash + HB.bounceFlash +
+       HB.fillFlash * (1 + HB.fillBRatio)) * comp;
+    var fOmni = f * M.clamp(1 - extF / Math.max(omniBudget, 1e-3), 0, 1);
+
+    if (this.hemi) {
+      // Storm cloud above, black wet apron below. The sky half is the term that
+      // jumps hardest during a strike, because the whole cloud base is what
+      // physically lights up; the ground half carries a little sodium, which is
+      // what a soaked apron under four orange lamps actually throws back.
+      _c1.copy(HPAL.stormSky).lerp(HPAL.lightning, 0.40 * f);
+      this.hemi.color.copy(_c1);
+      _c2.copy(HPAL.wetGround).lerp(HPAL.sodium, 0.20 * (1 - 0.5 * f));
+      this.hemi.groundColor.copy(_c2);
+      this.hemi.intensity = (HB.hemi + HB.hemiFlash * fOmni) * comp;
+    }
+
+    if (ctx.scene && ctx.scene.isScene) {
+      ctx.scene.environmentIntensity = comp * (HB.env + HB.envFlash * fOmni);
+    }
+
+    if (this.hBounce) {
+      // "Bounce warm sodium up off the wet apron." Rays travel UP, so this is
+      // the term that puts light under a container lip, on the underside of the
+      // crane boom and on a man's chin. A wet apron is closer to a mirror than
+      // to a diffuser, so the wetter it is the more comes back.
+      //
+      // Axis (0,-1,0): a down-facing normal collects the whole sky half, an
+      // up-facing one collects the (black) ground half, a wall collects the
+      // 50/50 blend. That is the directional's own profile with the delta
+      // specular lobe - and therefore the corrugation aliasing - removed.
+      // During a strike the light bouncing off the apron IS the strike's light,
+      // not the sodium: 30 lux of cold key against 6 lux of lamp. Leaving this
+      // term warm through the flash is what inverted the grade on the lightning
+      // frame - measured shadow tint +0.009 RED against a highlight tint of
+      // +0.004 BLUE, i.e. warm shadows under cold highlights, which is the
+      // colour grade running backwards.
+      _c3.copy(HPAL.sodium).lerp(HPAL.lightning, 0.85 * f);
+      this.hBounce.color.copy(_c3);
+      this.hBounce.groundColor.setRGB(0, 0, 0);
+      this.hBounce.intensity =
+        (HB.bounce * (0.55 + 0.65 * wet) + HB.bounceFlash * fOmni) * comp;
+    }
+
+    if (this.hFillA && this.hFillB) {
+      // ---- the cross-canyon pair : the term that makes a canyon read --------
+      // This is the only term in the harbor fill with a real cosine on a
+      // VERTICAL surface. Everything else lights up-facing or down-facing
+      // geometry: the sky hemisphere gives a wall a 50/50 blend, the bounce
+      // points straight down so a wall collects half of it, and the ambient is a
+      // flat floor with no shape at all. A container terminal is made of nothing
+      // BUT vertical surfaces, which is why the stacks printed as black cut-outs
+      // before this pair existed.
+      //
+      // Both axes cross the yard on X, the axis the canyons run across, tilted
+      // 25 deg below the horizon: a flank facing +X collects 0.95 of hFillA and
+      // 0.05 of hFillB while the apron collects 0.29 of each, so the pair lifts
+      // the walls roughly three times as hard as the ground and cannot flatten
+      // the pools.
+      //
+      // They are also the two-temperature idea made into LIGHT rather than
+      // grade: the +X side carries the sodium the eight mast heads are throwing
+      // around the yard, the -X side the mercury off the crane and the quay
+      // floods. A flank lit warm on one edge and cold on the other has a
+      // readable form; a flank lit by one grey wash does not.
+      _c5.copy(HPAL.sodium).lerp(HPAL.coldFill, 0.52).lerp(HPAL.lightning, 0.88 * f);
+      this.hFillA.color.copy(_c5);
+      this.hFillA.groundColor.copy(_c5).multiplyScalar(HB.fillBack);
+      _c4.copy(HPAL.mercury).lerp(HPAL.coldFill, 0.62).lerp(HPAL.lightning, 0.90 * f);
+      this.hFillB.color.copy(_c4);
+      this.hFillB.groundColor.copy(_c4).multiplyScalar(HB.fillBack);
+      var fb = (HB.fill + HB.fillFlash * fOmni) * comp;
+      this.hFillA.intensity = fb;
+      this.hFillB.intensity = fb * HB.fillBRatio;
+    }
+
+    if (this.ambient) {
+      // Very low and COLD - but never zero. ART_DIRECTION_HARBOR asks for "deep
+      // near-blacks" and forbids "crushed pure-black shadows with no detail" in
+      // the same list, and the only way to have both is a small unconditional
+      // cold floor with an extremely hard practical falloff on top. The contrast
+      // comes from the ratio between the pools and this number, not from driving
+      // this number to zero.
+      this.ambient.color.copy(HPAL.ambient).lerp(HPAL.lightning, 0.80 * f);
+      this.ambient.intensity = HB.ambient + HB.ambientFlash * fOmni;
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // Per-frame harbor decoration: the cones, and the emitters that blink.
+  // --------------------------------------------------------------------------
+  Lighting.prototype._updateHarbor = function (ctx) {
+    if (!this._harborBuilt) return;
+    var w = ctx && ctx.weather;
+    var rain = (w && isFinite(w.rainIntensity)) ? M.clamp(w.rainIntensity, 0, 1) : 0.85;
+    var fog = (w && isFinite(w.fogDensity)) ? w.fogDensity : 0;
+    var t = this._t;
+    var i;
+
+    var cones = this._harborCones;
+    if (cones && cones.length) {
+      // More scatterers in the air, more of the beam visible side-on. Rain and
+      // fog do the same job, so they add.
+      var base = (HB.coneBase + HB.coneRain * rain) *
+        (1 + M.clamp(fog * 6.0, 0, 0.65));
+      // ---- the transmittance the SURFACES are getting ------------------------
+      // sky.js's fog chunk is 1 - exp( -(d * fogDensity)^2 ), so exp( -(d*k)^2 )
+      // is the matching transmittance and the beam fades into the storm at
+      // exactly the rate the wall behind it does. Read from the scene rather
+      // than from a constant, so retuning the weather retunes the beams.
+      var fk = 0.010;
+      var sky = ctx && ctx.sky;
+      if (sky && isFinite(sky.fogDensityEffective) && sky.fogDensityEffective > 0) {
+        fk = sky.fogDensityEffective;
+      } else if (ctx && ctx.scene && ctx.scene.fog && isFinite(ctx.scene.fog.density)) {
+        fk = ctx.scene.fog.density;
+      }
+      fk = M.clamp(fk, 0.003, 0.030);
+      // Normalise both attenuation terms at HB.coneRef so the authored
+      // brightness keeps meaning "this bright when the beam is a subject in the
+      // near-middle ground". Without this the whole level's beams would simply
+      // get dimmer and the establishing shot would be the only thing improved.
+      var dRef = HB.coneRef;
+      var attRef = (HB.coneFall / (HB.coneFall + Math.max(dRef - HB.coneNear, 0))) *
+        Math.exp(-(fk * dRef) * (fk * dRef));
+      base /= Math.max(attRef, 0.25);
+
+      // ---- A CAP ON THE ACCUMULATED AIR GLOW --------------------------------
+      // The distance term above fixes ONE shell being billed the same at 60 m
+      // as at 8 m. It does not fix TWENTY of them landing on the same pixels.
+      // From the elevated establishing standpoint the camera looks down the
+      // axis of a dozen cones at once - which is exactly where |N.V|, and
+      // therefore each shell's own opacity, is maximal - and additive blending
+      // has no saturation in it: the sum just keeps climbing until the midground
+      // is a flat milky veil. No amount of per-shell tuning can bound a sum.
+      //
+      // So the sum is bounded directly. Each shell's expected screen
+      // contribution is estimated on the CPU - its own amplitude, times the
+      // same attenuation the shader is about to apply at its mid-point, times
+      // its screen footprint, times an axis-alignment term for the fact that a
+      // beam seen end-on deposits far more than one seen side-on - and if the
+      // TOTAL is over budget every shell is scaled by the same factor. Scaling
+      // them all equally is what keeps it invisible: the relative brightness of
+      // the beams, which is what the eye reads, does not change; only the total
+      // amount of light the volumetrics may add to one frame does.
+      //
+      // Smoothed over ~0.25 s so walking round a corner cannot flicker it, and
+      // the smoothing is skipped on the first frame so a capture (which renders
+      // one frame at a fixed t) sees the converged value rather than the ramp.
+      var camP = ctx && ctx.camera && ctx.camera.position;
+      var fwdD = (ctx && ctx.camera && ctx.camera.getWorldDirection)
+        ? ctx.camera.getWorldDirection(_v6) : null;
+      var sum = 0;
+      for (i = 0; i < cones.length; i++) {
+        var cw = cones[i];
+        var pw = cw.p;
+        var litW = M.clamp(pw.light.intensity / Math.max(pw.intensity, 1e-3), 0, 2.2);
+        var wgt = 0;
+        if (camP && cw.mid) {
+          var mdx = cw.mid.x - camP.x, mdy = cw.mid.y - camP.y, mdz = cw.mid.z - camP.z;
+          var md = Math.sqrt(mdx * mdx + mdy * mdy + mdz * mdz);
+          // Only what is IN FRONT of the eye can veil it, and the measure is the
+          // shell's SCREEN SOLID ANGLE (cross-section over distance squared),
+          // not its world size: that is what "how much of the frame does this
+          // shell cover" means, and summing it is what tells overlap from a
+          // single hero beam.
+          var front = fwdD ? (mdx * fwdD.x + mdy * fwdD.y + mdz * fwdD.z) : md;
+          if (md > 1e-3 && front > 0) {
+            var fkd = fk * md;
+            wgt = cw.gain * litW * (cw.area || 1) / (md * md) *
+              (HB.coneFall / (HB.coneFall + Math.max(md - HB.coneNear, 0))) *
+              Math.exp(-fkd * fkd);
+            // End-on shells stack; side-on ones barely register.
+            var aln = Math.abs((mdx * cw.axis.x + mdy * cw.axis.y + mdz * cw.axis.z) / md);
+            wgt *= 0.35 + 0.85 * aln;
+          }
+        }
+        sum += wgt;
+      }
+      var want = sum > HB.coneCap ? HB.coneCap / sum : 1;
+      if (!isFinite(want)) want = 1;
+      if (this._coneScale == null) this._coneScale = want;
+      else this._coneScale += (want - this._coneScale) *
+        M.clamp((ctx && isFinite(ctx.dt) && ctx.dt > 0 ? ctx.dt : 1 / 60) * 4.0, 0, 1);
+      var capScale = M.clamp(this._coneScale, 0.25, 1);
+
+      for (i = 0; i < cones.length; i++) {
+        var c = cones[i];
+        var p = c.p;
+        var lit = M.clamp(p.light.intensity / Math.max(p.intensity, 1e-3), 0, 2.2);
+        var u = c.mesh.material.uniforms;
+        // Colour and level track the LIGHT, so the failing mast's cone gutters
+        // with it. A beam that keeps burning while its lamp drops out is the
+        // give-away that the "volumetrics" are a decal.
+        u.uColor.value.copy(p.light.color);
+        u.uAmt.value = base * c.gain * lit * capScale;
+        u.uTime.value = t;
+        u.uRain.value = rain;
+        u.uAtten.value.set(HB.coneNear, HB.coneFall, fk);
+        c.mesh.visible = u.uAmt.value > 0.002;
+      }
+      if (this.harborDiag) {
+        this.harborDiag.coneSum = Math.round(sum * 1000) / 1000;
+        this.harborDiag.coneScale = Math.round(capScale * 1000) / 1000;
+      }
+    }
+
+    var em = this._harborEmitters;
+    var defs = this._harborEmitDefs;
+    if (em && em.mesh && defs) {
+      for (i = 0; i < defs.length; i++) {
+        var e = defs[i];
+        var a = 1;
+        if (e.mode === 'blink') {
+          // A marine flash: sharp rise, short hold, soft decay. Never a sine -
+          // a sine reads as an animation curve within about two cycles.
+          var ph = ((t / e.period) + e.phase) % 1;
+          if (ph < e.duty) {
+            var s = ph / e.duty;
+            a = 0.05 + 1.25 * M.smoothstep(0, 0.16, s) * (1 - M.smoothstep(0.45, 1.0, s));
+          } else {
+            a = 0.05;
+          }
+        } else if (e.mode === 'beacon') {
+          // A rotating amber beacon sweeping past the camera.
+          var sw = Math.sin((t / e.period + e.phase) * Math.PI * 2);
+          a = 0.07 + 1.3 * Math.pow(M.saturate(sw), 5);
+        } else if (e.mode === 'pulse') {
+          a = 0.78 + 0.28 * this.noise.perlin2(t * 0.62 + e.phase * 11.3, 5.5);
+        }
+        _c1.copy(e.color).multiplyScalar(e.gain * a * 2.4);
+        em.mesh.setColorAt(i, _c1);
+      }
+      if (em.mesh.instanceColor) em.mesh.instanceColor.needsUpdate = true;
+    }
+  };
+
   // --------------------------------------------------------------------------
   // Per-frame
   // --------------------------------------------------------------------------
@@ -2346,6 +5157,10 @@
 
     try {
       this._hookScenes(ctx);
+      // The harbor rig has to exist BEFORE the sky-visibility bake, because the
+      // bake is what builds the bulb/halo instance buffers and those are sized
+      // from the practical count.
+      this._buildHarborRig(ctx);
       this._adoptLevelPracticals(ctx);
       this._buildSkyVisibility(ctx);
       this._probeSkyVisibility(ctx, dt);
@@ -2353,6 +5168,7 @@
       this._updateFill(ctx);
       this._updatePracticals(ctx);
       this._updateLampVisuals(ctx);
+      this._updateHarbor(ctx);
       this._updateShafts(ctx);
       this._fitCascades(ctx);
       this._scheduleShadowUpdates(ctx);
@@ -2529,6 +5345,11 @@
     this.keyIntensity = M.clamp(solarI + twilightI * (1 - moonMix) + moonI * moonMix,
       0, 40);
     this.keyColor.copy(this._sunColor).lerp(this._moonColor, moonMix);
+
+    // COLD HARBOR: there is no sun and no moon. Everything computed above is
+    // discarded and the key becomes the lightning strike, driven off
+    // ctx.weather. Level 1 never enters this branch.
+    if (this.isHarbor) this._harborKey(ctx);
 
     var sunLight = this.cascades.length ? this.cascades[0].light : null;
     if (sunLight) {
@@ -2728,6 +5549,12 @@
       _c4.copy(PAL.ambNight).lerp(PAL.ambDay, day);
       this.ambient.color.copy(_c4);
     }
+
+    // COLD HARBOR overrides every term above. It runs LAST rather than as an
+    // early return so that the shared plumbing (skyComp, environmentIntensity
+    // ownership, the light objects themselves) is identical for both levels and
+    // there is only ever one place that writes each light.
+    if (this.isHarbor) this._harborFill(ctx);
   };
 
   Lighting.prototype._updatePracticals = function (ctx) {
@@ -2744,7 +5571,10 @@
     // every lamp in the level at identical full output and dusk had no headroom
     // left. Ramping across -7 deg means dusk shows lamps just coming on against
     // a still-lit sky, which is the entire point of that hour.
-    var lampOn = M.smoothstep(0.12, -0.22, this.solarDirection.y);
+    // COLD HARBOR is 02:00 in a storm and has no day state at all: the terminal
+    // lighting is on, permanently, and the only thing that modulates it is the
+    // per-fixture failure behaviour below.
+    var lampOn = this.isHarbor ? 1 : M.smoothstep(0.12, -0.22, this.solarDirection.y);
     this._lampOn = lampOn;
 
     for (var i = 0; i < this.practicals.length; i++) {
@@ -2781,6 +5611,51 @@
         var f1 = this.noise.perlin2(t * 6.3 + p.phase, 7.7);
         var f2 = this.noise.perlin2(t * 0.23 + p.phase, 29.5);
         mul = 1.0 + f1 * 0.055 + f2 * 0.09;
+        L.color.copy(p.baseColor);
+      } else if (p.kind === 'sodium_failing') {
+        // ---- COLD HARBOR: the failing lamp ---------------------------------
+        // A sodium head at the end of its life CYCLES: it strikes, runs, the arc
+        // goes unstable, it drops out, and seconds later the ignitor fires
+        // again. Two decorrelated noise fields, never a sine - a sine reads as
+        // an animation curve within about two cycles, which is the whole reason
+        // level 1's brazier is noise driven too.
+        var s1 = this.noise.perlin2(t * 0.41 + p.phase, 13.1);
+        var s2 = this.noise.fbm2(t * 3.9 + p.phase, 41.0, 3, 2, 0.55);
+        var duty = M.smoothstep(-0.12, 0.20, s1);          // the slow cycle
+        var arc = M.smoothstep(0.25, 0.85, duty) * (0.55 + 0.45 * s2);
+        mul = M.clamp(duty * 0.50 + arc * 0.70 + s2 * 0.09, 0.02, 1.25);
+        // A dying arc runs cooler and redder on the way out.
+        _c1.copy(p.baseColor).lerp(_c2.setRGB(1.0, 0.34, 0.06),
+          0.45 * (1 - M.saturate(mul)));
+        L.color.copy(_c1);
+      } else if (p.kind === 'mercury') {
+        // Mercury vapour is rock steady with a faint mains ripple on it.
+        mul = 1.0 + this.noise.perlin2(t * 1.9 + p.phase, 23.0) * 0.022;
+        L.color.copy(p.baseColor);
+      } else if (p.kind === 'fluoro_cold') {
+        var g1 = this.noise.perlin2(t * 7.1 + p.phase, 5.3);
+        var g2 = this.noise.perlin2(t * 0.19 + p.phase, 31.5);
+        mul = 1.0 + g1 * 0.045 + g2 * 0.07;
+        L.color.copy(p.baseColor);
+      } else if (p.kind === 'led') {
+        mul = 1.0;                                    // an LED does not flicker
+        L.color.copy(p.baseColor);
+      } else if (p.kind === 'nav') {
+        // Slow marine navigation flash, ~4.4 s period.
+        var np = ((t / 4.4) + p.phase * 0.137) % 1;
+        var pulse = 0;
+        if (np < 0.22) {
+          var ns = np / 0.22;
+          pulse = M.smoothstep(0, 0.18, ns) * (1 - M.smoothstep(0.45, 1.0, ns));
+        }
+        mul = 0.04 + 1.45 * pulse;
+        L.color.copy(p.baseColor);
+      } else if (p.kind === 'reefer') {
+        // The refrigeration compressor cycles: a step change every few seconds
+        // over a low electrical hum.
+        var cyc = M.smoothstep(0.08, 0.34, this.noise.perlin2(t * 0.11 + p.phase, 77.0));
+        mul = 0.82 + 0.26 * cyc +
+          this.noise.perlin2(t * 5.5 + p.phase, 3.0) * 0.03;
         L.color.copy(p.baseColor);
       } else {
         // Tungsten on a bad generator: a slow, barely-there sag.
@@ -2970,6 +5845,55 @@
   // re-rendering them every frame is pure waste. Captures always refresh
   // everything so a screenshot can never contain a stale map.
   Lighting.prototype._scheduleShadowUpdates = function (ctx) {
+    // ---- COLD HARBOR: the shadow budget ------------------------------------
+    // Cascade 0 carries the LIGHTNING and sits at intensity 0 for roughly 97%
+    // of frames, which means the cascade maps light nothing at all between
+    // strikes. So the whole 4-pass CSM refresh is skipped unless a strike is
+    // actually running - that, not a lower resolution, is where the harbor's
+    // shadow budget comes from. The first 8 frames still render so the maps are
+    // allocated and three never binds an unwritten sampler.
+    if (this.isHarbor) {
+      var flashing = this.flash > FLASH_ON || this._flashPrev > FLASH_ON;
+      // Frames since this strike began. The direction is latched at the leading
+      // edge and nothing in the terminal moves far in 60-180 ms, so the cascade
+      // maps only need rendering ONCE per strike: on frame 0, right after
+      // _fitCascades has re-aimed them. Re-rendering all of them on every frame
+      // of the strike is what put the peak frame at 491 draw calls against a
+      // ~500 budget and made the capture at t = 1.18 - dead on the peak - time
+      // out where the same capture at t = 1.5 succeeded twice.
+      // Not updating is SAFE, not just cheap: three only recomputes
+      // shadow.matrix when it re-renders the map, so a held map and a held
+      // matrix stay consistent in world space. All that ages is the coverage at
+      // the very edge of a cascade as the camera walks, over a tenth of a second.
+      this._flashFrames = flashing ? (this._flashFrames + 1) : 0;
+      var hforce = this._frame < 8 || (flashing && this._flashFrames === 1);
+      var c2;
+      for (c2 = 0; c2 < this.cascades.length; c2++) {
+        if (hforce) this.cascades[c2].light.shadow.needsUpdate = true;
+      }
+      // The two hero masts, round-robin on a 4-frame period: half a depth pass
+      // per frame amortised, and a moving enemy's cast shadow lags at most
+      // ~130 ms, which nobody has ever seen.
+      var hero = this._harborHero;
+      for (c2 = 0; c2 < hero.length; c2++) {
+        var hl = hero[c2].light;
+        if (!hl.castShadow || !hl.shadow) continue;
+        // Never on the same frame the cascades are re-rendering: that frame is
+        // already the most expensive one in the level by a wide margin.
+        if (this._frame < 8 || (!hforce && (this._frame % 4) === (c2 % 4))) {
+          hl.shadow.needsUpdate = true;
+        }
+      }
+      // A harbor roof shaft is static geometry lit by a static beam.
+      if (this._shafts) {
+        for (c2 = 0; c2 < this._shafts.length; c2++) {
+          var hs2 = this._shafts[c2].light;
+          if (hs2.castShadow && this._frame < 8) hs2.shadow.needsUpdate = true;
+        }
+      }
+      return;
+    }
+
     var force = !!ctx.capture || this._frame < 8 || this._sunMoved;
     for (var i = 0; i < this.cascades.length; i++) {
       var period = i <= 1 ? 1 : (i === 2 ? 2 : 3);
@@ -3033,6 +5957,34 @@
     // because a silhouetted weapon is a worse defect than a slightly over-lit
     // one, and smoothed upstream so it can never pop in a doorway.
     var vmSky = M.lerp(0.55, 1.0, M.smoothstep(0.02, 0.38, this.playerSkyVis));
+
+    // ---- COLD HARBOR viewmodel --------------------------------------------
+    // The world key here is the LIGHTNING, which is zero for ~97% of frames, so
+    // mirroring it into view space would hand the weapon a 0.10 key and print a
+    // silhouette. The gun is really lit by whatever lamp pool the player is
+    // standing in, so it gets a fixed warm sodium key from up-and-forward, a
+    // cold rim from behind, and - critically - the strike ON TOP, because a
+    // flash that visibly stops at the edge of the viewmodel is worse than no
+    // flash at all.
+    if (this.isHarbor) {
+      var hf = this.flash;
+      rig.key.position.set(0.55, 1.35, 0.85).multiplyScalar(6);
+      rig.key.target.position.set(0, 0, 0);
+      _c5.copy(HPAL.sodium).lerp(this.keyColor, M.saturate(hf * 1.4));
+      rig.key.color.copy(_c5);
+      rig.key.intensity = 1.45 + HB.key * 0.36 * hf;
+      rig.fill.position.set(-0.7, 0.5, -1.1).multiplyScalar(5);
+      rig.fill.target.position.set(0, 0, 0);
+      rig.fill.color.copy(_c5.copy(HPAL.mercury).lerp(_WHITE, 0.25));
+      rig.fill.intensity = 0.34 + 1.1 * hf;
+      if (rig.hemi) {
+        rig.hemi.color.copy(HPAL.stormSky);
+        rig.hemi.groundColor.copy(HPAL.sodium);
+        rig.hemi.intensity = 0.20 + 0.9 * hf;
+      }
+      rig.group.updateMatrixWorld(true);
+      return;
+    }
 
     // World key direction -> player camera space (the viewmodel scene's frame).
     _q1.copy(ctx.camera.quaternion).invert();
@@ -3099,7 +6051,7 @@
   // to the rig without owning a light of its own.
   Lighting.prototype.addPractical = function (opts) {
     opts = opts || {};
-    if (this.practicals.length >= MAX_PRACTICALS) return null;
+    if (this.practicals.length >= this._maxPracticals()) return null;
     var col = GAME.Color.kelvin(opts.kelvin || 2800, new THREE.Color());
     var light = new THREE.PointLight(0xffffff, 0, opts.distance || 10, 2);
     light.color.copy(col);
@@ -3151,6 +6103,36 @@
       }
       this._lampVisuals = null;
     }
+    // ---- COLD HARBOR ------------------------------------------------------
+    if (this._harborCones) {
+      for (i = 0; i < this._harborCones.length; i++) {
+        var hc = this._harborCones[i].mesh;
+        if (hc.geometry) hc.geometry.dispose();
+        if (hc.material) hc.material.dispose();
+      }
+      this._harborCones = null;
+    }
+    if (this._harborFixtures) {
+      for (i = 0; i < this._harborFixtures.length; i++) {
+        var hf = this._harborFixtures[i];
+        if (hf.geometry) hf.geometry.dispose();
+      }
+      this._harborFixtures = null;
+    }
+    // Only a material this module OWNS may be disposed - the fixtures usually
+    // share one out of the level's material library.
+    if (this._harborOwnMat) { this._harborOwnMat.dispose(); this._harborOwnMat = null; }
+    this._harborMetalMat = null;
+    if (this._harborEmitters && this._harborEmitters.mesh) {
+      this._harborEmitters.mesh.dispose();
+      if (this._harborEmitters.mesh.material) this._harborEmitters.mesh.material.dispose();
+      this._harborEmitters = null;
+    }
+    for (i = 0; i < this.practicals.length; i++) {
+      var pl = this.practicals[i].light;
+      if (pl.shadow && pl.shadow.map) { pl.shadow.map.dispose(); pl.shadow.map = null; }
+    }
+    this._harborHero.length = 0;
     if (this.root.parent) this.root.parent.remove(this.root);
     if (this._viewRig && this._viewRig.group.parent) {
       this._viewRig.group.parent.remove(this._viewRig.group);

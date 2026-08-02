@@ -1122,10 +1122,49 @@
     '}'
   ].join('\n');
 
+  // Join GLSL lines, dropping any entry a `wet ? ... : null` ternary left empty.
+  // With no night entries present the result is byte-identical to .join('\n'),
+  // which is how the market program stays exactly what it was.
+  function glsl(a) {
+    var out = [];
+    for (var i = 0; i < a.length; i++) { if (a[i]) out.push(a[i]); }
+    return out.join('\n');
+  }
+
+  // Extra fragment declarations for the WET NIGHT variant. Never injected into
+  // the market program - see makeCharacterMaterial(face, night).
+  var CHAR_FS_WET_DECL = [
+    'uniform vec3 uKeyDirView;',   // view-space direction TOWARD the dominant practical
+    'uniform vec3 uKeyColor;',     // its colour, already scaled by its irradiance here
+    'uniform vec3 uBounceColor;',  // sodium bounced back up off the wet apron
+    'uniform vec3 uUpView;',       // world +Y in view space
+    'uniform float uWet;'          // 0..1 surface wetness from GAME.Weather
+  ].join('\n');
+
   // `face` is an optional FaceAtlas. When present this material is the one
   // bound to the head group and carries the painted albedo + normal map.
-  function makeCharacterMaterial(face) {
+  //
+  // `night` selects the WET NIGHT variant (Cold Harbor). Everything this file
+  // does to keep a militiaman from glowing - a 0.42 envMapIntensity, a hard AO
+  // choke on irradiance/iblIrradiance/radiance, a 0.58 albedo crush with range,
+  // and a rim/wrap pair keyed to sky.sunIntensity - was authored against a
+  // 5.2-intensity afternoon sun. Point the same material at 02:00 in a storm
+  // and every one of those terms still fires while the thing they were
+  // balancing against is gone: measured on the harbor portrait, sunIntensity
+  // is 0.187, so the rim gain kSun sits on its 0.02 floor and contributes
+  // nothing, the level's key is a 6.5 m sodium mast BEHIND the subject at
+  // irradiance 3.87, and the whole camera-facing front of the man is lit by
+  // ambient alone - which this material then multiplies by 0.42 x vSurf.w.
+  // The trousers photographed at 0.0036 display-linear against 0.0273 for the
+  // container directly behind him: a 7.6:1 inversion, i.e. a black cut-out.
+  //
+  // The night variant does not brighten his costume. It gives him the light
+  // the level actually has: the practical's rim and wrap, the sodium bounced
+  // up off a wet apron that photographs at 0.22, a storm-dome sheen on soaked
+  // cloth, and the market's anti-glow clamps relaxed to night strength.
+  function makeCharacterMaterial(face, night) {
     var hasFace = !!(face && face.ok && face.map);
+    var wet = !!night;
     var mat = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       roughness: 1.0,          // modulated per-vertex by aSurf.x
@@ -1134,10 +1173,22 @@
       // A body is a self-occluding volume: it never sees a full hemisphere.
       // At 0.9 the sky floods the whole chest rig with flat uniform fill and
       // every pouch, strap and buckle collapses to one value.
-      envMapIntensity: 0.42,
+      //
+      // That is a DAYLIGHT argument: it is guarding against a 5.2-intensity sky
+      // dome. The harbor's dome is a storm deck at scene.environmentIntensity
+      // 0.41, and 0.42 x 0.41 leaves the man with no environment at all - which
+      // on a level whose whole look is "wet surfaces get their value from
+      // reflections" removes the one thing that would sell him as soaked.
+      // 0.62 and not the 1.05 this started at: measured against a control
+      // render of the market program in the same harbor build, 1.05 stacked on
+      // top of the level's own practicals and turned him into a smooth orange
+      // mannequin with the whole costume fused to one value. 1.5x the market,
+      // not 2.5x.
+      envMapIntensity: wet ? 0.62 : 0.42,
       dithering: true
     });
     mat.name = hasFace ? 'ai_character_face' : 'ai_character';
+    if (wet) mat.name += '_wet';
     if (hasFace) {
       mat.map = face.map;
       if (face.normalMap) {
@@ -1152,11 +1203,27 @@
       uSunColor: { value: new THREE.Color(1.0, 0.84, 0.62) },
       uSkyColor: { value: new THREE.Color(0.30, 0.42, 0.60) }
     };
+    if (wet) {
+      // Sensible standing values so the first frame is never black even if the
+      // practical solve has nothing to work with yet.
+      uni.uKeyDirView = { value: new THREE.Vector3(0.0, 0.70, -0.71) };
+      uni.uKeyColor = { value: new THREE.Color(0.55, 0.20, 0.05) };
+      uni.uBounceColor = { value: new THREE.Color(0.30, 0.16, 0.08) };
+      uni.uUpView = { value: new THREE.Vector3(0.0, 1.0, 0.0) };
+      uni.uWet = { value: 1.0 };
+    }
     mat.userData.charUniforms = uni;
     mat.onBeforeCompile = function (shader) {
       shader.uniforms.uSunDirView = uni.uSunDirView;
       shader.uniforms.uSunColor = uni.uSunColor;
       shader.uniforms.uSkyColor = uni.uSkyColor;
+      if (wet) {
+        shader.uniforms.uKeyDirView = uni.uKeyDirView;
+        shader.uniforms.uKeyColor = uni.uKeyColor;
+        shader.uniforms.uBounceColor = uni.uBounceColor;
+        shader.uniforms.uUpView = uni.uUpView;
+        shader.uniforms.uWet = uni.uWet;
+      }
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\n' + CHAR_VS_DECL)
         .replace('#include <begin_vertex>',
@@ -1165,7 +1232,8 @@
           '#include <project_vertex>\n  vDist = -mvPosition.z;');
 
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\n' + CHAR_FS_DECL)
+        .replace('#include <common>',
+          '#include <common>\n' + CHAR_FS_DECL + (wet ? '\n' + CHAR_FS_WET_DECL : ''))
         .replace('#include <color_fragment>', [
           '#include <color_fragment>',
           // Do not fade the surface detail out with distance - COARSEN it. The
@@ -1201,7 +1269,23 @@
           // its endpoint changed the measured torso luminance by under 1%.
           // 5-18 m is the band an engagement actually happens in.
           '  float boRange = smoothstep(5.0, 18.0, vDist);',
-          '  diffuseColor.rgb *= mix(1.0, 0.58, boRange);',
+          // ...and NONE of that reasoning survives the move to 02:00. The thing
+          // this crush exists to stop - an enemy measuring brighter than the
+          // sunlit wall behind him - cannot happen on a level with no sun; the
+          // harbor firefight stands its squad at 11-30 m, i.e. squarely inside
+          // the ramp, so at night it simply removes 42% of the albedo from
+          // every man the player is actually shooting at. Held at a token
+          // strength there so the near/far ordering still reads.
+          // 0.66, not the 0.88 this started at: measured on the harbor
+          // firefight, the man at ~27 m stands on a stack top inside a mercury
+          // flood and photographed at 0.644 mean against 0.242 for the
+          // container behind him, with a p95 of 0.99 - clipping, and the exact
+          // enemy-brighter-than-his-backdrop inversion this crush exists to
+          // stop. It just does not need the DAYLIGHT strength to stop it. This
+          // term is exactly zero at the portrait's 3.5 m either way, so none of
+          // this trades against the close framing.
+          wet ? '  diffuseColor.rgb *= mix(1.0, 0.66, boRange);'
+              : '  diffuseColor.rgb *= mix(1.0, 0.58, boRange);',
           // Skin gets its warmth from subsurface scatter, not from a bright
           // albedo. Lifting the raw albedo instead made the forehead the
           // brightest object in the frame, brighter than sunlit plaster - and
@@ -1219,8 +1303,27 @@
           '#include <roughnessmap_fragment>\n  roughnessFactor *= vSurf.x * (0.93 + 0.14 * boH);')
         .replace('#include <metalnessmap_fragment>',
           '#include <metalnessmap_fragment>\n  metalnessFactor *= vSurf.y;')
-        .replace('#include <normal_fragment_maps>', [
+        .replace('#include <normal_fragment_maps>', glsl([
           '#include <normal_fragment_maps>',
+          // ---- WET (harbor only) --------------------------------------------
+          // Everything else in this level is soaked; a bone-dry militiaman in a
+          // downpour is the tell that he was dropped in from another build.
+          // Water does two things to cloth and neither of them is "lighten it":
+          // the film fills the fibre pile so the surface goes GLOSSY, and the
+          // extra internal reflection makes the albedo DARKER and more
+          // saturated. The gloss is what makes him read at night - a soaked
+          // shoulder catches the storm dome and the sodium pool where a dry one
+          // returns nothing - so the darkening is kept mild and the roughness
+          // does the work.
+          //
+          // Rain falls DOWN, so the mask is weighted by how much of the sky a
+          // surface can see: vSurf.w is the openness bake (a pouch gusset stays
+          // comparatively dry) and the up-facing term soaks shoulders, the hat
+          // crown, forearms and boot uppers hardest.
+          wet ? glsl([
+            '  float boUpF = saturate(dot(normal, uUpView));',
+            '  float boWetM = uWet * (0.34 + 0.66 * vSurf.w) * (0.72 + 0.28 * boUpF);'
+          ]) : null,
           // only the NORMAL perturbation fades - it is the part that shimmers
           '  if (boFade > 0.002) {',
           '    vec3 boA = abs(normal.z) < 0.9 ? vec3(0.0,0.0,1.0) : vec3(1.0,0.0,0.0);',
@@ -1230,8 +1333,25 @@
           '    float boE = 0.0025;',
           '    float boH1 = boSurf(boP + boT1 * boE, vSurf.z);',
           '    float boH2 = boSurf(boP + boT2 * boE, vSurf.z);',
+          // The wet variant deliberately does NOT raise this amplitude. It was
+          // tried - beaded water really is extra relief, and it breaks up the
+          // flat bright polygons an eight-sided lathe shoulder presents to a
+          // mast - but the cloth height field runs at 290 cycles/m, which is
+          // sub-pixel on a man at 3.5 m, and a 70% louder version of a
+          // sub-pixel field is a diagonal moire across both thighs. The facets
+          // are damped by the roughness term below instead, which cannot alias.
           '    normal = normalize(normal - (boT1 * (boH1 - boH) + boT2 * (boH2 - boH)) * (0.14 * boFade));',
           '  }',
+          // These two move TOGETHER and that is the whole point. Water darkens
+          // cloth and sharpens its highlight at the same time, so pairing a
+          // 0.42 roughness multiplier with a 0.80 albedo multiplier raises the
+          // CONTRAST between a soaked sleeve and the sheen running along it
+          // without raising the mean - which is what "wet" actually looks like,
+          // and which also keeps the man a shade under the lit crates behind
+          // him rather than level with them. The roughness floor exists because
+          // nothing on a person is a mirror, wet or not.
+          wet ? '  roughnessFactor = max(roughnessFactor * mix(1.0, 0.42, boWetM), 0.22);' : null,
+          wet ? '  diffuseColor.rgb *= mix(1.0, 0.80, boWetM);' : null,
           // ---- specular anti-aliasing --------------------------------------
           // The receiver band peaked at 0.93 luminance - 2.1x the brightest
           // sunlit plaster in the frame - because a flat, coplanar, near-mirror
@@ -1248,16 +1368,38 @@
           '  float boTerm = 1.0 - saturate(dot(normal, uSunDirView));',
           '  diffuseColor.rgb += boSkin * boTerm * (diffuseColor.rgb * vec3(0.20, 0.06, 0.02)',
           '                               + vec3(0.012, 0.004, 0.003));'
-        ].join('\n'))
+        ]))
         // ---- baked occlusion on the AMBIENT term ---------------------------
         // aSurf.w carries the volumetric bake. Multiplying albedo alone (what
         // round 1 did) cannot make a pouch read against the panel it is bolted
         // to, because both get the same flat sky fill on top. Multiplying
         // irradiance and iblIrradiance is what actually darkens the crevice.
-        .replace('#include <lights_fragment_maps>', [
+        .replace('#include <lights_fragment_maps>', glsl([
           '#include <lights_fragment_maps>',
-          '  irradiance *= vSurf.w;',
-          '  iblIrradiance *= vSurf.w * mix(1.0, 0.45, boRange);',
+          // The full-strength choke is a daylight instrument. Under a 5.2 sun
+          // the ambient is a luxury and taking 60% of it out of a crevice is
+          // free; under a storm deck it is the ONLY light reaching the whole
+          // camera-facing front of a backlit man, and taking 60% out of that
+          // leaves 0.0036 display-linear - a hole in the frame. Softened to a
+          // 60% blend at night: the pouch still sits under the panel, but the
+          // panel still exists.
+          wet ? '  irradiance *= mix(1.0, vSurf.w, 0.80);'
+              : '  irradiance *= vSurf.w;',
+          wet ? '  iblIrradiance *= mix(1.0, vSurf.w, 0.85) * mix(1.0, 0.55, boRange);'
+              : '  iblIrradiance *= vSurf.w * mix(1.0, 0.45, boRange);',
+          // ---- sodium bounced up off the wet apron (harbor only) ------------
+          // The single biggest thing missing from a character at Cold Harbor.
+          // The apron under a mast photographs at 0.22 display-linear - it is
+          // the brightest surface anywhere near the subject - and a wet apron
+          // is closer to a mirror than to a diffuser, so it throws that light
+          // back UP. That is the fill that puts a chin, a chest rig and the
+          // front of a thigh back into the picture when the only key in the
+          // level is 5 m above and behind the man's shoulder. Weighted over the
+          // lower hemisphere (1.0 straight down, 0.5 on a vertical, 0 on a
+          // shoulder), which is the correct form factor for a ground plane, and
+          // sized in JS from the practical's real irradiance at his feet.
+          wet ? '  irradiance += uBounceColor * (0.5 - 0.5 * dot(normal, uUpView)) *' : null,
+          wet ? '                mix(1.0, vSurf.w, 0.55);' : null,
           // ---- grazing-angle specular occlusion ------------------------------
           // Fresnel goes to 1.0 at grazing incidence, so a 0.02-linear nylon
           // band or a hat brim seen edge-on gets a FULL-strength environment
@@ -1267,15 +1409,22 @@
           // self-occludes that reflection; three has no term for it, so this is
           // it. Keyed on roughness, so the carbine keeps its edge.
           '  float boNV = saturate(dot(normal, normalize(vViewPosition)));',
-          '  float boGraze = mix(1.0, 0.16 + 0.84 * boNV * boNV, material.roughness);',
-          '  radiance *= mix(1.0, vSurf.w, 0.7) * mix(1.0, 0.45, boRange) * boGraze;'
-        ].join('\n'))
+          // Wet cloth genuinely DOES carry a grazing reflection - that sheen IS
+          // what "soaked" looks like - so the fibre self-occlusion floor is
+          // relaxed with wetness, and the range crush on the environment lobe,
+          // which exists only to stop a sunlit enemy glowing, comes out.
+          wet ? '  float boGF = mix(0.16, 0.46, uWet);' : null,
+          wet ? '  float boGraze = mix(1.0, boGF + (1.0 - boGF) * boNV * boNV, material.roughness);'
+              : '  float boGraze = mix(1.0, 0.16 + 0.84 * boNV * boNV, material.roughness);',
+          wet ? '  radiance *= mix(1.0, vSurf.w, 0.45) * mix(1.0, 0.62, boRange) * boGraze;'
+              : '  radiance *= mix(1.0, vSurf.w, 0.7) * mix(1.0, 0.45, boRange) * boGraze;'
+        ]))
         // ---- rim / backlight ------------------------------------------------
         // The single highest-leverage tool for separating a character from a
         // busy plate, and the reason a backlit enemy pops against rubble. There
         // was none anywhere in this file. Added as indirect specular so it
         // reaches outgoingLight without being multiplied by albedo.
-        .replace('#include <lights_fragment_end>', [
+        .replace('#include <lights_fragment_end>', glsl([
           '#include <lights_fragment_end>',
           // Exponent and gain both matter more than they look. At pow 3 with a
           // 0.55 gain the term covered the whole outer HALF of every rounded
@@ -1319,8 +1468,45 @@
           // path uses is available here for one extra call.
           '  float boNdl = dot(normal, uSunDirView);',
           '  float boWrap = saturate((boNdl + 0.32) / 1.32) - saturate(boNdl);',
-          '  reflectedLight.directDiffuse += boSkin * boWrap * boSunVis * 0.22 * uSunColor * diffuseColor.rgb;'
-        ].join('\n'));
+          '  reflectedLight.directDiffuse += boSkin * boWrap * boSunVis * 0.22 * uSunColor * diffuseColor.rgb;',
+          // ---- THE PRACTICAL KEY (harbor only) -------------------------------
+          // Every term above is hung off uSunDirView / uSunColor, and AISystem
+          // scales those by sky.sunIntensity so a militiaman does not glow at
+          // midnight. At Cold Harbor sunIntensity is 0.187 and the gain sits on
+          // its 0.02 floor, so the ENTIRE rim/backlight apparatus - the one
+          // thing this file calls "the single highest-leverage tool for
+          // separating a character from a busy plate" - is switched off in the
+          // one level that needs it most, because the level's key is not the
+          // sun. It is a sodium mast. uKeyDirView / uKeyColor carry that mast
+          // (solved per frame in _syncKey), so the same apparatus runs again
+          // against the light that is actually there.
+          //
+          // pow 4 rather than the sun rim's pow 5: a 6.5 m lamp head 5 m away
+          // is a far bigger source relative to a man than the sun is, so its
+          // wrap around the silhouette is genuinely wider. The 0.28 pedestal on
+          // boBack keeps a side-lit shoulder from losing its edge entirely.
+          wet ? glsl([
+            '  float boRimK = 1.0 - saturate(dot(normal, boV));',
+            '  boRimK = boRimK * boRimK * boRimK * boRimK;',
+            '  float boBackK = saturate(-dot(boV, uKeyDirView));',
+            '  boBackK = 0.28 + 0.72 * boBackK * boBackK;',
+            // The cold half is deliberately worth almost as much as the warm
+            // one. A man lit only by sodium is a monochrome orange cut-out; the
+            // storm deck is a real second source and putting it on the OTHER
+            // edge is what gives the silhouette two colours and a direction.
+            '  vec3 boRimK2 = boRimK * boMet * boBackK *',
+            '                 (0.55 * uKeyColor + 0.65 * uSkyColor);',
+            '  reflectedLight.indirectSpecular += min(boRimK2, vec3(0.26)) * mix(1.0, vSurf.w, 0.55);',
+            // Wrapped key. A lamp head is a metre of glass at 5 m, not a point,
+            // and rain scatter widens it further; the terminator on a man under
+            // one is soft. This is the difference between a chest rig with
+            // pouches in it and a black rectangle.
+            '  float boNdlK = dot(normal, uKeyDirView);',
+            '  float boWrapK = saturate((boNdlK + 0.62) / 1.62) - saturate(boNdlK);',
+            '  reflectedLight.directDiffuse += boWrapK * 0.30 * uKeyColor *',
+            '                                  diffuseColor.rgb * mix(1.0, vSurf.w, 0.7);'
+          ]) : null
+        ]));
 
       // The lookup degrades to "lit" rather than failing to compile when the
       // CSM patch is not present (shadows off, or an unexpected three build).
@@ -1342,7 +1528,8 @@
     };
     // A stable cache key keeps three from recompiling this program per instance.
     mat.customProgramCacheKey = function () {
-      return hasFace ? 'blackout-character-face' : 'blackout-character';
+      return (hasFace ? 'blackout-character-face' : 'blackout-character') +
+        (wet ? '-wet' : '');
     };
     return mat;
   }
@@ -5321,6 +5508,14 @@
     this._losCursor = 0;
     this._staged = false;       // capture composition pass has run
     this._capScale = 0;         // shared squad depth compression, see _frameForCapture
+    this._night = false;        // wet-night material variant (Cold Harbor)
+    // Solved once a frame in _syncKey: the dominant practical over the squad.
+    this._key = {
+      dir: new V3(0, 0.70, -0.71),          // WORLD direction toward the lamp
+      col: new THREE.Color(0.55, 0.20, 0.05),
+      bounce: new THREE.Color(0.30, 0.16, 0.08),
+      found: false
+    };
 
     this._bindEvents();
   }
@@ -5352,7 +5547,15 @@
     try {
       if (ctx && ctx.scene && this.root.parent !== ctx.scene) ctx.scene.add(this.root);
       this.world.attach(ctx && ctx.level);
-      this.material = makeCharacterMaterial();
+      // Which lighting world are we in? Read the LEVEL, not the weather state:
+      // `weather` builds one slot before `ai`, but its wetness has not ramped
+      // yet at build time (it measures 0.00 here and 1.00 by frame 40), so a
+      // wetness test would compile the daylight program for the harbor.
+      // levelDef.weather is the declaration and is available from boot.
+      var ld = ctx && ctx.levelDef;
+      this._night = !!(ctx && (ctx.levelId === 'harbor' ||
+        (ld && ld.weather && ld.weather !== 'clear')));
+      this.material = makeCharacterMaterial(null, this._night);
 
       var lv = ctx && ctx.level;
       if (lv && lv.navGrid && lv.navGrid.walkable && lv.navGrid.w > 1) {
@@ -5375,7 +5578,7 @@
         if (GAME.yieldFrame) await GAME.yieldFrame();
       }
       if (this.faceAtlas.ok && this.faceAtlas.commit()) {
-        this.faceMaterial = makeCharacterMaterial(this.faceAtlas);
+        this.faceMaterial = makeCharacterMaterial(this.faceAtlas, this._night);
         this.materials = [this.material, this.faceMaterial];
         for (i = 0; i < this.variants.length; i++) {
           if (this.variants[i].geometry && this.variants[i].geometry.userData.faceGroup) {
@@ -5874,8 +6077,128 @@
   // Feed the character shader the live sun. One material serves every enemy, so
   // this runs once a frame, not once per instance.
   AISystem.prototype._syncMaterial = function (ctx) {
+    if (this._night) { try { this._syncKey(ctx); } catch (e) { GAME.logError('ai.key', e); } }
     this._syncOne(this.material, ctx);
     this._syncOne(this.faceMaterial, ctx);
+  };
+
+  // --------------------------------------------------------------------------
+  // THE PRACTICAL KEY  (harbor only; never runs in the market)
+  //
+  // Cold Harbor's key light is not a light this file can ask ctx.sky for - it
+  // is whichever sodium mast or mercury flood the squad happens to be standing
+  // under, and it changes as they move. lighting.js publishes them as
+  // `lighting.practicals` ([{light, ...}]), so the dominant one is solvable
+  // exactly the way the renderer solves it: intensity / d^2, times the spot
+  // cone, times the distance cutoff. Measured on the harbor portrait this picks
+  // the 6.5 m mast at 7.0 m and irradiance 3.87 - the same light the frame is
+  // actually lit by - over a 12.5 m mast at 18.2 m and 0.64.
+  //
+  // Everything degrades: no lighting system, no practicals array, nothing in
+  // range, all give the standing cold-from-above default rather than black.
+  // --------------------------------------------------------------------------
+  var _kA = new V3(), _kB = new V3(), _kC = new V3();
+  var KEY_RIM_GAIN = 0.26;      // practical irradiance -> rim/wrap radiance
+  // The analytic size of this term is larger than the value shipped, and that
+  // is deliberate. The mast puts E ~ 3.9 on the apron at the subject's feet; a
+  // wet apron returns roughly a quarter of that (diffuse plus the smeared
+  // specular of the lamp itself), so the radiance leaving it is
+  // ~3.9 * 0.25 / PI = 0.31, and a VERTICAL surface standing on it receives
+  // about L * PI/2 = 0.49 of that back - which is a gain around 0.4.
+  //
+  // It is shipped at 0.16 because lighting.js is ALSO paying for this physics
+  // (a hemisphere pair plus a dedicated sodium up-bounce), and a control render
+  // - the market program running unchanged in the same harbor build - showed
+  // the level's own practicals already carrying the subject. Sized against that
+  // control rather than against the analytic ceiling, this is a fill that opens
+  // the shadow side by ~40% instead of a second key light. It scales with the
+  // measured practical irradiance, so it tracks the rig if the level relights.
+  var KEY_BOUNCE_GAIN = 0.16;   // ...and -> apron bounce irradiance
+  var KEY_BOUNCE_CAP = 1.0;     // standing under a 1200 cd flood must not blow
+  var KEY_DESAT = 0.42;         // the apron is grey; it desaturates what it returns
+
+  AISystem.prototype._syncKey = function (ctx) {
+    var k = this._key;
+    k.found = false;
+    if (!ctx) return;
+
+    // Subject point: the live squad, else where the camera looks.
+    //
+    // Weighted TOWARD THE CAMERA, not a plain centroid. One material serves the
+    // whole squad, so there is exactly one key to publish, and the harbor
+    // firefight spreads four men over 9 m across and 10 m deep - far enough
+    // that the plain mean landed under a mercury flood while the man the player
+    // is actually looking at stood in a sodium pool 6 m away, and he got the
+    // wrong colour of rim. 1/(2+d)^2 puts the nearest man in charge without the
+    // discontinuity that picking one outright would cause when he dies.
+    var n = 0, i, wsum = 0;
+    _kA.set(0, 0, 0);
+    var camP = ctx.camera ? ctx.camera.position : null;
+    for (i = 0; i < this.enemies.length; i++) {
+      var e = this.enemies[i];
+      if (!e || e.alive === false) continue;
+      var wgt = 1;
+      if (camP) { wgt = 1 / (2 + e.position.distanceTo(camP)); wgt *= wgt; }
+      _kA.x += e.position.x * wgt;
+      _kA.y += (e.position.y + 1.35) * wgt;
+      _kA.z += e.position.z * wgt;
+      wsum += wgt;
+      n++;
+    }
+    if (n && wsum > 0) _kA.multiplyScalar(1 / wsum);
+    else if (ctx.camera) {
+      _kB.set(0, 0, -1).applyQuaternion(ctx.camera.quaternion);
+      _kA.copy(ctx.camera.position).addScaledVector(_kB, 6);
+    } else return;
+
+    var pr = (ctx.lighting && ctx.lighting.practicals) || null;
+    if (!pr || !pr.length) return;
+
+    var bestE = 0, best = null;
+    for (i = 0; i < pr.length; i++) {
+      var L = pr[i] && pr[i].light;
+      if (!L || !L.visible || !(L.intensity > 0) || !L.position) continue;
+      _kB.subVectors(L.position, _kA);
+      var d2 = _kB.lengthSq();
+      if (d2 < 1e-4) continue;
+      var d = Math.sqrt(d2);
+      var att = 1;
+      if (L.distance > 0) {
+        if (d >= L.distance) continue;
+        att = 1 - d / L.distance;
+      }
+      var sf = 1;
+      if (L.isSpotLight && L.target) {
+        L.target.updateMatrixWorld();
+        _kC.setFromMatrixPosition(L.target.matrixWorld).sub(L.position);
+        if (_kC.lengthSq() < 1e-8) continue;
+        _kC.normalize();
+        var cosA = -_kB.dot(_kC) / d;          // _kB points AT the lamp
+        var ca = Math.cos(L.angle);
+        if (cosA <= ca) continue;
+        sf = M.saturate((cosA - ca) / Math.max(1e-4, (1 - ca) * Math.max(0.02, L.penumbra || 0.02)));
+      }
+      var E = L.intensity / d2 * att * sf;
+      if (E > bestE) { bestE = E; best = L; k.dir.copy(_kB).multiplyScalar(1 / d); }
+    }
+    if (!best) return;
+
+    k.found = true;
+    // The gains are the one thing here that is a judgement rather than a
+    // measurement, so they are held low enough that the rim reads as an EDGE
+    // and not as a coat of paint - the exact failure this file already fixed
+    // once for the sun rim. Ceilinged so standing directly under a 1200 cd
+    // flood cannot blow the man out.
+    var g = Math.min(bestE, 7.0);
+    k.col.copy(best.color).multiplyScalar(M.clamp(g * KEY_RIM_GAIN, 0.03, 1.15));
+    // What comes back off the apron is the lamp's colour muddied by wet
+    // concrete, not the lamp's colour.
+    var lum = best.color.r * 0.2126 + best.color.g * 0.7152 + best.color.b * 0.0722;
+    k.bounce.setRGB(
+      M.lerp(best.color.r, lum, KEY_DESAT),
+      M.lerp(best.color.g, lum, KEY_DESAT),
+      M.lerp(best.color.b, lum, KEY_DESAT)
+    ).multiplyScalar(M.clamp(g * KEY_BOUNCE_GAIN, 0.02, KEY_BOUNCE_CAP));
   };
 
   AISystem.prototype._syncOne = function (mat, ctx) {
@@ -5904,6 +6227,31 @@
     var sc = (sky && sky.skyColor && sky.skyColor.isColor) ? sky.skyColor : null;
     if (sc) u.uSkyColor.value.copy(sc).multiplyScalar(kSky);
     else u.uSkyColor.value.setRGB(0.34 * kSky, 0.48 * kSky, 0.70 * kSky);
+
+    // ---- wet-night variant only ---------------------------------------------
+    if (!u.uKeyDirView) return;
+    if (cam) {
+      cam.updateMatrixWorld();
+      _m0.copy(cam.matrixWorld).invert();
+      u.uKeyDirView.value.copy(this._key.dir).transformDirection(_m0).normalize();
+      u.uUpView.value.set(0, 1, 0).transformDirection(_m0).normalize();
+    }
+    u.uKeyColor.value.copy(this._key.col);
+    // Nothing bounces off a dry apron. Fading the bounce with wetness also means
+    // the term is honestly zero on a `clear` preset instead of silently on.
+    var wetv = (ctx && ctx.weather && typeof ctx.weather.wetness === 'number')
+      ? M.saturate(ctx.weather.wetness) : 1.0;
+    u.uBounceColor.value.copy(this._key.bounce).multiplyScalar(0.35 + 0.65 * wetv);
+    u.uWet.value = wetv;
+    // The sun-referenced sky gain is meaningless at 02:00 - kSky sits on its
+    // 0.02 floor - and this variant uses uSkyColor for the COLD half of the rim
+    // (the storm dome behind the man). Re-reference it to the dome that is
+    // actually lighting the level.
+    var envI = (ctx && ctx.scene && typeof ctx.scene.environmentIntensity === 'number')
+      ? ctx.scene.environmentIntensity : 1.0;
+    var kNight = M.clamp(0.16 + 0.42 * envI, 0.08, 0.55);
+    if (sc) u.uSkyColor.value.copy(sc).multiplyScalar(kNight);
+    else u.uSkyColor.value.setRGB(0.42 * kNight, 0.56 * kNight, 0.78 * kNight);
   };
 
   AISystem.prototype._updateThreat = function (ctx) {

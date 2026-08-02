@@ -95,6 +95,83 @@
     return false;
   }
 
+  // Pose the camera from a harbor level's published framing. Unlike the market
+  // helper this does NOT carry duplicated fallback coordinates: the harbor
+  // level is the single source of truth for its own framings, and if a pose is
+  // missing we would rather stand at the spawn point than at a stale guess.
+  function harborPose(ctx, key, fov) {
+    var poses = (ctx.level && ctx.level.cameraPoses) || null;
+    var p = poses && poses[key];
+    if (p && p.position) {
+      place(ctx, [p.position.x, p.position.y, p.position.z], p.yaw || 0, p.pitch || 0);
+    } else {
+      var sp = (ctx.level && ctx.level.spawnPoints && ctx.level.spawnPoints[0]) || null;
+      if (sp && sp.position) {
+        place(ctx, [sp.position.x, sp.position.y + 1.66, sp.position.z], sp.yaw || 0, 0);
+      } else {
+        place(ctx, [0, 1.66, 12], 0, 0);
+      }
+      GAME.logError('scenario', 'harbor pose "' + key + '" missing from level.cameraPoses');
+    }
+    if (fov) setFov(ctx, fov);
+    // Storm night is the harbor's only condition; the sky's time-of-day dial
+    // still drives the ambient term, so pin it to deep night.
+    timeOfDay(ctx, 0.0);
+    if (ctx.weather && ctx.weather.setPreset) {
+      try { ctx.weather.setPreset('storm'); } catch (e) { GAME.logError('scenario.weather', e); }
+    }
+  }
+
+  // Which level is loaded. The weapon and combat framings are SHARED by both
+  // levels, so they are the only scenarios that have to ask.
+  function isHarbor(ctx) {
+    return !!(ctx && (ctx.levelId === 'harbor' ||
+      (ctx.levelDef && ctx.levelDef.weather === 'storm')));
+  }
+
+  // The standing pose every weapon/combat framing starts from.
+  //
+  // These used to call S.street() unconditionally. On the harbor that is wrong
+  // twice over: level_harbor publishes no 'street' key, so look() fell through
+  // to FALLBACK_POSES.street and planted the camera on the MARKET's measured
+  // coordinates, and timeOfDay(0.32) then asked for mid-afternoon in a level
+  // whose whole identity is 02:00 in a storm. Six of the fourteen harbor
+  // captures - ads, weapon_closeup, muzzleflash, firefight, enemy_closeup and
+  // explosion - were shot from a standpoint chosen for a different level.
+  // (lighting.js pins the harbor clock itself, which is the only reason the
+  // time-of-day half of that did not also print a container terminal at noon.)
+  function baseShot(ctx, fov) {
+    if (isHarbor(ctx)) {
+      harborPose(ctx, 'containers', fov || 76);
+      return true;
+    }
+    look(ctx, 'street');
+    setFov(ctx, fov || 75);
+    timeOfDay(ctx, 0.32);
+    return false;
+  }
+
+  // A ground point `d` metres in front of the posed camera, `side` metres to
+  // its right. Absolute marks belong to the level they were measured in, so a
+  // scenario shared by two levels has to place its subjects relative to its own
+  // framing or it is just guessing in the second level's coordinate system.
+  var _fwd = new V();
+  function aheadOfCamera(ctx, d, side) {
+    var cam = ctx.camera;
+    _fwd.set(0, 0, -1).applyQuaternion(cam.quaternion);
+    _fwd.y = 0;
+    if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, -1);
+    _fwd.normalize();
+    var x = cam.position.x + _fwd.x * d - _fwd.z * (side || 0);
+    var z = cam.position.z + _fwd.z * d + _fwd.x * (side || 0);
+    var y = 0;
+    var lv = ctx.level;
+    if (lv && typeof lv.sampleGround === 'function') {
+      try { var g = lv.sampleGround(x, z); if (isFinite(g)) y = g; } catch (e) { /* flat */ }
+    }
+    return new V(x, y, z);
+  }
+
   var S = {
     // ---- environment framing ----------------------------------------------
     overview: function (ctx) {
@@ -133,31 +210,40 @@
 
     // ---- weapon framing ----------------------------------------------------
     ads: function (ctx) {
-      S.street(ctx);
+      baseShot(ctx);
       if (ctx.weapons) {
         ctx.weapons.forceADS = true;
         if (ctx.weapons.setADS) ctx.weapons.setADS(true, true);
       }
     },
     weapon_closeup: function (ctx) {
-      S.street(ctx);
+      baseShot(ctx);
       if (ctx.weapons && ctx.weapons.inspect) ctx.weapons.inspect();
       setFov(ctx, 60);
       hideHud(ctx);
     },
     muzzleflash: function (ctx) {
-      S.street(ctx);
+      baseShot(ctx);
       ctx._fireAt = 0.75;    // handled in tick()
     },
 
     // ---- combat ------------------------------------------------------------
     firefight: function (ctx) {
-      S.street(ctx);
+      baseShot(ctx);
       // Close enough to actually read as a firefight. The old cluster sat
       // 26-32 m out and every militiaman was three pixels tall behind the
       // muzzle flash. Staggered in depth so they overlap into a group rather
       // than lining up like a firing squad.
-      spawnEnemies(ctx, 4, new V(0.4, 0, -2.6), 3.0, 3.4);
+      //
+      // The market's mark is measured and stays measured - it is a shipped
+      // framing and must not move. The harbor solves the equivalent standoff
+      // from its own pose, because the same absolute mark cannot be 16 m ahead
+      // in two different levels.
+      if (isHarbor(ctx)) {
+        spawnEnemies(ctx, 4, combatMark(ctx, 4, 3.0, 3.4, 11, 30), 3.0, 3.4, true);
+      } else {
+        spawnEnemies(ctx, 4, new V(0.4, 0, -2.6), 3.0, 3.4);
+      }
       ctx._fireAt = 1.2;
     },
     enemy_closeup: function (ctx) {
@@ -177,6 +263,25 @@
       // 3.5 m on a 44 deg lens puts a 1.8 m man across ~64% of frame height:
       // close enough to read his rig and the terminator on his face, long
       // enough that the lens is not distorting his proportions.
+      //
+      // NONE of that reasoning transfers to the harbor, because none of it is
+      // true there: the sun is 40 degrees below the horizon, sunlit() therefore
+      // vetoes every mark, and the search falls through to PORTRAIT_MARKS[0] -
+      // a market coordinate, in a level that has never heard of it. The first
+      // harbor capture of this scenario returned precisely the black cut-out
+      // the market version was written to avoid. On the harbor the key is a
+      // sodium mast, so the subject is solved against the lamps instead - but
+      // it cannot be solved HERE. lighting.js places the harbor rig against the
+      // level's own camera poses, and level.js builds after lighting, so the
+      // practicals do not exist until the first update; at apply() time the
+      // lamp list is still empty. Stand on a published framing now so there is
+      // always a picture, and re-solve on the first tick that has lamps in it.
+      if (isHarbor(ctx)) {
+        hideHud(ctx); hideViewmodel(ctx);
+        harborPose(ctx, 'containers', PORTRAIT.fov);
+        ctx._harborPortrait = 1;
+        return;
+      }
       timeOfDay(ctx, 0.33);
       var shot = pickPortrait(ctx);
       var mark = shot.mark;
@@ -193,8 +298,42 @@
       framePortrait(ctx, ctx._holdEnemy, mark);
     },
     explosion: function (ctx) {
-      S.street(ctx);
+      baseShot(ctx);
       ctx._explodeAt = 0.9;
+    },
+
+    // ---- LEVEL 2: COLD HARBOR ----------------------------------------------
+    // These only make sense with ?level=harbor. They read poses straight from
+    // level.cameraPoses; a level that fails to publish one falls back to its
+    // own default spawn rather than staring at the skybox.
+    quay: function (ctx) {
+      harborPose(ctx, 'quay', 74);
+    },
+    containers: function (ctx) {
+      harborPose(ctx, 'containers', 76);
+    },
+    warehouse: function (ctx) {
+      harborPose(ctx, 'warehouse', 78);
+    },
+    crane: function (ctx) {
+      harborPose(ctx, 'crane', 70);
+    },
+    gangway: function (ctx) {
+      harborPose(ctx, 'gangway', 72);
+    },
+    harbor_overview: function (ctx) {
+      harborPose(ctx, 'overview', 64);
+      hideHud(ctx); hideViewmodel(ctx);
+    },
+    // Deterministic lightning: force a strike so the capture always catches one
+    // instead of depending on where the random interval happened to land.
+    lightning: function (ctx) {
+      harborPose(ctx, 'containers', 76);
+      ctx._strikeAt = 1.1;
+    },
+    rain_closeup: function (ctx) {
+      harborPose(ctx, 'quay', 55);
+      hideHud(ctx);
     },
 
     // ---- technical ---------------------------------------------------------
@@ -319,6 +458,105 @@
       mark: m,
       eye: [m.x - PORTRAIT.ax * PORTRAIT.dist, PORTRAIT.eyeY, m.z - PORTRAIT.az * PORTRAIT.dist]
     };
+  }
+
+  // ==========================================================================
+  // HARBOR PORTRAIT
+  //
+  // The market portrait is solved against the sun. Cold Harbor has no sun - it
+  // is 02:00 - so the only key in the level is the practicals, and a subject
+  // stood anywhere else is a silhouette. This walks lighting.js's own practical
+  // list, stands the subject just inside the brightest reachable pool, and puts
+  // the camera on the lamp's side of him so the key lands on his face rather
+  // than on his back. Everything is measured off live objects: if lighting.js
+  // moves a mast, the framing moves with it.
+  //
+  // Returns null on any failure, which sends the caller back to the market
+  // solver - a worse frame, but never a missing one.
+  // ==========================================================================
+  var HPORTRAIT = {
+    dist: 3.15,        // probe standoff; framePortrait re-solves the real one
+    eyeY: 1.68,
+    inset: 1.9,        // metres from the pool centre toward the camera
+    minLampY: 2.5,     // ignore ground-level fixtures and bulbs on props
+    maxLampY: 16.0
+  };
+  var _hpDir = new V();
+
+  function harborPortrait(ctx) {
+    var pr = ctx.lighting && ctx.lighting.practicals;
+    if (!pr || !pr.length) return null;
+
+    // Irradiance under the fixture: intensity / height^2, decay 2. That ranks a
+    // 380 cd lamp on a 6.5 m pole above a 1300 cd head 12 m up, which is right -
+    // the low one throws the tighter, brighter pool.
+    var cand = [];
+    for (var i = 0; i < pr.length; i++) {
+      var L = pr[i] && pr[i].light;
+      if (!L || !L.position || !isFinite(L.intensity) || L.intensity <= 1) continue;
+      var hy = L.position.y;
+      if (!(hy > HPORTRAIT.minLampY && hy < HPORTRAIT.maxLampY)) continue;
+      cand.push({ L: L, e: L.intensity / (hy * hy) });
+    }
+    if (!cand.length) return null;
+    cand.sort(function (a, b) { return b.e - a.e; });
+
+    // Eight azimuths per lamp: the subject sits `inset` from the pool centre on
+    // the bearing, the camera a further `dist` out on the same line. That keeps
+    // the lamp behind the subject's shoulder and above the camera, which is the
+    // three-quarter key the market version gets from the sun.
+    for (var c = 0; c < Math.min(6, cand.length); c++) {
+      var lp = cand[c].L.position;
+      for (var a = 0; a < 8; a++) {
+        var th = a * Math.PI / 4;
+        var bx = Math.sin(th), bz = Math.cos(th);
+        var mx = lp.x + bx * HPORTRAIT.inset;
+        var mz = lp.z + bz * HPORTRAIT.inset;
+        var ex = lp.x + bx * (HPORTRAIT.inset + HPORTRAIT.dist);
+        var ez = lp.z + bz * (HPORTRAIT.inset + HPORTRAIT.dist);
+        if (!walkable(ctx, mx, mz) || !walkable(ctx, ex, ez)) continue;
+
+        var gy = 0;
+        var lv = ctx.level;
+        if (lv && typeof lv.sampleGround === 'function') {
+          try { var g = lv.sampleGround(mx, mz); if (isFinite(g)) gy = g; } catch (e) { /* flat */ }
+        }
+        var eye = [ex, gy + HPORTRAIT.eyeY, ez];
+        _hpDir.set(mx - ex, PORTRAIT.aimY - HPORTRAIT.eyeY, mz - ez);
+        if (blocked(ctx, eye[0], eye[1], eye[2], _hpDir, HPORTRAIT.dist - 0.6)) continue;
+        // The subject has to actually see the lamp or the pool is on the far
+        // side of a container from him.
+        _hpDir.set(lp.x - mx, lp.y - (gy + 1.5), lp.z - mz);
+        if (blocked(ctx, mx, gy + 1.5, mz, _hpDir, _hpDir.length() - 0.5)) continue;
+        return { mark: new V(mx, gy, mz), eye: eye };
+      }
+    }
+    return null;
+  }
+
+  // Deliver the harbor portrait once there are lamps to solve it against. Keeps
+  // retrying for a few ticks and then settles for a subject placed straight in
+  // front of the camera - a mediocre portrait beats an empty one, and the shot
+  // has to be deterministic whatever the rig does.
+  function settleHarborPortrait(ctx, i) {
+    var shot = harborPortrait(ctx);
+    if (!shot) {
+      if (i < 12) return;
+      shot = { mark: combatMark(ctx, 1, 0, 0, 2.4, 5.0), eye: null };
+      GAME.logError('scenario', 'harbor portrait found no lit standpoint - ' +
+        'placing the subject on the lens axis instead');
+    }
+    ctx._harborPortrait = 2;
+    var mark = shot.mark;
+    if (shot.eye) {
+      lookAtPoint(ctx, shot.eye, new V(mark.x, PORTRAIT.aimY, mark.z), PORTRAIT.fov);
+    }
+    var e = spawnEnemies(ctx, 1, mark, 0, 0, true);
+    ctx._holdEnemy = (e && e.length) ? e[0] : null;
+    ctx._holdMark = mark;
+    holdEnemy(ctx._holdEnemy, mark);
+    framePortrait(ctx, ctx._holdEnemy, mark);
+    ctx.camera.updateMatrixWorld(true);
   }
 
   // ==========================================================================
@@ -463,7 +701,24 @@
     }
   }
 
-  function spawnEnemies(ctx, n, at, spreadX, spreadZ) {
+  // Where the i'th of n enemies stands, given the squad's centre. Shared with
+  // the footprint test below so the two can never disagree about the layout.
+  function squadX(base, i, n, sx) { return base.x + (i - (n - 1) / 2) * sx; }
+  function squadZ(base, i, sz) { return base.z - i * sz; }
+
+  function groundAt(ctx, x, z, fallback) {
+    var lv = ctx.level;
+    if (lv && typeof lv.sampleGround === 'function') {
+      try { var g = lv.sampleGround(x, z); if (isFinite(g)) return g; } catch (e) { /* flat */ }
+    }
+    return fallback || 0;
+  }
+
+  // `ground` re-samples each man onto the terrain under his own feet. The
+  // market is flat and passes y = 0, so it does not ask; the harbor must,
+  // because one shared base height across a 3 m spread is how the first harbor
+  // firefight left a militiaman standing on thin air (see combatMark).
+  function spawnEnemies(ctx, n, at, spreadX, spreadZ, ground) {
     if (!ctx.ai || !ctx.ai.spawn) return null;
     var out = [];
     var base = at || new V(2, 0, -12);
@@ -471,12 +726,34 @@
     var sz = spreadZ == null ? 2.1 : spreadZ;
     for (var i = 0; i < n; i++) {
       try {
-        var p = new V(base.x + (i - (n - 1) / 2) * sx, base.y, base.z - i * sz);
+        var px = squadX(base, i, n, sx), pz = squadZ(base, i, sz);
+        var p = new V(px, ground ? groundAt(ctx, px, pz, base.y) : base.y, pz);
         var e = ctx.ai.spawn(p);
         if (e) out.push(e);
       } catch (e2) { GAME.logError('scenario.spawn', e2); }
     }
     return out;
+  }
+
+  // A standable firing line for a squad of n, searched outward along the view
+  // axis. Taking a fixed distance on trust does not survive a second level: 16 m
+  // straight ahead of the harbor's `containers` pose is inside a container
+  // stack, sampleGround there returns the TOP of the stack, and the first
+  // harbor firefight duly printed a man hanging ten metres up in the air with
+  // his feet in nothing. Every candidate now has to put the whole squad on
+  // walkable ground before it is accepted.
+  function combatMark(ctx, n, spreadX, spreadZ, dMin, dMax) {
+    var best = null;
+    for (var d = dMin; d <= dMax; d += 1.0) {
+      var c = aheadOfCamera(ctx, d);
+      var ok = 0;
+      for (var i = 0; i < n; i++) {
+        if (walkable(ctx, squadX(c, i, n, spreadX), squadZ(c, i, spreadZ))) ok++;
+      }
+      if (ok === n) return c;
+      if (!best && ok > n / 2) best = c;
+    }
+    return best || aheadOfCamera(ctx, dMin);
   }
 
   // Pin a portrait subject to its mark. Captures simulate for 1.5-3 s and a
@@ -1071,6 +1348,11 @@
 
   // Called before each simulated step; drives timed events like firing.
   function tickScenario(name, ctx, t, i) {
+    // The harbor portrait is solved one tick late, because the lamps it is
+    // solved against do not exist until lighting.js has seen the level. i >= 1
+    // is the first tick with a completed update behind it.
+    if (ctx._harborPortrait === 1 && i >= 1) settleHarborPortrait(ctx, i);
+
     if (ctx._holdEnemy) holdEnemy(ctx._holdEnemy, ctx._holdMark);
 
     if (ctx._fireAt != null && t >= ctx._fireAt) {
@@ -1087,6 +1369,15 @@
           p.add(new V(Math.sin(ctx.camera.rotation.y) * -9, -0.6, Math.cos(ctx.camera.rotation.y) * -9));
           ctx.vfx.explosion(p, 4.5);
         } catch (e) { GAME.logError('scenario.explosion', e); }
+      }
+    }
+    // Force a lightning strike at a fixed time so the capture reliably catches
+    // one. Left to its own random interval, the strike lands inside the
+    // captured frame only occasionally and the shot is not reproducible.
+    if (ctx._strikeAt != null && t >= ctx._strikeAt) {
+      ctx._strikeAt = null;
+      if (ctx.weather && ctx.weather.strike) {
+        try { ctx.weather.strike(); } catch (e) { GAME.logError('scenario.strike', e); }
       }
     }
   }

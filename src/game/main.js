@@ -48,10 +48,47 @@
     { key: 'weapons',    cls: 'WeaponSystem',      label: 'Assembling weapons' },
     { key: 'ballistics', cls: 'Ballistics',        label: 'Loading ballistics' },
     { key: 'vfx',        cls: 'VFX',               label: 'Warming effects' },
+    { key: 'weather',    cls: 'Weather',           label: 'Rolling in weather' },
     { key: 'audio',      cls: 'Audio',             label: 'Synthesising audio' },
     { key: 'ai',         cls: 'AISystem',          label: 'Waking hostiles' },
     { key: 'hud',        cls: 'HUD',               label: 'Drawing HUD' }
   ];
+
+  // --------------------------------------------------------------------------
+  // Level registry. `level` and `props` resolve through this instead of using
+  // a fixed class name, so a level is a pair of modules that can be swapped
+  // with ?level=<id> without any other system knowing which one is loaded.
+  // Every level must satisfy the same Level/Props contract in ARCHITECTURE.md.
+  // --------------------------------------------------------------------------
+  var LEVELS = {
+    market: {
+      name: 'Al-Bakr Market District',
+      level: 'Level', props: 'Props',
+      weather: null,               // clear, hot, dusty - the sky default
+      defaultScenario: 'street'
+    },
+    harbor: {
+      name: 'Cold Harbor Container Terminal',
+      level: 'LevelHarbor', props: 'PropsHarbor',
+      weather: 'storm',
+      defaultScenario: 'quay'
+    }
+  };
+
+  // Falls back to the market level if an unknown id is requested, or if the
+  // requested level's module failed to load - a missing level must not blank
+  // the screen.
+  function resolveLevel(id) {
+    var def = LEVELS[id] || LEVELS.market;
+    if (typeof GAME[def.level] !== 'function') {
+      if (id && id !== 'market') {
+        GAME.logError('boot', 'level "' + id + '" unavailable (GAME.' +
+          def.level + ' missing) - falling back to market');
+      }
+      return LEVELS.market;
+    }
+    return def;
+  }
 
   // --------------------------------------------------------------------------
   // Quality presets
@@ -175,15 +212,26 @@
     };
     GAME.ctx = ctx;
 
+    // Which level is loaded. Systems read ctx.levelDef rather than testing for
+    // a specific class, so nothing needs to change when a level is added.
+    var levelDef = resolveLevel(P.level || 'market');
+    ctx.levelId = Object.keys(LEVELS).filter(function (k) { return LEVELS[k] === levelDef; })[0];
+    ctx.levelDef = levelDef;
+
     // ---- build systems ------------------------------------------------------
     var built = [];
     for (var i = 0; i < SYSTEMS.length; i++) {
       var s = SYSTEMS[i];
       progress(i / SYSTEMS.length, s.label + '…');
       if (!CAPTURE) await GAME.yieldFrame();
-      var Cls = GAME[s.cls];
+      // 'level' and 'props' resolve through the registry; everything else is
+      // a fixed class name.
+      var clsName = s.key === 'level' ? levelDef.level
+                  : s.key === 'props' ? levelDef.props
+                  : s.cls;
+      var Cls = GAME[clsName];
       if (typeof Cls !== 'function') {
-        GAME.logError('boot', 'missing system: GAME.' + s.cls);
+        GAME.logError('boot', 'missing system: GAME.' + clsName);
         continue;
       }
       try {
@@ -338,6 +386,7 @@
     var info = ctx.renderer.info;
     var report = {
       scenario: name,
+      level: ctx.levelId,
       t: duration,
       built: this.built,
       drawCalls: info.render.calls,

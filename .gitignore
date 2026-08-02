@@ -3,6 +3,14 @@
 # Reference images that are worth keeping live in docs/ instead.
 shots/
 
+# tools/shoot.py --outdir writes a capture set plus a report.json anywhere it is
+# pointed. Agents use throwaway directories for A/B comparisons; none of it
+# belongs in the repo.
+**/report.json
+*_lowq*/
+*_shots/
+_scratch*/
+
 # Scratch pages written and deleted by tools/check.py and tools/playtest.py.
 # They are removed on a clean exit; these rules cover crashes and Ctrl-C.
 ._check_*.html

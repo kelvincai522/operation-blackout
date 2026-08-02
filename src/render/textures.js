@@ -744,6 +744,129 @@
     }
   }
 
+  // --------------------------------------------------------------------------
+  // COLD HARBOR (level 2) palette - ART_DIRECTION_HARBOR.md.
+  //
+  // Kept in its own table rather than merged into PAL, because level 1 is
+  // finished: nothing here can move a market tone by accident. The two levels
+  // deliberately share only the WEATHERING tones (rust, grime, soot, salt) -
+  // oxide is oxide in any climate - and disagree about everything else. The
+  // market's concrete is a warm sun-baked #9a958c; a wet northern apron at two
+  // in the morning is #4a4f55 at best and #16191c where the water stands.
+  //
+  // Albedo runs dark on purpose. This level gets its value from specular off
+  // wet surfaces, so a "correct-looking" mid-grey albedo here would render as
+  // a milky grey soup the moment the sodium lamps hit it.
+  // --------------------------------------------------------------------------
+  var HPAL = {
+    // Container liveries. The art direction gives the mid-tone; a livery also
+    // needs the chalked end it fades toward (UV and salt kill the pigment long
+    // before the steel goes) and a deep end for the shaded webs and troughs.
+    ctnRed:   rgb(0x7a2f28), ctnRedFade:   rgb(0x9c6259), ctnRedDk:   rgb(0x431a16),
+    ctnBlue:  rgb(0x1f4a6b), ctnBlueFade:  rgb(0x5a7d94), ctnBlueDk:  rgb(0x122a3c),
+    ctnGreen: rgb(0x2c5040), ctnGreenFade: rgb(0x647d6d), ctnGreenDk: rgb(0x172c22),
+    ctnGrey:  rgb(0x6f7069), ctnGreyFade:  rgb(0x9b9c93), ctnGreyDk:  rgb(0x3c3d39),
+    // Dock concrete, its cool aggregate, and the water film over it.
+    dockGrey: rgb(0x4a4f55), dockDk: rgb(0x2c3034), dockLt:   rgb(0x757b81),
+    aggCool:  rgb(0x7d8288), aggCoolDk: rgb(0x4a4e53), aggCoolLt: rgb(0xa3a8ad),
+    wetDark:  rgb(0x16191c), wetSheen:  rgb(0x232a30),
+    // Sea, foam, and the scum that collects in the lee of a quay wall.
+    seaDeep:  rgb(0x080d12), seaMid: rgb(0x141d24), foam: rgb(0x9fadb2),
+    scum:     rgb(0x4b4a3a),
+    // Ship: painted topsides, bitumen boot topping, antifouling below the
+    // waterline, and the barnacle/weed band that grows right at it.
+    hullTop:  rgb(0x2b3238), hullTopLt: rgb(0x4d565d), hullBoot: rgb(0x1b1817),
+    antifoul: rgb(0x5e2a20), barnacle:  rgb(0xa9a494), weed:     rgb(0x2f3a24),
+    // Galvanising: bright spelter, and the chalky white oxide it becomes.
+    galv:     rgb(0x8d949a), galvChalk: rgb(0xb6bcbd),
+    // PVC tarpaulin, laid fibre rope, reefer casing, apron markings, oil.
+    //
+    // These four were all authored a stop or two too bright on the first pass
+    // and photographed as a yellow wall, a white venetian blind, a golden
+    // hawser and a cream fence. Nothing in a terminal at 02:00 in the rain is
+    // that light: a soaked rope is a dark grey-brown, a reefer casing is
+    // filthy off-white, and apron paint is thirty years of tyre rubber over a
+    // dirty ochre. Mean linear albedo per map is now 0.05-0.16 across the set.
+    pvc:      rgb(0x2f4a55), pvcLt:  rgb(0x6a838c), pvcDk:  rgb(0x172930),
+    manila:   rgb(0x6b5c3e), manilaLt: rgb(0x968467), manilaDk: rgb(0x342c1c),
+    reefer:   rgb(0x9aa09e), reeferDk: rgb(0x5e6362),
+    lineYellow: rgb(0xa88b32), lineWorn: rgb(0x6e6340),
+    // Weathered galvanising on a roof sheet is not the bright spelter of a new
+    // one - it is a dark grey-green oxide under algae and water staining.
+    galvOld:  rgb(0x5c625f),
+    oil:      rgb(0x131211)
+  };
+
+  // Trapezoidal profile for rolled sheet, wrapping in p: flat crest, angled
+  // web, flat trough. A sine wave is the wrong shape for a shipping container
+  // or a box-profile roof - the flats are what read as flats, and the webs are
+  // what catch a raking lamp as a hard line.
+  function trap(p, crest, web) {
+    p = p - Math.floor(p);
+    return 1 - sstep(crest, crest + web, p) + sstep(1 - web, 1, p);
+  }
+
+  // Fixings: a wrapping grid of heads with a washer and a dished seat, jittered
+  // off the lattice so the eye cannot count it. Every fixing on a wet steel
+  // roof is a rust source, so it also weeps downward (o.weep = streak length as
+  // a fraction of the tile). Runs AFTER the main loop - it edits S in place.
+  function stampBolts(g, S, o) {
+    var size = g.size;
+    var cols = Math.max(1, o.cols | 0), rows = Math.max(1, o.rows | 0);
+    var R = size * (o.r || 0.008);
+    var span = Math.ceil(R * 2.8);
+    var proud = o.proud === undefined ? 0.05 : o.proud;
+    var rustK = o.rust === undefined ? 1 : o.rust;
+    var j, k, yy, xx, s2, x2;
+    for (j = 0; j < rows; j++) {
+      for (k = 0; k < cols; k++) {
+        var hx = hash2i(k, j, (o.salt | 0) + 11), hy = hash2i(j, k, (o.salt | 0) + 13);
+        var rusty = hash2i(k + 5, j + 9, (o.salt | 0) + 17) * rustK;
+        var px = o.px ? o.px(k, hx) : ((k + 0.5) * size / cols + (hx - 0.5) * size * (o.jitter || 0.03));
+        var py = o.py ? o.py(j, hy) : ((j + 0.5) * size / rows + (hy - 0.5) * size * (o.jitter || 0.03));
+        for (yy = -span; yy <= span; yy++) {
+          var wy = ((Math.round(py + yy) % size) + size) % size;
+          var rowo = wy * size;
+          for (xx = -span; xx <= span; xx++) {
+            var d = Math.sqrt(xx * xx + yy * yy) / R;
+            if (d > 2.8) continue;
+            var wx = ((Math.round(px + xx) % size) + size) % size;
+            var ii = rowo + wx;
+            var head = sstep(1.05, 0.82, d);
+            var washer = sstep(1.95, 1.62, d) * sstep(0.98, 1.16, d);
+            var seat = sstep(2.7, 2.05, d) * sstep(1.55, 1.90, d);
+            S.h[ii] += head * proud + washer * 0.018 - seat * 0.012;
+            tint(S, ii, PAL.steelDk, head * 0.55 + washer * 0.30);
+            tint(S, ii, PAL.rust, (head * 0.50 + washer * 0.38 + seat * 0.50) * rusty);
+            tint(S, ii, PAL.rustDeep, seat * rusty * 0.45);
+            S.ro[ii] = sat(lerp(S.ro[ii], 0.34 + rusty * 0.58,
+                                sat(head * 0.85 + washer * 0.40 + seat * 0.30)));
+            S.me[ii] = sat(lerp(S.me[ii], 0.90 - rusty * 0.95, sat(head * 0.85 + washer * 0.40)));
+          }
+        }
+        if (o.weep && rusty > 0.05) {
+          var len = Math.max(2, Math.round(size * o.weep * (0.35 + rusty)));
+          for (s2 = 1; s2 < len; s2++) {
+            var t2 = s2 / len;
+            var wy2 = ((Math.round(py) + s2) % size + size) % size;
+            var wR = R * (0.5 + t2 * 0.55);
+            var ro2 = wy2 * size;
+            for (x2 = -Math.ceil(wR); x2 <= Math.ceil(wR); x2++) {
+              var kk = (1 - Math.abs(x2) / wR) * (1 - t2) * rusty;
+              if (kk <= 0) continue;
+              var wx2 = ((Math.round(px) + x2) % size + size) % size;
+              var i2 = ro2 + wx2;
+              tint(S, i2, PAL.rust, kk * 0.50);
+              tint(S, i2, PAL.rustDeep, kk * kk * 0.35);
+              S.ro[i2] = sat(S.ro[i2] + kk * 0.18);
+              S.me[i2] = sat(S.me[i2] * (1 - kk * 0.85));
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Scattered leaves for the foliage atlas. Rasterised analytically (no canvas
   // path fills) so the height profile is available for the normal map.
   function stampLeaves(g, S, o) {
@@ -3581,6 +3704,1410 @@
     }
   }
 
+  // ==========================================================================
+  // ===================  LEVEL 2 - "COLD HARBOR" RECIPES  ====================
+  //
+  // A container terminal at 02:00 in driving rain. Everything below is
+  // ADDITIVE - no level 1 recipe, palette entry or dial is touched - but the
+  // authoring priorities are different enough to be worth stating:
+  //
+  //  * ALBEDO IS DARK. The frame's value comes from specular off wet surfaces
+  //    lit by sodium masts, not from diffuse. A "sensible" mid-grey albedo
+  //    reads as milk under those lamps.
+  //
+  //  * ROUGHNESS IS THE MATERIAL. Wet is the whole look, and wet is a
+  //    roughness story: a puddle is 0.03, the damp slab round it is 0.25, the
+  //    strip sheltered under a container is 0.7. Every map here has to span a
+  //    real range SPATIALLY - a constant roughness map in this level is not a
+  //    flat-looking surface, it is an invisible one.
+  //
+  //  * RUST WEEPS DOWN. Salt air plus rain plus mild steel: every chip, weld,
+  //    fixing and cut edge bleeds oxide downward (Gen.drip with down = true;
+  //    the row index increases downward, which is the convention level 1's
+  //    runoff already established).
+  //
+  //  * GRIME LOW, WEAR HIGH. Same rule as level 1: the height field decides.
+  //    Paint fails on the corrugation crests that scrape past the next box in
+  //    the stack; black harbour dirt collects in the troughs it never reaches.
+  // ==========================================================================
+
+  // -- shipping-container flank: paint over primer over steel ----------------
+  //
+  // One recipe, four liveries.
+  //
+  // THIS MAP CARRIES NO CORRUGATION, AND THAT IS THE POINT. level_harbor.js
+  // folds the real thing into the mesh - corrugationLoop(wallLen, 0.298, 0.038)
+  // - a true trapezoidal profile with a real silhouette at the real 298 mm
+  // pitch. This tile used to paint a SECOND trapezoid on top of it, 8 ribs per
+  // tile, which lands at ~134 mm once SURF.container_*.uv (0.62) and the
+  // material repeat (1.5) are applied. Two rib sets at a 2.2:1 frequency ratio
+  // on one surface, one geometric and one in the normal map, with the texture's
+  // phase re-randomised at every stochastic-tiling cell boundary: they beat,
+  // and a stack of boxes photographs as a picket fence of lit bars and black
+  // slots. Measured, on an A/B pair of the `containers` framing captured in the
+  // same second with only this file differing - column-profile FFT over the red
+  // flank, texture rib band (11-19 px) 1.660 -> 0.191, a 6x collapse, while the
+  // geometric fold band (26-40 px) went 0.683 -> 1.105 because it is no longer
+  // being swamped. p95/p05 luminance across that flank 3.27 -> 2.27, and across
+  // the whole red stack on the quay framing 8.6:1 -> 2.2:1. A real corrugated
+  // flank under a raking lamp is 2-4:1.
+  // Relief at the rib pitch belongs to the mesh, and only to the mesh.
+  //
+  // What replaces it is what a container flank actually carries BETWEEN the
+  // folds: weld ripple and oil-canning across the sheet, hammer dents, mill
+  // scale, and a vertical wash grain from thirty years of rain running down it.
+  // Every one of those bands is broadband, so nothing in this map has a
+  // frequency for the mesh to beat against. Crest / valley / web survive only
+  // as WEATHERING masks, read off that aperiodic relief instead of off a rib
+  // lattice - chalk and scrapes on the high ground, black harbour grime in the
+  // hollows, oxide weeping out of both.
+  //
+  // The layer stack is the physical one: mild steel, red-oxide primer, enamel
+  // livery, and on maybe a fifth of the boxes a rolled-on repaint patch. Chips
+  // cut down through it in that order, and oxide blooms out of every chip.
+  function genContainerPanel(g, S, o) {
+    var n = g.n, size = g.size, i, x, y;
+    var salt = o.salt | 0;
+    var macro   = g.fbm(g.buf(0), 3, 4, 0.62, 1, salt + 11, false);
+    var dent    = g.fbm(g.buf(0), 6, 4, 0.58, 1, salt + 13, false);
+    var med     = g.fbm(g.buf(0), 26, 4, 0.5, 1, salt + 17, false);
+    var fine    = g.fbm(g.buf(0), 170, 3, 0.5, 1, salt + 19, false);
+    // Oil-canning: the shallow panting of a thin sheet between its stiffeners,
+    // and the single most characteristic mesoscale feature of container steel.
+    // With the trapezoid gone this is the map's biggest COHERENT gradient, and
+    // coherence is the point. Dumping the old map showed why: the corrugation
+    // took essentially the whole gradient budget and left the rest of the tile
+    // flat lavender, so at night the only thing on a container that caught a
+    // raking sodium lamp was a rib. Delete the rib and put the budget into
+    // broadband hash and the flank goes BLACK, because incoherent slopes
+    // average away inside one pixel footprint and mip to a flat normal. So the
+    // replacement has to be coherent over tens of texels the way a rib was -
+    // it just must not be periodic.
+    var ripple  = g.buf(0); g.fbmA(ripple, 13, 9, 3, 0.55, 1, salt + 51, false);
+    // Creases and welts: a box that has been dropped, racked and re-stacked.
+    // Ridged noise gives thin, steep, coherent lines - the same local slope a
+    // corrugation web had, scattered instead of ruled.
+    var crease  = g.ridged(g.buf(0), 4, 4, 1, salt + 59, true);
+    // Vertical wash grain: anisotropic so the flank keeps the up-down grain a
+    // corrugated box has, BROADBAND so it never lines up with the mesh ribs.
+    var grain   = g.buf(0); g.fbmA(grain, 34, 5, 4, 0.55, 1, salt + 53, false);
+    // Tone lottery. Was per-rib, which is exactly what drew the fence; now it
+    // is per-patch, which is how a flank of one continuous sheet actually
+    // weathers - in blotches, not in stripes.
+    var patch   = g.fbm(g.buf(0), 9, 2, 0.55, 1, salt + 57, false);
+    var chipN   = g.fbm(g.buf(0), 11, 5, 0.55, 1, salt + 23, false);
+    var chipC   = g.worley(64, 1.0, salt + 29);     // chip outlines, not blobs
+    var rustN   = g.fbm(g.buf(0), 8, 5, 0.55, 1, salt + 31, false);
+    var pit     = g.worley(120, 1.0, salt + 37);
+    var repaint = g.worley(5, 0.85, salt + 41);
+    var streakN = g.buf(0); g.fbmA(streakN, 130, 8, 4, 0.5, 1, salt + 43, false);
+    var scrRaw  = g.buf(0); g.fbmA(scrRaw, 260, 6, 3, 0.5, 1, salt + 47, false);
+    var scr     = g.buf(0); g.shear(scrRaw, scr, 1);
+    var C = chromaFields(g, salt + 300);
+    var seedM = g.buf(0), weep = g.buf(0);
+    for (i = 0; i < n; i++) seedM[i] = sstep(0.72, 0.88, chipN[i]);
+    g.drip(seedM, weep, 0.9925, true);
+
+    // The mesoscale relief, and the proudness mask derived from it. The
+    // thresholds are SOLVED from the field's own mean and spread rather than
+    // hard-coded, the same argument _emit makes for AO and bump: the band is a
+    // sum of five noise fields, one of them a ridged multifractal with a DC of
+    // its own, so its variance is not something to guess at - and a mask that
+    // misses it lands as either a flat panel or a two-tone one.
+    var relief = g.buf(0);
+    for (i = 0; i < n; i++) {
+      relief[i] = (ripple[i] - 0.5) * 0.105 + crease[i] * 0.060 +
+                  (grain[i] - 0.5) * 0.045 + (dent[i] - 0.5) * 0.075 +
+                  (med[i] - 0.5) * 0.024;
+    }
+    var rMean = 0, rVar = 0, rCnt = 0, rd;
+    for (i = 0; i < n; i += 3) { rMean += relief[i]; rCnt++; }
+    rMean /= (rCnt || 1);
+    for (i = 0; i < n; i += 3) { rd = relief[i] - rMean; rVar += rd * rd; }
+    var rSd = Math.sqrt(rVar / (rCnt || 1)) || 1e-4;
+    // +-1.3 sigma rather than +-1: a tighter window drives the mask hard to 0
+    // or 1 over most of the tile and the weathering that keys off it comes out
+    // as two-tone camouflage instead of as a continuous wash. The livery has to
+    // survive - ART_DIRECTION asks for faded red, blue and green, not brown.
+    var rE0 = rMean - rSd * 1.30, rE1 = rMean + rSd * 1.30;
+
+    S.base(o.col);
+    for (y = 0; y < size; y++) {
+      var rowo = y * size;
+      for (x = 0; x < size; x++) {
+        i = rowo + x;
+        // ---- relief and the proudness masks -------------------------------
+        // 1 on the high ground the rain washes and the next box in the stack
+        // scrapes past, 0 in the hollows harbour dirt settles into.
+        var crest = sstep(rE0, rE1, relief[i]);
+        var valley = 1 - crest;
+        var web = 4 * crest * valley;               // the transition band
+        var rib = sat((patch[i] - 0.5) * 1.7 + 0.5);
+        var expo = sat(0.32 + 0.88 * crest * (0.55 + 0.85 * rib));
+        // rMean is subtracted so the band stays centred on 0.50 whatever DC the
+        // ridged crease field happens to carry.
+        var h = 0.50 + (relief[i] - rMean) + (fine[i] - 0.5) * 0.010;
+
+        // ---- paint failure ------------------------------------------------
+        // Wear where the height is high: enamel goes first on whatever stands
+        // proud and takes the knocks, and survives longest in the hollows.
+        var chip = sstep(0.60, 0.76, chipN[i] * 0.72 + med[i] * 0.28);
+        chip = sat(chip + sstep(0.15, 0.02, chipC.f2[i] - chipC.f1[i]) * chip * 0.9);
+        chip *= expo;
+        var deep = sstep(0.74, 0.90, chipN[i]) * expo * 0.92;
+        var run = weep[i] * sstep(0.30, 0.66, streakN[i]);
+        // ...and oxide blooms out of every one of them, then runs down.
+        // Oxide follows its own field first and the relief second. When it was
+        // 0.28 + 0.75 * valley it tracked the proudness mask almost exactly,
+        // and once that mask stopped being the rib lattice it started reading
+        // as blotch camouflage.
+        var rustM = sat(deep * 1.10 + chip * 0.32 +
+                        sstep(0.60, 0.84, rustN[i]) * (0.36 + valley * 0.52) +
+                        run * 0.80);
+        var pt = sstep(0.22, 0.02, pit.f1[i]) * rustM;
+        var sc = sat((scr[i] - 0.74) * 3.8) * expo;
+        // A repaint patch: rolled on over the top at some point in the box's
+        // life, so it is a shade off, glossier, and much less chalked.
+        var rp = sstep(0.80, 0.90, repaint.id[i]) * sstep(0.55, 0.28, repaint.f1[i]);
+        h += rustM * 0.016 - pt * 0.030 - chip * 0.006 - sc * 0.008 + rp * 0.006;
+        S.h[i] = h;
+
+        // ---- albedo -------------------------------------------------------
+        shade(S, i, (0.82 + 0.34 * macro[i]) * (0.93 + 0.14 * rib));
+        var chalk = sat((macro[i] - 0.42) * 2.0) * expo;
+        tint(S, i, o.fade, chalk * 0.55 * (1 - rp * 0.8));
+        desat(S, i, chalk * 0.30 * (1 - rp * 0.8));
+        // High ground and hollow are the SAME PAINT - the tonal difference is
+        // shading and dirt, not a second colour.
+        tint(S, i, o.dark, valley * 0.095 + web * 0.045);
+        tint(S, i, o.col, rp * 0.55);
+        // paint -> primer -> bare steel: three genuinely different materials,
+        // each a step in value, not a shade of the one above it.
+        tint(S, i, PAL.primer, chip * 0.85);
+        tint(S, i, PAL.steelDark, deep * 0.75);
+        shade(S, i, 1 - chip * 0.14 - deep * 0.20);
+        // Iron oxide as a VALUE RANGE: near-black pitting, dark scale over the
+        // body, a pale bloom only on the crowns. `crest` is the normalised
+        // proudness, so it is the honest "is this the high ground" term now
+        // that the height field no longer swings 0.30 across a rib.
+        var hi = sat(crest * 1.35 - pt * 0.5);
+        tint(S, i, PAL.rust, rustM * 0.90);
+        tint(S, i, PAL.rustMid, rustM * sat(hi * 1.2) * 0.45);
+        tint(S, i, PAL.rustLt, rustM * hi * hi * 0.50);
+        tint(S, i, PAL.rustDeep, rustM * rustM * valley * 0.45 + run * run * 0.35);
+        tint(S, i, PAL.rustPit, pt * 0.75);
+        shade(S, i, 1 - pt * pt * 0.35);
+        // Salt bloom on the washed high ground, black harbour grime in the
+        // hollows. Both used to key off raw h thresholds, which only worked
+        // because the trapezoid was swinging h by 0.30; against the real relief
+        // band they would return almost nothing, so they key off the normalised
+        // proudness and keep the weathering range they were authored for.
+        tint(S, i, PAL.efflor, sat((fine[i] - 0.62) * 3.0) * crest * 0.16);
+        tint(S, i, PAL.grime, valley * 0.19 + valley * valley * 0.12);
+        tint(S, i, PAL.soot, valley * valley * 0.11);
+        tint(S, i, PAL.steelDk, sc * 0.40);
+        applyChroma(S, i, C, 0.9, sat(run * 1.4 + valley * 0.8 + pt),
+                    { iron: 1.15, bloom: 0.7, bio: 0.8, wash: 0.42 });
+
+        // ---- roughness / metalness ----------------------------------------
+        // Enamel keeps a semi-gloss where the rain washes it and the sun never
+        // reaches; it chalks to matte everywhere else; oxide is matte outright.
+        // That spread is what makes a stack of boxes read under a sodium lamp.
+        var r = 0.46 + (med[i] - 0.5) * 0.20;
+        r += chalk * 0.42;
+        r -= rp * 0.18;
+        r = lerp(r, 0.94, rustM);
+        r = lerp(r, 0.58, deep * 0.7);
+        r -= sc * 0.16;
+        r += pt * 0.05 + valley * 0.05;
+        S.ro[i] = sat(r);
+        // Paint and oxide are dielectrics. Only the fresh scrapes and the
+        // deepest chips reach live metal.
+        S.me[i] = sat(deep * 0.55 + sc * 0.55 - rustM * 1.2);
+      }
+    }
+    // Handling damage: a straddle carrier and forty years of being stacked.
+    // Turned up hard, because a dent is a COHERENT bowl with a steep rim and
+    // that is exactly the kind of feature the corrugation used to be the only
+    // supplier of. Five per tile was a garnish; a working box is covered in
+    // them.
+    punchCraters(g, S, { count: 13, rMin: 0.018, rMax: 0.072, depth: 0.050,
+                         rough: 0.72, col: PAL.grime, tint: 0.12, halo: 1.4 });
+    punchScrapes(g, S, { count: 18, lenMin: 0.03, lenMax: 0.16, width: 0.0016,
+                         depth: 0.012, rough: 0.42, col: PAL.steelDk, tint: 0.45,
+                         metal: 0.70, hbias: 0.80, hRef: 0.60 });
+  }
+
+  function genContainerSteel(g, S) {
+    genContainerPanel(g, S, { col: HPAL.ctnGrey, fade: HPAL.ctnGreyFade,
+                              dark: HPAL.ctnGreyDk, salt: 100 });
+  }
+  function genContainerRed(g, S) {
+    genContainerPanel(g, S, { col: HPAL.ctnRed, fade: HPAL.ctnRedFade,
+                              dark: HPAL.ctnRedDk, salt: 400 });
+  }
+  function genContainerBlue(g, S) {
+    genContainerPanel(g, S, { col: HPAL.ctnBlue, fade: HPAL.ctnBlueFade,
+                              dark: HPAL.ctnBlueDk, salt: 700 });
+  }
+  function genContainerGreen(g, S) {
+    genContainerPanel(g, S, { col: HPAL.ctnGreen, fade: HPAL.ctnGreenFade,
+                              dark: HPAL.ctnGreenDk, salt: 1000 });
+  }
+
+  // -- freighter hull: welded plate, boot topping, waterline growth ----------
+  //
+  // The tile is authored for a hull mapped with repeat [n, 1]: X tiles freely
+  // along the ship, Y runs once from the deck edge down to the waterline, so
+  // the horizontal paint bands land where they belong. It still tiles in Y if
+  // a consumer insists - ships genuinely do carry more than one horizontal
+  // band - but the boot topping is meant to be a single line.
+  function genShipHull(g, S) {
+    var n = g.n, size = g.size, i, x, y;
+    var platesY = 4, platesX = 3;
+    var macro   = g.fbm(g.buf(0), 3, 4, 0.6, 1, 11, false);
+    var med     = g.fbm(g.buf(0), 22, 4, 0.5, 1, 13, false);
+    var fine    = g.fbm(g.buf(0), 150, 3, 0.5, 1, 17, false);
+    var dishN   = g.fbm(g.buf(0), 7, 3, 0.55, 1, 19, false);
+    var rustN   = g.fbm(g.buf(0), 6, 5, 0.55, 1, 23, false);
+    var pit     = g.worley(110, 1.0, 29);
+    var beadN   = g.buf(0); g.fbmA(beadN, 120, 5, 3, 0.5, 1, 31, false);
+    var seamJ   = g.buf(0); g.fbmA(seamJ, 9, 3, 3, 0.5, 1, 37, false);
+    var streakN = g.buf(0); g.fbmA(streakN, 120, 7, 4, 0.5, 1, 41, false);
+    var barn    = g.worley(90, 1.0, 43);
+    var weedN   = g.buf(0); g.fbmA(weedN, 40, 9, 3, 0.5, 1, 47, false);
+    var chalkN  = g.fbm(g.buf(0), 8, 3, 0.55, 1, 53, false);
+    var C = chromaFields(g, 1700);
+
+    // Rust seeds on the blotches AND along every weld, which is where a hull
+    // actually bleeds - the heat-affected zone loses its coating first.
+    var seedM = g.buf(0), weep = g.buf(0);
+    for (y = 0; y < size; y++) {
+      var so = y * size;
+      var spy = (y / size) * platesY;
+      var spf = spy - Math.floor(spy);
+      for (x = 0; x < size; x++) {
+        i = so + x;
+        var sh = sstep(0.028, 0.0, Math.min(spf, 1 - spf) + (seamJ[i] - 0.5) * 0.010);
+        seedM[i] = Math.max(sstep(0.62, 0.82, rustN[i]),
+                            sh * sstep(0.45, 0.80, rustN[i]) * 0.9);
+      }
+    }
+    g.drip(seedM, weep, 0.9945, true);
+
+    S.base(HPAL.hullTop);
+    for (y = 0; y < size; y++) {
+      var rowo = y * size;
+      var vv = y / size;                              // 0 at the deck, 1 at the keel
+      var py = vv * platesY;
+      var ri = Math.floor(py), pf = py - ri;
+      var stagger = hash2i(ri, 0, 3) * 0.7;
+      // Paint bands. Topsides -> boot topping -> waterline -> antifouling.
+      var boot = sstep(0.60, 0.645, vv) * sstep(0.775, 0.735, vv);
+      var below = sstep(0.755, 0.80, vv);
+      var wline = sstep(0.66, 0.74, vv) * sstep(0.95, 0.86, vv);
+      for (x = 0; x < size; x++) {
+        i = rowo + x;
+        // ---- plate seams and weld beads -----------------------------------
+        var seamH = sstep(0.028, 0.0, Math.min(pf, 1 - pf) + (seamJ[i] - 0.5) * 0.010);
+        var px = (x / size) * platesX + stagger;
+        var cf = px - Math.floor(px);
+        var seamV = sstep(0.024, 0.0, Math.min(cf, 1 - cf) + (seamJ[i] - 0.5) * 0.008) *
+                    (1 - seamH * 0.9);
+        // A weld bead is a rippled sausage of proud metal, not a scribed line.
+        var bead = (seamH + seamV) * (0.55 + 0.45 * beadN[i]);
+        // Plates dish very slightly between the frames behind them - the
+        // "hungry horse" panting that makes a big hull read as sheet steel.
+        var dish = Math.sin(Math.PI * pf) * (0.35 + dishN[i] * 0.65);
+        var h = 0.58 + (macro[i] - 0.5) * 0.07 + (med[i] - 0.5) * 0.030 +
+                (fine[i] - 0.5) * 0.012 - dish * 0.030 + bead * 0.045;
+
+        var rustM = sat(sstep(0.58, 0.84, rustN[i]) +
+                        weep[i] * sstep(0.30, 0.68, streakN[i]) * 0.95 +
+                        bead * sstep(0.40, 0.72, rustN[i]) * 0.8);
+        var pt = sstep(0.20, 0.02, pit.f1[i]) * rustM;
+        h += rustM * 0.020 - pt * 0.035;
+        // Barnacles and weed, clustered at the waterline.
+        // Barnacles grow in COLONIES, not as an even rash of white dots: the
+        // id threshold picks which cells are settled and the weed field decides
+        // where the settlement is dense enough to matter.
+        var bn = sstep(0.26, 0.05, barn.f1[i]) * wline *
+                 sstep(0.55, 0.80, barn.id[i]) * sstep(0.34, 0.58, weedN[i]);
+        var wd = sat((weedN[i] - 0.52) * 2.4) * wline;
+        h += bn * 0.075;
+        S.h[i] = h;
+
+        // ---- albedo -------------------------------------------------------
+        shade(S, i, 0.84 + 0.30 * macro[i]);
+        tint(S, i, HPAL.hullTopLt, sat((macro[i] - 0.56) * 2.2) * 0.26);
+        // Chalked topside enamel: patchy, and it never fades evenly.
+        var chalk = sat((chalkN[i] - 0.44) * 2.0);
+        tint(S, i, PAL.efflor, chalk * 0.22);
+        desat(S, i, chalk * 0.32);
+        tint(S, i, HPAL.hullBoot, boot * 0.90);
+        tint(S, i, HPAL.antifoul, below * 0.85);
+        // the scum line itself: a greasy, algal tidemark
+        tint(S, i, HPAL.scum, wline * (0.30 + wd * 0.55));
+        tint(S, i, HPAL.weed, wd * 0.60);
+        tint(S, i, HPAL.barnacle, bn * 0.55);
+        desat(S, i, bn * 0.30);
+        shade(S, i, 1 + bn * 0.06 - wd * 0.22);
+        // welds are a different alloy and they never take paint properly
+        tint(S, i, PAL.steelDk, bead * 0.30);
+        // heavy rust runs
+        var hi = sat((h - 0.585) * 7.0);
+        tint(S, i, PAL.rust, rustM * 0.92);
+        tint(S, i, PAL.rustMid, rustM * hi * 0.50);
+        tint(S, i, PAL.rustLt, rustM * hi * hi * 0.45);
+        tint(S, i, PAL.rustDeep, rustM * rustM * 0.50);
+        tint(S, i, PAL.rustPit, pt * 0.80);
+        shade(S, i, 1 - pt * pt * 0.36 - seamH * 0.10 - seamV * 0.08);
+        tint(S, i, PAL.grime, sstep(0.57, 0.42, h) * 0.34);
+        tint(S, i, PAL.soot, sstep(0.46, 0.34, h) * 0.20);
+        applyChroma(S, i, C, 0.85, sat(weep[i] * 1.2 + wline + pt),
+                    { iron: 1.2, bio: 1.2, wash: 0.34 });
+
+        // ---- roughness / metalness ----------------------------------------
+        var r = 0.50 + (med[i] - 0.5) * 0.18 + chalk * 0.30;
+        r = lerp(r, 0.38, boot * 0.85);          // bitumen boot topping stays glossy
+        r = lerp(r, 0.66, below * 0.8);          // antifouling is a flat, chalky coat
+        r = lerp(r, 0.88, sat(bn + wd * 0.7));   // growth is matte and fibrous
+        r = lerp(r, 0.95, rustM);
+        r += bead * 0.10 + pt * 0.05;
+        S.ro[i] = sat(r);
+        S.me[i] = sat(0.30 - rustM * 1.2 - below * 0.35 - bn);
+      }
+    }
+    // Impact scars along the belting where the tugs and the quay have been.
+    punchCraters(g, S, { count: 4, rMin: 0.020, rMax: 0.050, depth: 0.05,
+                         rough: 0.80, col: PAL.steelDk, tint: 0.30, halo: 1.5 });
+    punchScrapes(g, S, { count: 12, lenMin: 0.06, lenMax: 0.26, width: 0.0022,
+                         depth: 0.014, rough: 0.55, col: PAL.rust, tint: 0.45,
+                         metal: 0.25, hbias: 0.5, hRef: 0.60 });
+  }
+
+  // -- dock apron slab, dry and wet ------------------------------------------
+  //
+  // One recipe, two materials. The dry side is the honest one: cool grey
+  // concrete, exposed aggregate in the wheel paths, sealed expansion joints,
+  // tyre scuffing, diesel and a crack network. The wet side runs the same slab
+  // and then floods it - and flooding is not a tint, it is a SECOND SURFACE:
+  // where the slab dips below the local water table the relief disappears
+  // under a flat mirror and the roughness collapses to 0.03. The strips that
+  // stay sheltered (under a container, inside a roller door) stay dry and
+  // chalky, which is the only thing that stops the apron reading as one
+  // enormous mirror.
+  function dockSlab(g, S, o) {
+    var n = g.n, size = g.size, i, x, y;
+    var salt = o.salt | 0;
+    var WET = o.wet || 0;
+    var macro  = g.fbm(g.buf(0), 3, 4, 0.6, 1, salt + 11, false);
+    var med    = g.fbm(g.buf(0), 15, 4, 0.5, 1, salt + 13, false);
+    var fine   = g.fbm(g.buf(0), 95, 3, 0.5, 1, salt + 17, false);
+    var grit   = g.fbm(g.buf(0), 260, 2, 0.5, 1, salt + 19, false);
+    var agg    = g.worley(46, 0.95, salt + 23);
+    var pit    = g.worley(140, 1.0, salt + 29);
+    var crack  = g.ridged(g.buf(0), 5, 5, 1, salt + 31, true);
+    var crack2 = g.ridged(g.buf(0), 17, 4, 1, salt + 37, true);
+    var oilN   = g.fbm(g.buf(0), 6, 4, 0.6, 1, salt + 41, false);
+    var wearN  = g.fbm(g.buf(0), 4, 3, 0.55, 1, salt + 43, false);
+    var scuff  = g.buf(0); g.fbmA(scuff, 26, 4, 3, 0.5, 1, salt + 47, false);
+    var jitJ   = g.buf(0); g.fbmA(jitJ, 5, 3, 2, 0.5, 1, salt + 53, false);
+    var C = chromaFields(g, salt + 600);
+    // Water fields, only paid for when there is water.
+    var puddleA = null, puddleB = null, ripple = null, shelter = null;
+    if (WET > 0) {
+      puddleA = g.fbm(g.buf(0), 3, 3, 0.55, 1, salt + 61, false);
+      puddleB = g.fbm(g.buf(0), 9, 3, 0.55, 1, salt + 67, false);
+      ripple  = g.fbm(g.buf(0), 120, 3, 0.5, 1, salt + 71, false);
+      shelter = g.fbm(g.buf(0), 5, 3, 0.55, 1, salt + 73, false);
+    }
+    var slabs = 2;
+
+    S.base(HPAL.dockGrey);
+    for (y = 0; y < size; y++) {
+      var rowo = y * size;
+      var jy = (y / size) * slabs;
+      var jyf = jy - Math.floor(jy);
+      for (x = 0; x < size; x++) {
+        i = rowo + x;
+        var jx = (x / size) * slabs;
+        var jxf = jx - Math.floor(jx);
+        var jointY = sstep(0.018, 0.0, Math.min(jyf, 1 - jyf) + (jitJ[i] - 0.5) * 0.012);
+        var jointX = sstep(0.016, 0.0, Math.min(jxf, 1 - jxf) + (jitJ[i] - 0.5) * 0.010);
+        var joint = sat(jointX + jointY);
+
+        var mc = macro[i], md = med[i];
+        var h = 0.62 + (mc - 0.5) * 0.10 + (md - 0.5) * 0.09 +
+                (fine[i] - 0.5) * 0.045 + (grit[i] - 0.5) * 0.016;
+        var traffic = sstep(0.35, 0.72, wearN[i] * 0.6 + mc * 0.4);
+        var stone = sstep(0.48, 0.12, agg.f1[i]);
+        h += stone * traffic * 0.10;                   // laitance worn off the tops
+        var hole = sstep(0.24, 0.04, pit.f1[i]) * sstep(0.32, 0.58, md);
+        h -= hole * 0.20;
+        var ck = sat(sstep(0.83, 0.995, crack[i]) + sstep(0.90, 0.999, crack2[i]) * 0.6);
+        h -= ck * 0.16 + joint * 0.085;
+        S.h[i] = h;
+
+        // ---- albedo -------------------------------------------------------
+        var id = agg.id[i];
+        tint(S, i, id < 0.34 ? HPAL.aggCoolDk : (id < 0.72 ? HPAL.aggCool : HPAL.aggCoolLt),
+             stone * (0.24 + traffic * 0.55));
+        shade(S, i, 0.86 + 0.28 * md);
+        tint(S, i, HPAL.dockLt, sat((mc - 0.52) * 1.9) * 0.22);
+        tint(S, i, HPAL.dockDk, sat((0.48 - mc) * 1.9) * 0.24);
+        var low = sstep(0.62, 0.40, h);
+        // Harbour dirt is not desert dust. PAL.grime alone is a warm brown and
+        // it dragged the whole apron toward the market's beige; the damp-grey
+        // axis is what keeps a northern dock cold.
+        tint(S, i, PAL.grime, low * 0.30 + ck * 0.45 + hole * 0.38);
+        tint(S, i, PAL.dampGrey, low * 0.22 + ck * 0.20);
+        tint(S, i, PAL.soot, ck * ck * 0.35 + hole * hole * 0.30);
+        shade(S, i, 1 - ck * ck * 0.28 - hole * hole * 0.22);
+        tint(S, i, PAL.tar, joint * 0.85);              // bitumen sealant
+        shade(S, i, 1 - joint * 0.32);
+        // Tyre rubber, laid down in arcs where the straddle carriers turn.
+        var tyre = sat((scuff[i] - 0.60) * 2.6) * traffic;
+        tint(S, i, PAL.rubber, tyre * 0.50);
+        desat(S, i, tyre * 0.28);
+        // Diesel and hydraulic oil, pooling in the low ground.
+        var oilM = sstep(0.68, 0.86, oilN[i]) * sstep(0.64, 0.46, h);
+        shade(S, i, 1 - oilM * 0.50);
+        tint(S, i, HPAL.oil, oilM * 0.55);
+        applyChroma(S, i, C, 0.95, sat(low * 1.2 + ck + oilM),
+                    { iron: 0.45, bio: 1.2, wash: 0.62 });
+
+        // ---- roughness ----------------------------------------------------
+        var r = 0.80 + (md - 0.5) * 0.22;
+        r -= traffic * 0.30;                            // polished by tyres
+        r -= tyre * 0.22 + stone * traffic * 0.16;
+        r += ck * 0.10 + hole * 0.12 + low * 0.10;
+        r = lerp(r, 0.24, joint * 0.7);
+        r = lerp(r, 0.10, oilM * 0.85);
+        S.ro[i] = sat(r);
+        S.me[i] = 0;
+
+        // ---- the water film -----------------------------------------------
+        if (WET > 0) {
+          var level = 0.608 + (puddleA[i] - 0.5) * 0.10 + (puddleB[i] - 0.5) * 0.045;
+          var depth = level - h;
+          // "Dry" is a rain shadow, not a desert. In a downpour the sheltered
+          // strips under a container are merely LESS wet - the first pass gave
+          // them bone-dry chalk blobs at roughness 1.0 that tiled across the
+          // whole apron and read as bleached patches on a black mirror.
+          var dry = sstep(0.70, 0.88, shelter[i]);
+          var pud = sat(depth * 22) * WET * (1 - dry);
+          var damp = sat((depth + 0.10) * 7) * WET * (1 - dry * 0.7);
+          if (pud > 0.002) {
+            // The puddle surface: flat, with a millimetre of standing ripple so
+            // the normal is not a dead mirror. weather.js animates on top.
+            S.h[i] = lerp(h, level + (ripple[i] - 0.5) * 0.006, pud);
+          }
+          var wf = sat(damp * 0.55 + pud);
+          tint(S, i, HPAL.wetDark, wf * 0.80);
+          shade(S, i, 1 - wf * 0.28);
+          tint(S, i, HPAL.wetSheen, pud * 0.22);
+          desat(S, i, wf * 0.22);
+          var rw = lerp(S.ro[i], 0.30, damp * 0.85);
+          rw = lerp(rw, 0.035, pud);                    // a genuine mirror
+          // ...and the rain-shadowed strips keep some of their dry chalk, which
+          // is what gives the apron a roughness RANGE instead of one wet sheen.
+          rw = lerp(rw, sat(rw + 0.16), dry * 0.85);
+          S.ro[i] = sat(rw);
+        }
+      }
+    }
+    punchScrapes(g, S, { count: 12, lenMin: 0.05, lenMax: 0.28, width: 0.0020,
+                         depth: 0.035, rough: 0.60, col: HPAL.aggCoolLt, tint: 0.35 });
+    punchCraters(g, S, { count: 4, rMin: 0.008, rMax: 0.020, depth: 0.18,
+                         rough: 0.92, col: HPAL.aggCoolLt, tint: 0.45, soot: 0.14 });
+  }
+
+  function genDockConcrete(g, S) { dockSlab(g, S, { wet: 0, salt: 1100 }); }
+  function genWetConcrete(g, S) { dockSlab(g, S, { wet: 1, salt: 1400 }); }
+
+  // -- galvanised chain-link fence (alpha-tested diamond mesh) ---------------
+  //
+  // The mesh is built from two families of parallel lines in the rotated
+  // coordinates a = (x+y)/size*D and b = (x-y)/size*D. Both change by an
+  // INTEGER when x or y advances a full tile, so the diamond pattern is
+  // torus-tileable by construction - the same argument the noise lattice uses.
+  //
+  // Wire gauge: 2.5 mm wire on a 50 mm mesh is 1.3 texels at any tile size we
+  // can afford, which alpha-tests into a dotted line and mips into nothing.
+  // This runs a deliberately generous ~7 texel wire (about double scale) with a
+  // one-texel signed-distance edge, which is the standard compromise: the
+  // pattern reads, and the alpha edge stays crisp enough not to sparkle.
+  function genChainlink(g, S) {
+    var n = g.n, size = g.size, i, x, y;
+    var D = 6;                                    // diamonds across the tile
+    var rw = size * 0.0072;                       // wire radius, texels
+    var kA = size / (D * 1.4142136);              // texels per unit of a / b
+    var galvN = g.fbm(g.buf(0), 7, 4, 0.55, 1, 11, false);
+    var spangle = g.worley(30, 1.0, 13);
+    var rustN = g.fbm(g.buf(0), 9, 4, 0.55, 1, 17, false);
+    var fine = g.fbm(g.buf(0), 150, 3, 0.5, 1, 19, false);
+    var seedM = g.buf(0), weep = g.buf(0);
+    for (i = 0; i < n; i++) seedM[i] = sstep(0.68, 0.86, rustN[i]);
+    g.drip(seedM, weep, 0.985, true);
+
+    S.base(HPAL.galv);
+    for (y = 0; y < size; y++) {
+      var rowo = y * size;
+      for (x = 0; x < size; x++) {
+        i = rowo + x;
+        var a = (x + y) / size * D;
+        var b = (x - y) / size * D;
+        var fa = a - Math.floor(a), fb = b - Math.floor(b);
+        var da = Math.min(fa, 1 - fa) * kA;
+        var db = Math.min(fb, 1 - fb) * kA;
+        var al = sat(0.5 + (rw - (da < db ? da : db)));
+        S.al[i] = al;
+        if (al <= 0.004) {
+          // Open aperture. Height stays mid-scale so the Sobel does not build a
+          // cliff round every wire, and the colour behind is dark and rough in
+          // case a consumer forgets the alpha test.
+          S.h[i] = 0.42;
+          S.cr[i] = 0.055; S.cg[i] = 0.060; S.cb[i] = 0.066;
+          S.ro[i] = 0.90; S.me[i] = 0;
+          continue;
+        }
+        var ta = da / rw, tb = db / rw;
+        var pa = ta < 1 ? Math.sqrt(sat(1 - ta * ta)) : 0;
+        var pb = tb < 1 ? Math.sqrt(sat(1 - tb * tb)) : 0;
+        // Interlock: the two families alternate over and under per diamond,
+        // which is what a woven mesh does and what makes the twists catch light.
+        var aOver = (((Math.floor(a) + Math.floor(b)) & 1) === 0);
+        var hA = ta < 1 ? 0.42 + pa * 0.20 : -1;
+        var hB = tb < 1 ? 0.42 + pb * 0.20 : -1;
+        if (ta < 1 && tb < 1) { if (aOver) hB -= 0.11; else hA -= 0.11; }
+        var crown = pa > pb ? pa : pb;
+        S.h[i] = (hA > hB ? hA : hB) + (fine[i] - 0.5) * 0.010;
+
+        // ---- albedo -------------------------------------------------------
+        // Per-WIRE tone. Wire is drawn and galvanised in batches and a repaired
+        // fence has whole strands that do not match; without this the mesh is
+        // one tone and reads as a printed pattern. Indexed off round(a), not
+        // floor(a) - flooring splits each wire down its own centreline.
+        var wid = (da < db) ? hash2i(((Math.round(a) % D) + D) % D, 0, 5)
+                            : hash2i(0, ((Math.round(b) % D) + D) % D, 7);
+        shade(S, i, (0.80 + 0.34 * crown) * (0.88 + 0.24 * wid));
+        tint(S, i, PAL.alu, sstep(0.55, 0.15, spangle.f1[i]) * 0.28 * (0.4 + wid));
+        var chalk = sat((galvN[i] - 0.42) * 1.9);
+        tint(S, i, HPAL.galvChalk, chalk * 0.38);
+        desat(S, i, chalk * 0.24);
+        // Rust starts at the TWISTS - the zinc cracks where the wire was bent -
+        // and at the cut ends, then runs down the wires below.
+        var twist = sat(pa * pb * 3.0);
+        var rustM = sat(sstep(0.58, 0.82, rustN[i]) * (0.30 + twist * 1.10) +
+                        twist * sstep(0.48, 0.80, galvN[i]) * 0.55 +
+                        weep[i] * sstep(0.40, 0.75, fine[i]) * 0.45);
+        tint(S, i, PAL.rust, rustM * 0.85);
+        tint(S, i, PAL.rustDeep, rustM * rustM * 0.45);
+        tint(S, i, PAL.rustLt, rustM * crown * 0.32);
+        tint(S, i, PAL.grime, (1 - crown) * 0.30);
+        S.ro[i] = sat(lerp(0.52 + chalk * 0.30 - crown * 0.16, 0.95, rustM) +
+                      (fine[i] - 0.5) * 0.08);
+        S.me[i] = sat(0.88 - rustM * 1.15 - chalk * 0.35);
+      }
+    }
+  }
+
+  // -- heavy PVC tarpaulin ---------------------------------------------------
+  // A coated fabric, not a cloth: the polyester scrim is BURIED in a PVC skin,
+  // so the weave shows as a shallow emboss and a sheen break rather than as
+  // yarn crowns. The read comes from the sag folds, the hard creases where it
+  // has been folded wet, and the dirt that collects in both.
+  function genTarpaulin(g, S) {
+    var n = g.n, size = g.size, i, x, y;
+    var threads = size >= 1024 ? 96 : 48;
+    var macro  = g.fbm(g.buf(0), 3, 4, 0.6, 1, 11, false);
+    var wobX   = g.buf(0); g.fbmA(wobX, 28, 5, 3, 0.5, 1, 13, true);
+    var wobY   = g.buf(0); g.fbmA(wobY, 5, 28, 3, 0.5, 1, 17, true);
+    var sag    = g.buf(0); g.fbmA(sag, 3, 9, 3, 0.55, 1, 19, false);
+    var crease = g.ridged(g.buf(0), 7, 4, 1, 23, true);
+    var creaseB = g.buf(0); g.fbmA(creaseB, 5, 26, 3, 0.5, 1, 29, false);
+    var dirtN  = g.fbm(g.buf(0), 6, 4, 0.6, 1, 31, false);
+    var mildew = g.worley(26, 0.9, 37);
+    var fine   = g.fbm(g.buf(0), 190, 3, 0.5, 1, 41, false);
+    var C = chromaFields(g, 3100);
+    var TLx = threadLayout(g, threads, 7103, { wMin: 0.78, wMax: 1.26, slub: 0.020, floatEvery: 19 });
+    var TLy = threadLayout(g, threads, 7109, { wMin: 0.80, wMax: 1.22, slub: 0.015, floatEvery: 27 });
+    var seedM = g.buf(0), run = g.buf(0);
+    for (i = 0; i < n; i++) seedM[i] = sstep(0.60, 0.80, dirtN[i]);
+    g.drip(seedM, run, 0.990, true);
+
+    S.base(HPAL.pvc);
+    for (y = 0; y < size; y++) {
+      var rowo = y * size;
+      for (x = 0; x < size; x++) {
+        i = rowo + x;
+        threadAt(TLx, (x / size) * threads + wobX[i] * 0.4);
+        var ix = _thIdx, fxv = _thF;
+        threadAt(TLy, (y / size) * threads + wobY[i] * 0.4);
+        var iy = _thIdx, fyv = _thF;
+        var warp = sat(Math.sin(Math.PI * fxv) / TLx.crown[ix]);
+        var weft = sat(Math.sin(Math.PI * fyv) / TLy.crown[iy]);
+        var over = TLx.flt[ix] > 0 ? true : (((ix + iy) & 1) === 0);
+        var top = over ? warp : weft, bot = over ? weft : warp;
+        // The scrim is BURIED. Authored at cloth amplitude the weave becomes the
+        // largest gradient in the map, _emit normalises to it, and a tarpaulin
+        // renders as a wicker basket. It is an emboss under a plastic skin: a
+        // third of the relief, and the folds are what the eye reads.
+        var wv = top * 0.013 + bot * 0.005;
+        var ridge = sat((sag[i] - 0.58) * 2.8);
+        var fold = sat((crease[i] - 0.70) * 3.4) * sstep(0.35, 0.70, creaseB[i]);
+        // A stippled coating skin at a scale BETWEEN the weave and the folds.
+        // Without something in that band the only high-frequency structure in
+        // the map is the lattice, and _emit's gradient normalisation hands the
+        // whole normal map to it however small the amplitude.
+        var skin = (mildew.f1[i] - 0.35) * 0.055 + (fine[i] - 0.5) * 0.016;
+        var h = 0.55 + wv + skin + (sag[i] - 0.5) * 0.23 - fold * 0.125;
+        S.h[i] = h;
+
+        // ---- albedo -------------------------------------------------------
+        shade(S, i, 0.84 + 0.30 * macro[i]);
+        // PVC whitens where it is stressed: fold crowns and sag ridges go
+        // chalky and pale, which is the single most recognisable thing about
+        // an old tarpaulin.
+        tint(S, i, HPAL.pvcLt, (fold * 0.55 + ridge * 0.30) * 0.80);
+        desat(S, i, fold * 0.35);
+        tint(S, i, HPAL.pvcDk, sstep(0.52, 0.34, h) * 0.55);
+        // dirt washes down and collects in the hollows
+        var rn = run[i] * sstep(0.34, 0.66, fine[i]);
+        tint(S, i, PAL.grime, sstep(0.52, 0.36, h) * 0.35 + rn * 0.40);
+        tint(S, i, PAL.dirtDk, rn * rn * 0.30);
+        // mildew: black-green spotting in the damp folds
+        var mil = sstep(0.34, 0.08, mildew.f1[i]) * sstep(0.55, 0.30, h) *
+                  sstep(0.35, 0.65, dirtN[i]);
+        tint(S, i, PAL.moss, mil * 0.55);
+        tint(S, i, PAL.soot, mil * mil * 0.40);
+        tint(S, i, PAL.efflor, sat((fine[i] - 0.66) * 3.0) * ridge * 0.14);
+        applyChroma(S, i, C, 0.85, sat(rn * 1.3 + sstep(0.54, 0.38, h)),
+                    { iron: 0.8, bio: 1.2, wash: 0.34 });
+
+        // ---- roughness ----------------------------------------------------
+        // Coated PVC is genuinely semi-gloss - which is why a tarp reads as
+        // plastic and not as canvas - but it chalks hard on the creases and
+        // holds a matte dirt film in the hollows.
+        var r = 0.40 + (macro[i] - 0.5) * 0.14;
+        r += fold * 0.34 + mil * 0.25 + rn * 0.20;
+        r += sstep(0.52, 0.36, h) * 0.16;
+        r -= ridge * 0.12 + top * 0.05;
+        S.ro[i] = sat(r);
+        S.me[i] = 0;
+      }
+    }
+    // Grommets: brass eyelets punched through a reinforcement patch, weeping.
+    (function () {
+      var rng = g.rng;
+      for (var k = 0; k < 4; k++) {
+        var cx = rng.next() * size, cy = rng.next() * size;
+        var R = size * (0.012 + rng.next() * 0.006);
+        var rusty = 0.3 + rng.next() * 0.7;
+        var span = Math.ceil(R * 3.2);
+        for (var yy = -span; yy <= span; yy++) {
+          var wy = ((Math.round(cy + yy) % size) + size) % size;
+          var rowo2 = wy * size;
+          for (var xx = -span; xx <= span; xx++) {
+            var d = Math.sqrt(xx * xx + yy * yy) / R;
+            if (d > 3.2) continue;
+            var wx = ((Math.round(cx + xx) % size) + size) % size;
+            var ii = rowo2 + wx;
+            var patch = sstep(3.0, 2.2, d);                       // reinforcement
+            var ring = sstep(1.75, 1.45, d) * sstep(0.85, 1.05, d);
+            var hole = sstep(0.95, 0.70, d);
+            S.h[ii] += patch * 0.020 + ring * 0.050 - hole * 0.18;
+            tint(S, ii, HPAL.pvcDk, patch * 0.35);
+            tint(S, ii, PAL.steelDk, ring * 0.75);
+            tint(S, ii, PAL.rust, ring * rusty * 0.55 + hole * rusty * 0.30);
+            tint(S, ii, PAL.soot, hole * 0.75);
+            S.ro[ii] = sat(lerp(S.ro[ii], 0.30 + rusty * 0.55, ring * 0.85));
+            S.me[ii] = sat(lerp(S.me[ii], 0.85 - rusty * 0.8, ring * 0.85));
+            // rust weeping down out of the eyelet
+            if (yy > 0) {
+              var st = sstep(3.2, 1.0, d) * sat(yy / (R * 3.2)) * rusty;
+              tint(S, ii, PAL.rust, st * 0.40);
+              S.ro[ii] = sat(S.ro[ii] + st * 0.12);
+            }
+          }
+        }
+      }
+    })();
+  }
+
+  // -- laid three-strand mooring rope ---------------------------------------
+  //
+  // The tile wraps the circumference in X and runs one full lay length in Y, so
+  // the strand helix is exact: s = 3u + 3v puts three strands round the rope
+  // and turns them through one complete revolution per tile, i.e. a 45 degree
+  // lay angle. Both coefficients are integers, so it tiles.
+  function genRope(g, S) {
+    var n = g.n, size = g.size, i, x, y;
+    var strands = 3, lay = 3;
+    var yarnA = 15, yarnB = -6;                     // yarns twist the other way
+    var macro = g.fbm(g.buf(0), 4, 4, 0.6, 1, 11, false);
+    var fuzzN = g.fbm(g.buf(0), 200, 3, 0.5, 1, 13, false);
+    var tarN  = g.fbm(g.buf(0), 5, 4, 0.6, 1, 17, false);
+    var wearN = g.fbm(g.buf(0), 7, 3, 0.55, 1, 19, false);
+    var dirtN = g.fbm(g.buf(0), 9, 4, 0.55, 1, 23, false);
+    var hairN = g.buf(0); g.fbmA(hairN, 26, 200, 3, 0.5, 1, 29, false);
+    var C = chromaFields(g, 3300);
+
+    S.base(HPAL.manila);
+    for (y = 0; y < size; y++) {
+      var rowo = y * size;
+      var v = y / size;
+      for (x = 0; x < size; x++) {
+        i = rowo + x;
+        var u = x / size;
+        var s = u * strands + v * lay;
+        var sf = s - Math.floor(s);
+        var crownV = Math.sin(Math.PI * sf);
+        var strand = Math.pow(sat(crownV), 0.62);
+        var yv = u * yarnA + v * yarnB;
+        var yf = yv - Math.floor(yv);
+        var yarn = Math.sin(Math.PI * yf); yarn *= yarn;
+        // Broken fibre standing off the surface: the reason a used rope has a
+        // halo and a new one does not.
+        var hair = sat((hairN[i] - 0.70) * 3.6) * sat(strand * 1.4);
+        var h = 0.40 + strand * 0.30 + yarn * strand * 0.055 +
+                hair * 0.030 + (macro[i] - 0.5) * 0.045 + (fuzzN[i] - 0.5) * 0.018;
+        S.h[i] = h;
+
+        // ---- albedo -------------------------------------------------------
+        // A soaked mooring line is a dark grey-brown, not a golden hawser: it
+        // has been under a straddle carrier, in the harbour and in the rain.
+        shade(S, i, 0.70 + 0.38 * strand);
+        tint(S, i, HPAL.manilaDk, sat(1 - strand * 1.7) * 0.70);   // the lay grooves
+        tint(S, i, HPAL.manilaLt, sat((yarn - 0.55) * 2.2) * strand * 0.28);
+        // Sun and salt bleach the crowns; the grooves stay dark and greasy.
+        var bleach = sat((wearN[i] - 0.44) * 2.0) * sat((strand - 0.45) * 2.2);
+        tint(S, i, PAL.dust, bleach * 0.34);
+        desat(S, i, bleach * 0.45);
+        tint(S, i, HPAL.manilaLt, hair * 0.45);
+        tint(S, i, PAL.grime, sat(1 - strand * 1.3) * 0.50 +
+                              sat((dirtN[i] - 0.50) * 2.4) * 0.42);
+        tint(S, i, PAL.dampGrey, sat((dirtN[i] - 0.44) * 2.0) * 0.26);
+        // Tar and diesel off the bollard, soaked into the fibre.
+        var tar = sstep(0.50, 0.76, tarN[i]) * (0.40 + (1 - strand) * 0.8);
+        tint(S, i, PAL.tar, tar * 0.72);
+        tint(S, i, PAL.soot, tar * tar * 0.40);
+        shade(S, i, 0.92 + 0.16 * fuzzN[i]);
+        applyChroma(S, i, C, 0.9, sat((1 - strand) * 1.2 + tar),
+                    { iron: 0.9, bio: 1.1, wash: 0.45 });
+
+        // ---- roughness ----------------------------------------------------
+        // Fibre is at the top of the curve; the crowns that have run over a
+        // bollard a thousand times are GLAZED, and the tarred parts are waxy.
+        var r = 0.94 - bleach * 0.06;
+        r -= sat((wearN[i] - 0.55) * 2.4) * strand * 0.34;         // glazed
+        r -= tar * 0.22;
+        r += hair * 0.05 + sat(1 - strand * 1.5) * 0.04;
+        S.ro[i] = sat(r);
+        S.me[i] = 0;
+      }
+    }
+    // A few cut/abraded spots where the rope has been chafed on the fairlead.
+    punchScrapes(g, S, { count: 10, lenMin: 0.02, lenMax: 0.09, width: 0.0025,
+                         depth: 0.030, rough: 0.85, col: HPAL.manilaLt, tint: 0.45,
+                         hbias: 0.9, hRef: 0.62 });
+  }
+
+  // -- quay fender: heavy black rubber ---------------------------------------
+  // Scuffed to grey where the hulls land, embedded grit from being dragged, and
+  // a smear of whatever colour the last three ships were painted.
+  function genRubberFender(g, S) {
+    var n = g.n, size = g.size, i;
+    var macro  = g.fbm(g.buf(0), 4, 4, 0.6, 1, 11, false);
+    var mould  = g.buf(0); g.fbmA(mould, 3, 80, 2, 0.5, 1, 13, false);
+    var grit   = g.worley(70, 1.0, 17);
+    var scuffR = g.buf(0); g.fbmA(scuffR, 60, 7, 3, 0.5, 1, 19, false);
+    var scuff  = g.buf(0); g.shear(scuffR, scuff, 1);
+    var ozone  = g.ridged(g.buf(0), 34, 3, 1, 23, true);
+    var paintN = g.fbm(g.buf(0), 7, 4, 0.6, 1, 29, false);
+    var bandN  = g.buf(0); g.fbmA(bandN, 3, 8, 3, 0.5, 1, 31, false);
+    var saltN  = g.fbm(g.buf(0), 11, 3, 0.55, 1, 37, false);
+    var fine   = g.fbm(g.buf(0), 220, 2, 0.5, 1, 41, false);
+    var paintCols = [HPAL.ctnRed, HPAL.ctnBlue, HPAL.hullTopLt];
+
+    S.base(PAL.rubber);
+    for (i = 0; i < n; i++) {
+      var gr = sstep(0.34, 0.08, grit.f1[i]);              // embedded stones
+      var ck = sstep(0.88, 0.998, ozone[i]);               // perishing
+      var ml = sat((mould[i] - 0.74) * 4.0);               // mould flow lines
+      var contact = sat((bandN[i] - 0.42) * 2.2);          // where hulls land
+      var sc = sat((scuff[i] - 0.58) * 2.6) * (0.35 + contact);
+      // Fine noise stays small here: authored at the same amplitude as the
+      // moulded structure it turned the normal map into per-texel confetti and
+      // buried the gouges, which are the only story this surface has.
+      var h = 0.60 + (macro[i] - 0.5) * 0.075 + gr * 0.048 + ml * 0.020 +
+              (fine[i] - 0.5) * 0.008 - ck * 0.13 - sc * 0.012;
+      S.h[i] = h;
+
+      shade(S, i, 0.84 + 0.30 * macro[i] + 0.16 * gr);
+      // Abraded rubber goes chalky grey, and it does it exactly where the steel
+      // has been rubbing - which is the only thing that keeps a black material
+      // from rendering as a hole in the frame.
+      tint(S, i, PAL.dampGrey, sc * 0.58 + contact * 0.20);
+      desat(S, i, sc * 0.35);
+      tint(S, i, PAL.soot, ck * 0.62 + sstep(0.58, 0.44, h) * 0.30);
+      tint(S, i, HPAL.aggCoolDk, gr * 0.45);
+      tint(S, i, HPAL.aggCoolLt, gr * sstep(0.55, 0.85, grit.id[i]) * 0.30);
+      // Paint transfer: a hull scraped past and left some of itself behind.
+      var pc = paintCols[(sstep(0, 1, paintN[i]) * 2.999) | 0];
+      var pm = sstep(0.66, 0.82, paintN[i]) * sc * 1.4;
+      tint(S, i, pc, sat(pm) * 0.70);
+      tint(S, i, PAL.efflor, sat((saltN[i] - 0.58) * 2.4) * sat((h - 0.60) * 3.0) * 0.20);
+      tint(S, i, PAL.grime, sstep(0.60, 0.46, h) * 0.32);
+      tint(S, i, PAL.rustDeep, sstep(0.52, 0.68, macro[i]) * ck * 0.45);
+
+      // Roughness: matte perished rubber, a burnished contact band, chalk in
+      // the ozone cracks.
+      var r = 0.88 - gr * 0.06;
+      r -= contact * 0.34 + sc * 0.16;
+      r += ck * 0.10 + sat((saltN[i] - 0.58) * 2.4) * 0.08;
+      r -= sat(pm) * 0.18;                                  // transferred enamel
+      S.ro[i] = sat(r);
+      S.me[i] = 0;
+    }
+    // Gouges from chains, wire and the corner castings of passing barges.
+    punchScrapes(g, S, { count: 16, lenMin: 0.04, lenMax: 0.22, width: 0.0030,
+                         depth: 0.060, rough: 0.72, col: PAL.dampGrey, tint: 0.40,
+                         hbias: 0.6, hRef: 0.60 });
+    punchCraters(g, S, { count: 6, rMin: 0.010, rMax: 0.028, depth: 0.10,
+                         rough: 0.80, col: PAL.soot, tint: 0.35, halo: 1.5 });
+  }
+
+  // -- serrated steel grating (alpha-tested) ---------------------------------
+  // Load-bearing bars on a 30 mm pitch running in Y, twisted cross rods on a
+  // 100 mm pitch running in X, serration notches along the bar tops. Integer
+  // pitches in both axes so the pattern wraps and never beats against the
+  // texel grid.
+  function genSteelGrate(g, S) {
+    var n = g.n, size = g.size, i, x, y;
+    var bars = 10, rods = 3, serr = 26;
+    var pitchB = size / bars, pitchR = size / rods;
+    // A true-scale 5 mm bar on a 30 mm pitch is 17% coverage, and at that gauge
+    // the plan view is 80% hole: alpha-tested and mipped it disintegrates into
+    // a dotted screen. Real grating is also never seen flat-on - you see the
+    // SIDE of the bar - so the top face is authored wide, which is the standard
+    // way to get a grating to read from a texture.
+    var halfBar = 0.27 * 0.5 * pitchB;
+    var halfRod = 0.12 * 0.5 * pitchR;
+    var galvN = g.fbm(g.buf(0), 6, 4, 0.55, 1, 11, false);
+    var rustN = g.fbm(g.buf(0), 8, 4, 0.55, 1, 13, false);
+    var wearN = g.buf(0); g.fbmA(wearN, 3, 7, 3, 0.55, 1, 17, false);
+    var fine  = g.fbm(g.buf(0), 170, 3, 0.5, 1, 19, false);
+    var grime = g.fbm(g.buf(0), 9, 4, 0.6, 1, 23, false);
+
+    S.base(HPAL.galv);
+    for (y = 0; y < size; y++) {
+      var rowo = y * size;
+      var sp = (y / size) * serr;
+      var sf = sp - Math.floor(sp);
+      // The serration: a shallow nick milled into the top edge of every bar.
+      // It is a grip feature a couple of millimetres deep - authored hard it
+      // reads as if the bar were chopped into dashes.
+      var notch = sstep(0.62, 0.72, sf) * sstep(1.0, 0.92, sf);
+      var rp = (y / size) * rods;
+      var rf = rp - Math.floor(rp);
+      var dRod = Math.abs(rf - 0.5) * pitchR;
+      var alRod = sat(0.5 + (halfRod - dRod));
+      for (x = 0; x < size; x++) {
+        i = rowo + x;
+        var bp = (x / size) * bars;
+        var bf = bp - Math.floor(bp);
+        var dBar = Math.abs(bf - 0.5) * pitchB;
+        var alBar = sat(0.5 + (halfBar * (1 - notch * 0.10) - dBar));
+        var al = alBar > alRod ? alBar : alRod;
+        S.al[i] = al;
+        if (al <= 0.004) {
+          S.h[i] = 0.30;
+          S.cr[i] = 0.045; S.cg[i] = 0.050; S.cb[i] = 0.055;
+          S.ro[i] = 0.90; S.me[i] = 0;
+          continue;
+        }
+        // Height: bar tops are the walking plane, rods sit just below them.
+        var wBar = sat((halfBar - dBar) * 0.5 + 0.5);
+        var wRod = sat((halfRod - dRod) * 0.5 + 0.5);
+        var barTop = 0.74 - notch * 0.040;
+        var rodTop = 0.62;
+        var h = 0.30;
+        if (wRod > 0) h = lerp(h, rodTop, wRod);
+        if (wBar > 0) h = Math.max(h, lerp(0.30, barTop, wBar));
+        // Boots wear the bar tops smooth in a band across the grating.
+        var wear = sat((wearN[i] - 0.44) * 2.2) * wBar;
+        h += (fine[i] - 0.5) * 0.010 - wear * 0.006;
+        S.h[i] = h;
+
+        // ---- albedo -------------------------------------------------------
+        var chalk = sat((galvN[i] - 0.44) * 1.9);
+        tint(S, i, HPAL.galvChalk, chalk * 0.40);
+        desat(S, i, chalk * 0.24);
+        tint(S, i, PAL.steel, wear * 0.50);                 // polished to bare steel
+        shade(S, i, 0.84 + 0.26 * wBar + 0.10 * wRod);
+        // Rust lives on the cut ends, along the rod welds and in the notches -
+        // everywhere the galvanising was broken.
+        var rustM = sat(sstep(0.56, 0.82, rustN[i]) * (0.35 + notch * 0.35 + wRod * 0.6) +
+                        notch * sstep(0.55, 0.82, galvN[i]) * 0.35);
+        rustM *= (1 - wear * 0.75);
+        tint(S, i, PAL.rust, rustM * 0.85);
+        tint(S, i, PAL.rustDeep, rustM * rustM * 0.50);
+        tint(S, i, PAL.rustLt, rustM * sat((h - 0.66) * 8.0) * 0.35);
+        // Black grime and oil in the notches and against the rods.
+        tint(S, i, PAL.grime, (notch * 0.20 + (1 - wBar) * 0.25 +
+                               sat((grime[i] - 0.55) * 2.4) * 0.30));
+        tint(S, i, PAL.soot, notch * notch * 0.18);
+        shade(S, i, 1 - notch * 0.07);
+
+        // ---- roughness / metalness ----------------------------------------
+        var r = 0.52 + chalk * 0.30;
+        r -= wear * 0.30;                                   // walked smooth
+        r = lerp(r, 0.93, rustM);
+        r += notch * 0.06 + sat((grime[i] - 0.55) * 2.4) * 0.10;
+        S.ro[i] = sat(r);
+        S.me[i] = sat(0.90 - rustM * 1.20 - chalk * 0.30);
+      }
+    }
+  }
+
+  // -- box-profile galvanised roof sheet -------------------------------------
+  // Rust bleeding from every fixing, black water staining down the pans, and
+  // algae in the valleys that never dry out.
+  //
+  // Same correction as genContainerPanel, and for a worse reason. This tile is
+  // hung on cladPanel() walls that already fold real trapezoidal ribs at a
+  // 240 mm pitch, and the texture's own 5 ribs per tile land at 242 mm once
+  // SURF.corrugated_roof.uv (0.55) and repeat (1.5) are applied. A 1.01:1
+  // frequency ratio is the worst possible case: the two rib sets drift through
+  // a full cycle of phase every ~24 m, so a warehouse wall carried alternating
+  // bands of double-deep and cancelled ribs, re-scrambled at every stochastic
+  // cell boundary. The mesh owns the profile; this map owns the weathering, the
+  // spangle, the fixings and the mesoscale ripple of a sheet that has been on a
+  // roof for twenty winters.
+  function genCorrugatedRoof(g, S) {
+    var n = g.n, size = g.size, i, x, y;
+    var waves = 5;                                   // fixing columns only now
+    var dent  = g.fbm(g.buf(0), 5, 4, 0.6, 1, 11, false);
+    var med   = g.fbm(g.buf(0), 22, 4, 0.5, 1, 13, false);
+    var fine  = g.fbm(g.buf(0), 180, 3, 0.5, 1, 17, false);
+    var spangle = g.worley(24, 1.0, 19);
+    var rustN = g.fbm(g.buf(0), 8, 5, 0.55, 1, 23, false);
+    var pit   = g.worley(150, 1.0, 29);
+    var algaeN = g.buf(0); g.fbmA(algaeN, 7, 40, 3, 0.5, 1, 31, false);
+    var streakN = g.buf(0); g.fbmA(streakN, 140, 8, 4, 0.5, 1, 37, false);
+    var chalkN = g.fbm(g.buf(0), 6, 3, 0.55, 1, 41, false);
+    // Sheet ripple, buckle creases and the vertical wash grain that replace the
+    // trapezoid. Coherent over tens of texels, so they still catch a raking
+    // lamp the way a rib did - see genContainerPanel for why that matters.
+    var ripple = g.buf(0); g.fbmA(ripple, 11, 8, 3, 0.55, 1, 43, false);
+    var crease = g.ridged(g.buf(0), 4, 4, 1, 51, true);
+    var grain  = g.buf(0); g.fbmA(grain, 30, 5, 4, 0.55, 1, 47, false);
+    var C = chromaFields(g, 2100);
+    var seedM = g.buf(0), weep = g.buf(0);
+    for (i = 0; i < n; i++) seedM[i] = sstep(0.62, 0.80, rustN[i]);
+    g.drip(seedM, weep, 0.9955, true);
+
+    // Mesoscale relief plus the proudness mask solved off its own statistics -
+    // see genContainerPanel for the argument.
+    var relief = g.buf(0);
+    for (i = 0; i < n; i++) {
+      relief[i] = (ripple[i] - 0.5) * 0.100 + crease[i] * 0.055 +
+                  (grain[i] - 0.5) * 0.042 + (dent[i] - 0.5) * 0.080 +
+                  (med[i] - 0.5) * 0.020;
+    }
+    var rMean = 0, rVar = 0, rCnt = 0, rd;
+    for (i = 0; i < n; i += 3) { rMean += relief[i]; rCnt++; }
+    rMean /= (rCnt || 1);
+    for (i = 0; i < n; i += 3) { rd = relief[i] - rMean; rVar += rd * rd; }
+    var rSd = Math.sqrt(rVar / (rCnt || 1)) || 1e-4;
+    var rE0 = rMean - rSd * 1.30, rE1 = rMean + rSd * 1.30;
+
+    // Not the bright spelter of a new sheet: a warehouse roof in salt air is a
+    // dark grey-green oxide with algae in the pans. Authored bright, this map
+    // photographed as a cream-coloured fence - the lightest thing in the level.
+    S.base(HPAL.galvOld);
+    for (y = 0; y < size; y++) {
+      var rowo = y * size;
+      for (x = 0; x < size; x++) {
+        i = rowo + x;
+        var crest = sstep(rE0, rE1, relief[i]);
+        var valley = 1 - crest;
+        var web = 4 * crest * valley;
+        var h = 0.50 + (relief[i] - rMean) + (fine[i] - 0.5) * 0.008;
+        // Water runs down the pans, so the pans are where it rots through.
+        var run = weep[i] * sstep(0.30, 0.66, streakN[i]) * (0.35 + valley * 0.9);
+        var rustM = sat(sstep(0.60, 0.82, rustN[i]) * (0.25 + valley * 0.95) + run * 0.85);
+        var pt = sstep(0.20, 0.02, pit.f1[i]) * rustM;
+        h += rustM * 0.018 - pt * 0.045;
+        S.h[i] = h;
+
+        // ---- albedo -------------------------------------------------------
+        tint(S, i, PAL.alu, sstep(0.55, 0.15, spangle.f1[i]) * 0.16);
+        shade(S, i, 0.80 + 0.26 * spangle.id[i] * 0.5 + 0.16 * crest);
+        // Ten winters of spelter turning into a chalky oxide film - patchy, and
+        // only on the crowns the rain actually washes.
+        var chalk = sat((chalkN[i] - 0.46) * 1.9) * (0.35 + crest * 0.9);
+        tint(S, i, HPAL.galvChalk, chalk * 0.30);
+        desat(S, i, chalk * 0.26);
+        tint(S, i, PAL.rust, rustM * 0.88);
+        tint(S, i, PAL.rustMid, rustM * sat(crest * 1.10 - pt * 0.5) * 0.45);
+        tint(S, i, PAL.rustDeep, rustM * rustM * valley * 0.50);
+        tint(S, i, PAL.rustPit, pt * 0.75);
+        shade(S, i, 1 - pt * pt * 0.35);
+        // Black water staining and the green that grows in a wet valley.
+        var alg = sat((algaeN[i] - 0.52) * 2.4) * (0.25 + valley * 1.0);
+        tint(S, i, PAL.moss, alg * 0.50);
+        tint(S, i, HPAL.weed, alg * alg * 0.45);
+        tint(S, i, PAL.grime, valley * 0.26 + run * 0.42 + web * 0.10);
+        tint(S, i, PAL.dampGrey, valley * 0.14);
+        tint(S, i, PAL.soot, run * run * 0.34 + valley * valley * 0.16);
+        applyChroma(S, i, C, 0.9, sat(run * 1.4 + valley + alg),
+                    { iron: 0.85, bio: 1.3, wash: 0.50 });
+
+        // ---- roughness / metalness ----------------------------------------
+        var r = 0.55 + (med[i] - 0.5) * 0.22 + chalk * 0.36 + valley * 0.10;
+        r = lerp(r, 0.95, rustM);
+        r += alg * 0.16 + pt * 0.05;
+        r -= sat((dent[i] - 0.64) * 2.6) * crest * 0.34;    // rain-washed crowns
+        S.ro[i] = sat(r);
+        S.me[i] = sat(0.86 - rustM * 1.10 - chalk * 0.40 - alg * 0.5);
+      }
+    }
+    // Fixings, and every one of them bleeds down the sheet. The map can no
+    // longer say WHICH rib a fixing sits on - the ribs are in the mesh and the
+    // phase is not knowable here - so the column lattice is jittered hard
+    // enough that it reads as scattered fixings rather than as a fourth
+    // periodic signal on a wall that already has two.
+    stampBolts(g, S, {
+      cols: waves, rows: 3, r: 0.009, salt: 77, jitter: 0.09, proud: 0.045,
+      weep: 0.10,
+      px: function (k, hx) { return (k + 0.07 + (hx - 0.5) * 0.5) * size / waves; }
+    });
+  }
+
+  // -- chequer / diamond deck plate ------------------------------------------
+  // The lug pattern is rasterised as capsules on a jittered cell grid with the
+  // orientation alternating per cell, which is what a rolled floor plate looks
+  // like. Everything else is driven off the lug mask: grime between the lugs,
+  // rust round their roots, and a walking line where they are worn flat and the
+  // plate is polished back to bare steel.
+  function genDeckPlate(g, S) {
+    var n = g.n, size = g.size, i, x, y;
+    var cells = 7;
+    var lug = g.buf(0);
+    (function () {
+      var cs = size / cells, ci, cj, li;
+      for (cj = 0; cj < cells; cj++) {
+        for (ci = 0; ci < cells; ci++) {
+          var ang = ((ci + cj) & 1 ? 0.7853982 : -0.7853982) +
+                    (hash2i(ci, cj, 3) - 0.5) * 0.12;
+          var dx = Math.cos(ang), dy = Math.sin(ang);
+          var cx = (ci + 0.5) * cs + (hash2i(ci, cj, 5) - 0.5) * cs * 0.10;
+          var cy = (cj + 0.5) * cs + (hash2i(ci, cj, 7) - 0.5) * cs * 0.10;
+          var L = cs * 0.30, W = cs * 0.090;
+          for (li = 0; li < 2; li++) {
+            // two parallel lugs per cell, offset across their own axis
+            var off = (li === 0 ? -1 : 1) * cs * 0.17;
+            var ox = cx - dy * off, oy = cy + dx * off;
+            var span = Math.ceil(L + W * 1.4 + 2);
+            for (var yy = -span; yy <= span; yy++) {
+              for (var xx = -span; xx <= span; xx++) {
+                var t = xx * dx + yy * dy;
+                var tc = t > L ? L : (t < -L ? -L : t);
+                var ax = xx - tc * dx, ay = yy - tc * dy;
+                var d = Math.sqrt(ax * ax + ay * ay) / W;
+                if (d > 1.15) continue;
+                var wx = ((Math.round(ox + xx) % size) + size) % size;
+                var wy = ((Math.round(oy + yy) % size) + size) % size;
+                var ii = wy * size + wx;
+                // rolled lug: a rounded ridge that tapers away at both ends
+                var taper = sstep(1.0, 0.70, Math.abs(t) / (L + W));
+                var prof = Math.sqrt(sat(1 - d * d)) * taper;
+                if (prof > lug[ii]) lug[ii] = prof;
+              }
+            }
+          }
+        }
+      }
+    })();
+
+    var macro = g.fbm(g.buf(0), 4, 4, 0.6, 1, 11, false);
+    var mill  = g.buf(0); g.fbmA(mill, 200, 6, 3, 0.5, 1, 13, false);   // rolling grain
+    var med   = g.fbm(g.buf(0), 30, 4, 0.5, 1, 17, false);
+    var rustN = g.fbm(g.buf(0), 9, 5, 0.55, 1, 19, false);
+    var wearN = g.buf(0); g.fbmA(wearN, 3, 8, 3, 0.55, 1, 23, false);
+    var grimeN = g.fbm(g.buf(0), 7, 4, 0.6, 1, 29, false);
+    var pit   = g.worley(130, 1.0, 31);
+    var C = chromaFields(g, 2500);
+
+    S.base(PAL.steelDark);
+    for (i = 0; i < n; i++) {
+      var wear = sat((wearN[i] - 0.42) * 2.2);            // the walking line
+      var lg = lug[i] * (1 - wear * 0.55);
+      var h = 0.42 + lg * 0.26 + (macro[i] - 0.5) * 0.05 +
+              (med[i] - 0.5) * 0.022 + (mill[i] - 0.5) * 0.016;
+      var rustM = sat(sstep(0.58, 0.82, rustN[i]) * (0.30 + (1 - lg) * 0.85)) * (1 - wear * 0.8);
+      var pt = sstep(0.20, 0.02, pit.f1[i]) * rustM;
+      h += rustM * 0.015 - pt * 0.035;
+      S.h[i] = h;
+
+      // ---- albedo ---------------------------------------------------------
+      shade(S, i, 0.82 + 0.30 * macro[i] + 0.22 * lg);
+      // Bare steel where boots have polished it; mill scale everywhere else.
+      tint(S, i, PAL.steel, wear * 0.55 + sat(lg - 0.7) * wear * 0.30);
+      tint(S, i, PAL.steelWarm, sat(1 - med[i] * 1.6) * 0.24);
+      tint(S, i, PAL.rust, rustM * 0.88);
+      tint(S, i, PAL.rustDeep, rustM * rustM * 0.48);
+      tint(S, i, PAL.rustLt, rustM * sat((h - 0.50) * 6.0) * 0.32);
+      tint(S, i, PAL.rustPit, pt * 0.70);
+      shade(S, i, 1 - pt * pt * 0.32);
+      // Grime, oil and swarf collect between the lugs - which is exactly where
+      // the height field is low.
+      var lowM = sstep(0.50, 0.40, h);
+      tint(S, i, PAL.grime, lowM * 0.42 + sat((grimeN[i] - 0.52) * 2.2) * 0.34);
+      tint(S, i, HPAL.oil, sat((grimeN[i] - 0.72) * 3.0) * lowM * 0.55);
+      applyChroma(S, i, C, 0.8, sat(lowM * 1.3 + pt), { iron: 1.1, wash: 0.30 });
+
+      // ---- roughness / metalness -------------------------------------------
+      var r = 0.60 + (med[i] - 0.5) * 0.20;
+      r -= wear * 0.34 + sat(lg - 0.55) * 0.22;           // lug crowns burnish
+      r = lerp(r, 0.93, rustM);
+      r += lowM * 0.14 + sat((grimeN[i] - 0.52) * 2.2) * 0.12;
+      S.ro[i] = sat(r);
+      S.me[i] = sat(0.85 - rustM * 1.15 - sat((grimeN[i] - 0.62) * 2.6) * 0.35);
+    }
+    punchScrapes(g, S, { count: 14, lenMin: 0.04, lenMax: 0.20, width: 0.0018,
+                         depth: 0.018, rough: 0.30, col: PAL.steel, tint: 0.45,
+                         metal: 0.90, hbias: 0.85, hRef: 0.55 });
+  }
+
+  // -- harbour water at night ------------------------------------------------
+  // Dark, animatable surface data: the height field is a sum of swell, chop and
+  // capillary trains at three anisotropic scales plus the dimples of the rain
+  // hitting it, so materials.js can scroll two samples of the normal map
+  // against each other and get a live surface for free. Albedo is almost black
+  // by design - every scrap of value this reads at comes from reflection.
+  function genSeaWater(g, S) {
+    var n = g.n, i;
+    var swell  = g.buf(0); g.fbmA(swell, 3, 5, 3, 0.55, 1, 11, false);
+    var chop   = g.buf(0); g.fbmA(chop, 11, 24, 3, 0.5, 1, 13, false);
+    var cap    = g.buf(0); g.fbmA(cap, 46, 92, 3, 0.5, 1, 17, false);
+    var crestN = g.ridged(g.buf(0), 14, 4, 1, 19, false);
+    var streak = g.buf(0); g.fbmA(streak, 6, 60, 3, 0.5, 1, 23, false);
+    var foamC  = g.worley(48, 1.0, 29);
+    var scumN  = g.fbm(g.buf(0), 5, 4, 0.6, 1, 31, false);
+    var rainC  = g.worley(150, 1.0, 37);
+
+    S.base(HPAL.seaDeep);
+    for (i = 0; i < n; i++) {
+      var sw = swell[i], ch = chop[i];
+      var rain = sstep(0.11, 0.02, rainC.f1[i]);          // it is pouring
+      var sharp = sat((crestN[i] - 0.72) * 3.2);
+      // Swell and chop carry the read; the capillary band and the rain dimples
+      // are a garnish. Authored equal they crumple the whole surface into tin
+      // foil and the wave structure disappears.
+      var h = 0.50 + (sw - 0.5) * 0.38 + (ch - 0.5) * 0.185 +
+              (cap[i] - 0.5) * 0.032 + sharp * 0.04 - rain * 0.020;
+      S.h[i] = h;
+
+      // Crests catch a little scattered light from below; troughs are the
+      // deepest value in the library and stay there.
+      tint(S, i, HPAL.seaMid, sat((h - 0.52) * 4.0) * 0.55);
+      shade(S, i, 0.85 + 0.30 * ch);
+      // Wind-driven foam: streaks aligned with the wind, plus breaking crests.
+      // Foam does not sit in round clouds - it is drawn out into Langmuir
+      // streaks along the wind, so the cellular term is gated hard by the
+      // (very anisotropic) streak field rather than merely multiplied by it.
+      var wind = sat((streak[i] - 0.52) * 3.2);
+      var fm = sat(sharp * 1.5 * wind + sstep(0.20, 0.04, foamC.f1[i]) * wind * wind * 1.2);
+      tint(S, i, HPAL.foam, fm * 0.70);
+      // Oily scum and harbour debris film, in the lee.
+      var scum = sstep(0.62, 0.82, scumN[i]) * (1 - fm);
+      tint(S, i, HPAL.scum, scum * 0.34);
+      desat(S, i, scum * 0.25);
+      tint(S, i, HPAL.foam, rain * 0.12);                 // the splash ring itself
+
+      // Water is a near-mirror; foam is not, and scum is somewhere between.
+      // That spread is what stops the harbour reading as a sheet of glass.
+      var r = 0.045 + (ch - 0.5) * 0.03 + rain * 0.05;
+      r = lerp(r, 0.72, fm);
+      r = lerp(r, 0.32, scum * 0.7);
+      S.ro[i] = sat(r);
+      S.me[i] = 0;
+    }
+  }
+
+  // -- worn apron lane marking ----------------------------------------------
+  // Thermoplastic paint over the same cool concrete as the apron: the paint has
+  // real thickness, retroreflective glass beads in it, and it is worn through
+  // to the substrate exactly where the height field is HIGH and the traffic
+  // zone says the tyres go.
+  function genPaintedLine(g, S) {
+    var n = g.n, i;
+    var macro = g.fbm(g.buf(0), 3, 4, 0.6, 1, 11, false);
+    var med   = g.fbm(g.buf(0), 18, 4, 0.5, 1, 13, false);
+    var fine  = g.fbm(g.buf(0), 110, 3, 0.5, 1, 17, false);
+    var agg   = g.worley(46, 0.95, 19);
+    var crack = g.ridged(g.buf(0), 6, 4, 1, 23, true);
+    var wearN = g.fbm(g.buf(0), 4, 4, 0.6, 1, 29, false);
+    var beads = g.worley(190, 1.0, 31);
+    // Both wear fields are elongated ALONG the tile's U, because that is the
+    // way a lane marking is laid and the way traffic runs over it. Authored the
+    // other way round they scrape the paint off in vertical bars, which reads
+    // as a curtain rather than as a worn line.
+    var spray = g.buf(0); g.fbmA(spray, 7, 150, 3, 0.5, 1, 37, false);
+    var tyreR = g.buf(0); g.fbmA(tyreR, 5, 34, 3, 0.5, 1, 41, false);
+    var dirtN = g.fbm(g.buf(0), 7, 4, 0.6, 1, 43, false);
+    var C = chromaFields(g, 2900);
+
+    S.base(HPAL.dockGrey);
+    for (i = 0; i < n; i++) {
+      // ---- substrate --------------------------------------------------------
+      var stone = sstep(0.48, 0.12, agg.f1[i]);
+      var hs = 0.60 + (macro[i] - 0.5) * 0.09 + (med[i] - 0.5) * 0.07 +
+               (fine[i] - 0.5) * 0.035 + stone * 0.05;
+      var ck = sstep(0.84, 0.995, crack[i]);
+      hs -= ck * 0.14;
+      // ---- paint coverage ---------------------------------------------------
+      // Wear where the height is high; the tyres and the aggregate crowns take
+      // the paint off together, and the cracks cut straight through it.
+      var traffic = sat((wearN[i] - 0.34) * 2.0);
+      var wear = sat(traffic * (0.35 + sat((hs - 0.605) * 9.0) * 1.5) +
+                     sat((tyreR[i] - 0.56) * 3.0) * traffic * 1.1 + ck * 0.9);
+      // The spray edge is ragged - the previous form could never fall below its
+      // own threshold, so the paint covered the whole tile and the marking read
+      // as a yellow wall instead of as a worn line on concrete.
+      var paint = sat(1 - wear) * sstep(0.26, 0.52, spray[i]);
+      var bead = sstep(0.30, 0.08, beads.f1[i]) * paint;
+      // Thermoplastic is laid down THICK and it FILLS what it covers: the
+      // aggregate relief disappears under it. That flattening is half of why a
+      // marking reads as paint rather than as a stain.
+      var h = lerp(hs, 0.615 + (med[i] - 0.5) * 0.02, paint * 0.70) +
+              paint * 0.020 + bead * 0.006;
+      S.h[i] = h;
+
+      // ---- albedo -----------------------------------------------------------
+      var id = agg.id[i];
+      tint(S, i, id < 0.34 ? HPAL.aggCoolDk : (id < 0.72 ? HPAL.aggCool : HPAL.aggCoolLt),
+           stone * 0.45);
+      shade(S, i, 0.86 + 0.28 * med[i]);
+      tint(S, i, PAL.grime, sstep(0.60, 0.44, hs) * 0.40 + ck * 0.55);
+      // the paint itself: traffic yellow, chalked and filthy
+      tint(S, i, HPAL.lineYellow, paint * 0.92);
+      tint(S, i, HPAL.lineWorn, paint * sat((macro[i] - 0.40) * 2.2) * 0.70);
+      desat(S, i, paint * sat((macro[i] - 0.40) * 2.2) * 0.45);
+      // glass beads: pinpoints of near-white with a wet-looking specular
+      tint(S, i, PAL.efflor, bead * 0.40);
+      // rubber laid over the top of everything
+      var tyre = sat((tyreR[i] - 0.52) * 2.6) * traffic;
+      tint(S, i, PAL.rubber, tyre * 0.60);
+      tint(S, i, PAL.grime, sat((dirtN[i] - 0.44) * 2.2) * 0.42 * (0.4 + paint * 0.7));
+      tint(S, i, PAL.dampGrey, sat((dirtN[i] - 0.38) * 1.9) * 0.24);
+      shade(S, i, 1 - paint * 0.10 - tyre * 0.14);
+      shade(S, i, 1 - ck * ck * 0.28);
+      applyChroma(S, i, C, 0.85, sat(sstep(0.60, 0.44, hs) * 1.2 + ck),
+                  { iron: 0.8, bio: 1.0, wash: 0.45 });
+
+      // ---- roughness --------------------------------------------------------
+      var r = 0.84 + (med[i] - 0.5) * 0.18;                 // bare concrete
+      r = lerp(r, 0.52, paint * 0.9);                       // thermoplastic sheen
+      r += paint * sat((macro[i] - 0.45) * 2.2) * 0.26;     // ...chalked back off
+      r = lerp(r, 0.22, bead * 0.8);                        // glass
+      r -= tyre * 0.18 + traffic * 0.12;
+      r += ck * 0.10;
+      S.ro[i] = sat(r);
+      S.me[i] = 0;
+    }
+    punchScrapes(g, S, { count: 10, lenMin: 0.06, lenMax: 0.30, width: 0.0022,
+                         depth: 0.020, rough: 0.80, col: HPAL.aggCoolLt, tint: 0.45,
+                         hbias: 0.7, hRef: 0.62 });
+  }
+
+  // -- reefer container refrigeration panel ---------------------------------
+  // A louvred grille in a painted casing, running in the rain: the blades are
+  // beaded with condensation that runs down them, the gaps behind are near
+  // black, and the frame fixings rust. The condensation is the point - it is
+  // the one surface in the level that is wet because it is COLD.
+  function genReeferPanel(g, S) {
+    var n = g.n, size = g.size, i, x, y;
+    var blades = 9, stiff = 3;
+    var macro = g.fbm(g.buf(0), 4, 4, 0.6, 1, 11, false);
+    var med   = g.fbm(g.buf(0), 26, 4, 0.5, 1, 13, false);
+    var fine  = g.fbm(g.buf(0), 190, 3, 0.5, 1, 17, false);
+    var cond  = g.worley(170, 1.0, 19);                 // condensation beading
+    var condZ = g.fbm(g.buf(0), 6, 3, 0.55, 1, 23, false);
+    var dirtN = g.fbm(g.buf(0), 7, 4, 0.6, 1, 29, false);
+    var chipN = g.fbm(g.buf(0), 12, 5, 0.55, 1, 31, false);
+    var streakN = g.buf(0); g.fbmA(streakN, 150, 9, 4, 0.5, 1, 37, false);
+    var C = chromaFields(g, 3700);
+    var seedM = g.buf(0), runs = g.buf(0);
+    for (i = 0; i < n; i++) seedM[i] = sstep(0.66, 0.84, condZ[i] * 0.6 + dirtN[i] * 0.4);
+    g.drip(seedM, runs, 0.9955, true);
+
+    S.base(HPAL.reefer);
+    for (y = 0; y < size; y++) {
+      var rowo = y * size;
+      var lv = (y / size) * blades;
+      var bf = lv - Math.floor(lv);
+      // The shadow slot is a real opening into the machinery, not a scribed
+      // line: a louvre you can see 3 texels of is a venetian blind.
+      var gap = sstep(0.24, 0.11, bf);
+      var face = 1 - gap;
+      var tilt = sat(1 - (bf - 0.24) / 0.76);           // 1 at the blade's top lip
+      for (x = 0; x < size; x++) {
+        i = rowo + x;
+        var sv = (x / size) * stiff;
+        var sfv = sv - Math.floor(sv);
+        var rib = sstep(0.045, 0.0, Math.min(sfv, 1 - sfv));
+        var h = 0.30 + face * (0.28 + tilt * 0.10) + rib * 0.035 +
+                (med[i] - 0.5) * 0.020 + (fine[i] - 0.5) * 0.010;
+        // Condensation beads on the cold blade faces and runs down them.
+        var cz = sat((condZ[i] - 0.36) * 2.0);
+        var bead = sstep(0.30, 0.06, cond.f1[i]) * face * cz;
+        var runm = runs[i] * sstep(0.30, 0.62, streakN[i]) * face;
+        h += bead * 0.012;
+        S.h[i] = h;
+
+        // ---- albedo -------------------------------------------------------
+        shade(S, i, 0.84 + 0.28 * macro[i]);
+        tint(S, i, HPAL.reeferDk, gap * 0.70 + (1 - tilt) * face * 0.28);
+        shade(S, i, 1 - gap * 0.86);                    // the slot IS a hole
+        tint(S, i, PAL.soot, gap * gap * 0.70);
+        // chipped casing paint over bare aluminium
+        var chip = sstep(0.72, 0.86, chipN[i]) * face;
+        tint(S, i, PAL.alu, chip * 0.60);
+        // A reefer that has crossed two oceans is not a white good. Dirt runs
+        // off every blade lip and collects along the bottom of every slot.
+        tint(S, i, PAL.grime, sstep(0.56, 0.38, h) * 0.45 +
+                              sat((dirtN[i] - 0.48) * 2.2) * 0.42);
+        tint(S, i, PAL.dampGrey, sat((dirtN[i] - 0.40) * 1.8) * 0.30);
+        // Water is DARKER than the paint under it and it hangs in vertical runs.
+        shade(S, i, 1 - (bead * 0.16 + runm * 0.22));
+        tint(S, i, HPAL.wetSheen, bead * 0.30 + runm * 0.24);
+        // frost bloom at the cold bridge along the slot lips
+        tint(S, i, PAL.efflor, sstep(0.26, 0.36, bf) * sstep(0.52, 0.40, bf) * cz * 0.45);
+        tint(S, i, PAL.rust, sat((dirtN[i] - 0.74) * 3.0) * gap * 0.30);
+        applyChroma(S, i, C, 0.7, sat(runm * 1.3 + gap), { iron: 0.9, bio: 0.9, wash: 0.5 });
+
+        // ---- roughness ----------------------------------------------------
+        // The whole story: chalked enamel at 0.72, wet beading at 0.08, and a
+        // frosted lip at 0.9, on the same panel.
+        var r = 0.46 + (macro[i] - 0.5) * 0.22 + sat((dirtN[i] - 0.56) * 2.2) * 0.22;
+        r += gap * 0.24 + chip * 0.10;
+        r = lerp(r, 0.09, sat(bead * 1.1));
+        r = lerp(r, 0.16, runm * 0.85);
+        r += sstep(0.26, 0.36, bf) * sstep(0.52, 0.40, bf) * cz * 0.30;
+        S.ro[i] = sat(r);
+        S.me[i] = sat(chip * 0.55 - bead * 0.4);
+      }
+    }
+    // Casing fixings round the grille frame.
+    stampBolts(g, S, { cols: 3, rows: 3, r: 0.007, salt: 91, jitter: 0.05,
+                       proud: 0.030, rust: 0.7, weep: 0.06 });
+  }
+
   // --------------------------------------------------------------------------
   // Recipe table. `tier` resolves against the quality preset. `bump` is a
   // relative dial: _emit normalises the Sobel gradient against the field's own
@@ -3617,7 +5144,38 @@
     plastic:          { tier: 'std',  bump: 0.60, gen: genPlastic },
     cloth_olive:      { tier: 'std',  bump: 1.12, gen: genClothOlive },
     cloth_tan:        { tier: 'std',  bump: 1.12, gen: genClothTan },
-    detail_normal:    { tier: 'small', bump: 0.75, gen: genDetailNormal, normalOnly: true }
+    detail_normal:    { tier: 'small', bump: 0.75, gen: genDetailNormal, normalOnly: true },
+
+    // ---- LEVEL 2: COLD HARBOR ----------------------------------------------
+    // Two hero tiles only. The container flank and the wet apron are what the
+    // camera spends the level looking at; everything else is a 512 that is
+    // either far away, small on screen, or tiled hard enough that a 1024 would
+    // be spent on nothing. This set already doubles the texture boot cost of
+    // the level it ships with, so it pays for detail where detail is seen.
+    // bump is a MEAN SLOPE target, not an amplitude: _emit normalises the Sobel
+    // against the field's own statistics, so the budget gets spent on whatever
+    // is in the map. While these four carried a trapezoid it went almost
+    // entirely into eight ruled ribs and left the rest of the tile flat. The
+    // budget is unchanged; what it buys is now oil-canning, creases and dents.
+    container_steel:  { tier: 'hero', bump: 1.00, gen: genContainerSteel },
+    container_red:    { tier: 'std',  bump: 1.00, gen: genContainerRed },
+    container_blue:   { tier: 'std',  bump: 1.00, gen: genContainerBlue },
+    container_green:  { tier: 'std',  bump: 1.00, gen: genContainerGreen },
+    ship_hull:        { tier: 'std',  bump: 1.05, gen: genShipHull },
+    wet_concrete:     { tier: 'hero', bump: 0.80, gen: genWetConcrete, deband: 0.35 },
+    dock_concrete:    { tier: 'std',  bump: 0.95, gen: genDockConcrete, deband: 0.80 },
+    // alphaTest is a HINT for materials.js: these two are cut-out sheets and
+    // render as solid black squares without it.
+    chainlink:        { tier: 'std',  bump: 0.85, gen: genChainlink, alpha: 0.42 },
+    steel_grate:      { tier: 'std',  bump: 0.80, gen: genSteelGrate, alpha: 0.42 },
+    tarpaulin:        { tier: 'std',  bump: 1.05, gen: genTarpaulin },
+    rope:             { tier: 'std',  bump: 1.25, gen: genRope },
+    rubber_fender:    { tier: 'std',  bump: 0.90, gen: genRubberFender },
+    corrugated_roof:  { tier: 'std',  bump: 0.80, gen: genCorrugatedRoof },
+    deck_plate:       { tier: 'std',  bump: 1.10, gen: genDeckPlate },
+    sea_water:        { tier: 'std',  bump: 0.85, gen: genSeaWater },
+    painted_line:     { tier: 'std',  bump: 0.75, gen: genPaintedLine },
+    reefer_panel:     { tier: 'std',  bump: 0.95, gen: genReeferPanel }
   };
 
   // Names other modules ask for that are spelled differently here. Resolved in
@@ -3634,6 +5192,16 @@
     polymer: 'gun_polymer'
   };
 
+  // The COLD HARBOR set, in camera-priority order. Prebuilt only when the
+  // harbor level is actually loaded: it is most of a second library, the market
+  // has no use for a single one of these, and paying its boot cost there would
+  // be a pure regression of a finished level. get() still generates any of them
+  // on demand, so a stray request degrades to a hitch rather than to a fallback.
+  var HARBOR_ORDER = ['wet_concrete', 'container_steel', 'container_red',
+    'container_blue', 'container_green', 'dock_concrete', 'ship_hull',
+    'corrugated_roof', 'deck_plate', 'steel_grate', 'chainlink', 'tarpaulin',
+    'rope', 'rubber_fender', 'reefer_panel', 'painted_line', 'sea_water'];
+
   // Build order: the surfaces the camera sees most come first so a build that
   // is interrupted still has the important stuff.
   var ORDER = ['plaster', 'concrete_wall', 'asphalt', 'concrete', 'brick',
@@ -3649,7 +5217,14 @@
   function TextureLibrary(ctx) {
     this.ctx = ctx || null;
     this.cache = Object.create(null);
-    this.names = ORDER.slice();
+    // `names` is the CAPABILITY list (materials.js probes it before falling
+    // back to a texAlt), so it advertises everything the library can make.
+    // `order` is what gets PREBUILT during the loading bar, and that is
+    // level-dependent - see HARBOR_ORDER.
+    this.names = ORDER.concat(HARBOR_ORDER);
+    this.levelId = 'market';
+    try { if (ctx && ctx.levelId) this.levelId = String(ctx.levelId); } catch (e) { /* default */ }
+    this.order = this.levelId === 'harbor' ? HARBOR_ORDER.concat(ORDER) : ORDER.slice();
     this.seed = 20260801;
     try { if (ctx && ctx.seed) this.seed = ctx.seed >>> 0; } catch (e) { /* default */ }
 
@@ -3691,9 +5266,10 @@
   // ---- lifecycle -----------------------------------------------------------
   TextureLibrary.prototype.build = async function () {
     var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    for (var i = 0; i < ORDER.length; i++) {
-      try { this.get(ORDER[i]); }
-      catch (e) { GAME.logError('textures.build:' + ORDER[i], e); }
+    var order = this.order && this.order.length ? this.order : ORDER;
+    for (var i = 0; i < order.length; i++) {
+      try { this.get(order[i]); }
+      catch (e) { GAME.logError('textures.build:' + order[i], e); }
       // Yield so the loading bar can actually paint between materials.
       await GAME.yieldFrame();
     }
@@ -3773,6 +5349,9 @@
     var v = this.cache[key];
     if (v) return v;
     v = { size: base.size, name: name, repeat: [ru, rv] };
+    // Carry the cut-out hint onto the tiled variant. Without it a fence asked
+    // for at repeat 8 loses its alphaTest and renders as a solid black sheet.
+    if (base.alphaTest !== undefined) v.alphaTest = base.alphaTest;
     // Dedupe by identity: roughnessMap / aoMap / metalnessMap / ormMap are all
     // the same packed texture, and cloning it four times would give three.js
     // four uv transforms and four texture records for one image.
@@ -3792,6 +5371,19 @@
     }
     this.cache[key] = v;
     return v;
+  };
+
+  /**
+   * has(name) -> Boolean. True when the library has a real recipe for `name`
+   * (aliases resolved), i.e. get(name) will return a purpose-built set rather
+   * than the concrete fallback. materials.js probes this before falling back to
+   * a def's texAlt, which is how a def can reach ahead of the texture library
+   * without silently rendering as grey concrete.
+   */
+  TextureLibrary.prototype.has = function (name) {
+    if (!name) return false;
+    if (ALIASES[name]) name = ALIASES[name];
+    return !!RECIPES[name];
   };
 
   /**
@@ -4000,6 +5592,10 @@
       size: size,
       name: name
     };
+    // Cut-out sheets (chain-link, grating) publish the alpha threshold they
+    // were authored against. Purely advisory - consumers that ignore it behave
+    // exactly as before.
+    if (rec.alpha) set.alphaTest = rec.alpha;
     if (!rec.normalOnly) {
       set.map = this._tex(albC, size, size, true);
     } else {

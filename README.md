@@ -3,7 +3,14 @@
 A first-person shooter built in Three.js r180. ~55,000 lines of game code,
 zero external assets, zero build step.
 
-![Capture scenarios](docs/captures.png)
+**Level 1 — Al-Bakr Market District.** Golden hour, dust, a war-torn market street.
+
+![Level 1 capture scenarios](docs/captures.png)
+
+**Level 2 — Cold Harbor.** 02:00, a storm, a container terminal. Reached with
+`index.html?level=harbor`.
+
+![Level 2 capture scenarios](docs/harbor.png)
 
 ## Play it
 
@@ -25,6 +32,23 @@ Click **DEPLOY**, then click once more to lock the mouse.
 | `Esc` | Release mouse |
 
 Chrome or Edge recommended. A discrete GPU will hold 60fps at 1080p.
+
+## Levels
+
+| Level | id | Conditions |
+|---|---|---|
+| Al-Bakr Market District | `market` (default) | Golden hour, hot, dusty, horizontal street canyon |
+| Cold Harbor Container Terminal | `harbor` | 02:00, heavy rain, storm, lit only by sodium/mercury practicals and lightning |
+
+Select with `index.html?level=harbor`. A level is a `Level`+`Props` pair
+registered in the `LEVELS` table in [src/game/main.js](src/game/main.js); no
+other system knows which one is loaded — they branch on `ctx.levelId`. An
+unknown or failed level falls back to `market` rather than blanking the screen.
+
+The two are deliberate opposites — night against day, wet against dry,
+practicals against sun, vertical against horizontal — because a second level
+that re-dresses the first is not a second level. Cold Harbor's look is carried
+by reflection and specular where the market's is carried by haze.
 
 ## What's unusual about this build
 
@@ -58,15 +82,20 @@ vendor/three.global.js  three.js r180 as a classic script (generated)
 src/core/util.js        math, seeded RNG, noise, collision, pooling, input
 src/render/             textures, materials, sky+atmosphere, lighting, postfx
 src/world/              level architecture + collision, props and set dressing
+                        level.js/props.js = market, level_harbor.js/
+                        props_harbor.js = harbor
 src/player/             movement, camera, game feel
 src/weapons/            procedural weapon models, viewmodel animation, ballistics
 src/fx/                 particles, impacts, decals, tracers, explosions
+                        weather.js = rain, storm, lightning (owns the
+                        weather contract other systems consume)
 src/audio/              fully synthesised audio
 src/ai/                 enemy AI, procedural humanoid rig and animation
 src/ui/                 DOM/CSS HUD
 src/game/               bootstrap, frame loop, capture scenarios
 ARCHITECTURE.md         the contract the 14 modules were built against
-ART_DIRECTION.md        the single image every module converges on
+ART_DIRECTION.md        the single image every module converges on (level 1)
+ART_DIRECTION_HARBOR.md  the same, for level 2
 DEVELOPMENT.md          how to extend this without breaking it
 ```
 
