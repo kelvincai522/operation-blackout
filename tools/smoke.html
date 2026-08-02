@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><style>html,body{margin:0;background:#111;overflow:hidden}</style></head>
+<body>
+<script src="../vendor/three.global.js"></script>
+<script>
+(function () {
+  const out = { rev: null, ok: false, err: null };
+  try {
+    out.rev = THREE.REVISION;
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(640, 400);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x101418);
+    const cam = new THREE.PerspectiveCamera(50, 640 / 400, 0.1, 100);
+    cam.position.set(3, 2.4, 4);
+    cam.lookAt(0, 0.5, 0);
+
+    const key = new THREE.DirectionalLight(0xfff2e0, 4);
+    key.position.set(4, 6, 3);
+    key.castShadow = true;
+    scene.add(key, new THREE.HemisphereLight(0x88aaff, 0x332211, 0.8));
+
+    const mat = new THREE.MeshStandardMaterial({ color: 0xcc5533, roughness: 0.35, metalness: 0.7 });
+    const knot = new THREE.Mesh(new THREE.TorusKnotGeometry(0.8, 0.28, 160, 24), mat);
+    knot.position.y = 0.9; knot.castShadow = true;
+    scene.add(knot);
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(20, 20),
+      new THREE.MeshStandardMaterial({ color: 0x555a60, roughness: 0.9 })
+    );
+    floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true;
+    scene.add(floor);
+
+    renderer.render(scene, cam);
+    const gl = renderer.getContext();
+    out.ok = true;
+    out.vendor = gl.getParameter(gl.VENDOR);
+    out.rendererName = gl.getParameter(gl.RENDERER);
+  } catch (e) {
+    out.err = String(e && e.stack || e);
+  }
+  document.title = 'SMOKE ' + JSON.stringify(out);
+  const p = document.createElement('pre');
+  p.style.cssText = 'position:fixed;left:0;top:0;color:#0f0;font:12px monospace;margin:0';
+  p.textContent = JSON.stringify(out, null, 1);
+  document.body.appendChild(p);
+  window.__SMOKE__ = out;
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OPERATION BLACKOUT</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #05070a; color: #e8eef5;
+    font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #view { display: block; width: 100vw; height: 100vh; }
+
+  /* ---- boot / loading screen ---- */
+  #boot {
+    position: fixed; inset: 0; z-index: 500;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background:
+      radial-gradient(120% 90% at 50% 0%, #14202c 0%, #080c11 55%, #04060a 100%);
+    transition: opacity .55s ease, visibility .55s;
+  }
+  #boot.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+  #boot::after {
+    /* film grain so even the menu does not look flat */
+    content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .05;
+    background-image: repeating-conic-gradient(#fff 0% 25%, #000 0% 50%);
+    background-size: 3px 3px; mix-blend-mode: overlay;
+  }
+  .title {
+    font-size: clamp(30px, 6.4vw, 76px); font-weight: 800; letter-spacing: .16em;
+    margin: 0 0 6px; text-transform: uppercase;
+    background: linear-gradient(180deg, #ffffff 10%, #8fa4b8 92%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 0 60px rgba(120,170,255,.14);
+  }
+  .subtitle {
+    font-size: 12px; letter-spacing: .48em; text-transform: uppercase;
+    color: #6d8398; margin: 0 0 46px; padding-left: .48em;
+  }
+  #boot-track {
+    width: min(460px, 74vw); height: 2px; background: rgba(255,255,255,.09);
+    overflow: hidden; border-radius: 2px;
+  }
+  #boot-bar {
+    height: 100%; width: 0%; border-radius: 2px;
+    background: linear-gradient(90deg, #3f7fbf, #7fd4ff);
+    box-shadow: 0 0 14px rgba(110,200,255,.55); transition: width .28s ease;
+  }
+  #boot-status {
+    margin-top: 14px; font-size: 11px; letter-spacing: .22em; text-transform: uppercase;
+    color: #5f748a; height: 15px;
+  }
+  #start-btn {
+    margin-top: 34px; padding: 13px 42px; font: inherit; font-size: 13px;
+    letter-spacing: .26em; text-transform: uppercase; cursor: pointer;
+    color: #cfe4f7; background: rgba(80,140,200,.10);
+    border: 1px solid rgba(140,190,240,.42); border-radius: 2px;
+    opacity: 0; transform: translateY(8px); pointer-events: none;
+    transition: opacity .4s ease, transform .4s ease, background .2s, border-color .2s;
+  }
+  #boot.ready #start-btn { opacity: 1; transform: none; pointer-events: auto; }
+  #start-btn:hover { background: rgba(110,180,240,.22); border-color: rgba(180,220,255,.75); }
+  #boot.ready #boot-track, #boot.ready #boot-status { opacity: .35; }
+  .hint {
+    position: absolute; bottom: 28px; font-size: 11px; letter-spacing: .16em;
+    color: #4d6076; text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<div id="boot">
+  <h1 class="title">Operation Blackout</h1>
+  <p class="subtitle">Tactical Response</p>
+  <div id="boot-track"><div id="boot-bar"></div></div>
+  <div id="boot-status">Initialising…</div>
+  <button id="start-btn">Deploy</button>
+  <div class="hint">WASD move &nbsp;·&nbsp; Shift sprint &nbsp;·&nbsp; C crouch &nbsp;·&nbsp; RMB aim &nbsp;·&nbsp; R reload</div>
+</div>
+
+<!-- three.js r180, converted to a classic script by tools/build_three_global.py
+     so the whole game runs from file:// with no bundler and no server. -->
+<script src="vendor/three.global.js"></script>
+
+<!-- foundation -->
+<script src="src/core/util.js"></script>
+
+<!-- rendering -->
+<script src="src/render/textures.js"></script>
+<script src="src/render/materials.js"></script>
+<script src="src/render/sky.js"></script>
+<script src="src/render/lighting.js"></script>
+<script src="src/render/postfx.js"></script>
+
+<!-- world -->
+<script src="src/world/level.js"></script>
+<script src="src/world/props.js"></script>
+
+<!-- gameplay -->
+<script src="src/player/controller.js"></script>
+<script src="src/weapons/weapons.js"></script>
+<script src="src/weapons/ballistics.js"></script>
+<script src="src/fx/vfx.js"></script>
+<script src="src/audio/audio.js"></script>
+<script src="src/ai/ai.js"></script>
+<script src="src/ui/hud.js"></script>
+
+<!-- integration -->
+<script src="src/game/scenarios.js"></script>
+<script src="src/game/main.js"></script>
+</body>
+</html>

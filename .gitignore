@@ -1,0 +1,20 @@
+# Capture output from tools/shoot.py and the critique loop.
+# This grows to hundreds of MB of scratch PNGs during an agent round.
+# Reference images that are worth keeping live in docs/ instead.
+shots/
+
+# Scratch pages written and deleted by tools/check.py and tools/playtest.py.
+# They are removed on a clean exit; these rules cover crashes and Ctrl-C.
+._check_*.html
+._playtest.html
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
