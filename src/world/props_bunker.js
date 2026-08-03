@@ -1290,27 +1290,69 @@
   };
 
   // ---- sandbag / cement sack ------------------------------------------------
-  K.sack = function (rng, noise, seed) {
+  // A revetment of these measured Lmean 0.432 / sat 0.065 against a floor at
+  // 0.688 / 0.025 - no hue separation, value separation in the wrong direction,
+  // and a silhouette with no seam, no tie-off, no fold and no bedding, so the
+  // wall photographed as a row of bread rolls and the stretcher bond the
+  // placement function carefully builds was completely invisible.
+  //
+  // Three things are added and each does a specific job:
+  //   * GATHERED TIES at both ends. A sandbag is a tube of hessian choked at one
+  //     end and folded under at the other, and the choke is the single most
+  //     recognisable thing about the object's outline.
+  //   * A SLUMP FOLD across the top face. Filled hessian creases where it is
+  //     bent over the course beneath it; a smoothed ellipsoid cannot.
+  //   * A BEDDING SPREAD at the bottom. The underside flattens and pushes out
+  //     where it takes the weight, which is what closes the joint and gives the
+  //     course-to-course shadow lattice something to sit in - a sandbag wall is
+  //     read almost entirely by that lattice.
+  // `variant` 1 is a fatter, lower, more slumped bag on its own noise field, so
+  // alternating the two through a wall breaks the instanced-prop tell without
+  // paying for a second placement pass.
+  K.sack = function (rng, noise, seed, variant) {
     var it = new Item();
-    var g = sph(0.5, 10, 7).clone();
+    var V = variant ? 1 : 0;
+    var g = sph(0.5, 14, 9).clone();
     var p = g.attributes.position;
-    for (var i = 0; i < p.count; i++) {
+    var i;
+    for (i = 0; i < p.count; i++) {
       var x = p.getX(i), y = p.getY(i), z = p.getZ(i);
-      // A slumped, over-filled bag: low, waisted at the tied ends, and never
-      // circular in section.  Sized to a REAL filled sandbag - about 0.46 long,
-      // 0.30 across and 0.17 high.  The first pass had it at 0.70 x 0.43 x 0.32
-      // and a revetment of them photographed as a row of pillows: at that size
-      // the eye reads them against a 2 m doorway and gets the scale of the whole
-      // vestibule wrong.
-      var yy = y * 0.44 + 0.5 * 0.44;
-      var wob = 1 + noise.fbm3(x * 3.4 + seed, y * 3.4, z * 3.4, 3, 2.1, 0.55) * 0.22;
+      // Sized to a REAL filled sandbag - about 0.46 long, 0.30 across and 0.17
+      // high. The first pass had it at 0.70 x 0.43 x 0.32 and a revetment of
+      // them photographed as a row of pillows: at that size the eye reads them
+      // against a 2 m doorway and gets the scale of the whole vestibule wrong.
+      var yy = y * 0.44 + 0.5 * 0.44;                 // 0 .. 0.44
+      var t = yy / 0.44;
+      var wob = 1 + noise.fbm3(x * 3.4 + seed, y * 3.4, z * 3.4, 3, 2.1, 0.55) *
+        (0.22 + V * 0.10);
       var waist = 1 - Math.abs(x) * 0.62;
-      p.setXYZ(i, x * 1.02 * wob, yy * (0.72 + 0.60 * waist), z * 0.66 * wob * (0.55 + 0.55 * waist));
+      // the slump fold: two shallow creases running across the bag
+      var fold = Math.cos(x * (7.2 + V * 3.1) + seed) * 0.5 + 0.5;
+      var crease = 1 - Math.max(0, t - 0.42) * fold * (0.40 + V * 0.16);
+      // the bedding spread: the bottom third pushes out and flattens
+      var bed = 1 + (1 - Math.min(1, t * 3.0)) * (0.13 + V * 0.06);
+      p.setXYZ(i,
+        x * 1.02 * wob,
+        yy * (0.72 + 0.60 * waist) * crease * (1 - V * 0.12),
+        z * 0.66 * wob * (0.55 + 0.55 * waist) * bed);
     }
     p.needsUpdate = true;
     g.computeVertexNormals();
     g.scale(0.455, 0.400, 0.455);
     it.add('fabric', g, null);
+    // the gathered tie at each end - a choked, wired-off neck
+    for (var e2 = -1; e2 <= 1; e2 += 2) {
+      var tg = lathe([
+        [0.000, 0.000], [0.052, 0.006], [0.048, 0.038], [0.024, 0.062],
+        [0.030, 0.086], [0.020, 0.108], [0.008, 0.118], [0.000, 0.120]
+      ], 9, 1.0, 1.0);
+      it.add('fabric', tg, T(e2 * 0.213, 0.062 + V * -0.006, 0,
+        0, 0, e2 * Math.PI * 0.5));
+      // the wire twitch on the choke
+      it.add('fabric', lathe([[0.000, 0.000], [0.030, 0.004], [0.030, 0.020],
+        [0.000, 0.024]], 8, 1.0, 1.0),
+        T(e2 * 0.268, 0.062 + V * -0.006, 0, 0, 0, e2 * Math.PI * 0.5));
+    }
     return it;
   };
 
@@ -1898,11 +1940,18 @@
       W({ albedoTarget: 0x2e3032, roughness: 0.88, wearColor: 0x6d6a64 }));
     m.cable = this._material('rubber',
       W({ albedoTarget: 0x262a2e, roughness: 0.90, wearColor: 0x6d6a64 }));
-    // Deliberately a shade darker than a clean sandbag: the revetment stands in
-    // the vestibule flood's hot pool, which is the one part of this level that
-    // was already clipping before a single prop was placed.
+    // SAND-OLIVE, not sand. Measured against the vestibule floor the revetment
+    // came in at sat 0.065 against the floor's 0.025 - effectively no hue
+    // separation - and 0.432 against 0.688, i.e. separated only by value and in
+    // the wrong direction, so in lv_hero3 a defensive wall read as a snowdrift.
+    // Hessian filled with local spoil is a green-brown, and putting the chroma
+    // there is what lets the wall separate from concrete on hue instead of
+    // fighting the flood for value. Two lots, because a revetment is built from
+    // whatever bags were on the truck.
     m.fabric = this._material('sandbag',
-      W({ albedoTarget: 0x6f6656, roughness: 0.96, wearColor: 0x8a8272 }));
+      W({ albedoTarget: 0x6b6446, roughness: 0.96, wearColor: 0x8a8268 }));
+    m.fabric2 = this._material('sandbag',
+      W({ albedoTarget: 0x585440, roughness: 0.97, wearColor: 0x7d7660 }));
     m.canvas = this._material('canvas_awning',
       W({ albedoTarget: 0x6d6754, roughness: 0.95, wearColor: 0x968f7c }));
     m.grate = this._material('steel_grate',
@@ -2426,7 +2475,7 @@
   var UVNAME = {
     steel: 'painted_metal', rust: 'rusted_metal', wood: 'wood_plank',
     concrete: 'concrete', plastic: 'plastic', rubber: 'rubber', cable: 'rubber',
-    fabric: 'sandbag', canvas: 'canvas_awning', grate: 'steel_grate',
+    fabric: 'sandbag', fabric2: 'sandbag', canvas: 'canvas_awning', grate: 'steel_grate',
     red: 'painted_metal', green: 'painted_metal', cream: 'painted_metal',
     ochre: 'painted_metal', vinyl: 'plastic', glass: 'glass'
   };
@@ -2506,9 +2555,24 @@
       { b: 'steel', w: wr(0.34, 0.40, 0.34, { hiY: 0.4 }), tx: 1050 }
     ], 66);
 
-    this.B.sack = combo('sack', K.sack(R, N, 3.1), [
-      { b: 'fabric', w: wr(0.26, 0.12, 0.54, { hiY: 0.28 }), tx: 1000 }
+    // TWO sack batches, not one. The material has a wear shader on the vertex
+    // colour attribute, so per-instance colour is not available to vary a bag
+    // (an instanceColor multiplies straight into the mask and corrupts it) -
+    // and a wall of one geometry in one colour is the instanced-prop tell the
+    // placement function's own comment sets out to avoid. Two geometries on two
+    // noise fields, in two different lots of hessian, alternated through the
+    // bond, is the version that costs one extra draw call and actually works.
+    //
+    // tx 3600 rather than 1000: at 1000 texels/m a 0.46 m bag received under
+    // half a texture tile, so no hessian weave resolved at ANY distance and the
+    // bags rendered as smooth blobs. 3600 puts about two tiles across a bag.
+    this.B.sack = combo('sack', K.sack(R, N, 3.1, 0), [
+      { b: 'fabric', w: wr(0.26, 0.12, 0.54, { hiY: 0.28 }), tx: 3600 }
     ], 190);
+
+    this.B.sackB = combo('sackB', K.sack(R, N, 8.7, 1), [
+      { b: 'fabric2', w: wr(0.34, 0.15, 0.66, { hiY: 0.30 }), tx: 3600 }
+    ], 150);
 
     this.B.cylinder = combo('cylinder', K.cylinder(R), [
       { b: 'ochre', w: wr(0.30, 0.26, 0.40, { hiY: 1.4 }), tx: 1000 },
@@ -4522,7 +4586,12 @@
     // A bag is laid as a STRETCHER - long axis along the run - so the pitch is
     // the bag's own length plus a slump allowance, not an arbitrary number.
     var yaw = Math.atan2(ux, uz) + Math.PI * 0.5;
-    var per = 0.40;
+    // 0.375 rather than 0.40, and a course height of 0.86 x bagH: the bags now
+    // carry a bedding spread at the bottom, so nesting them slightly closes the
+    // joints and DEEPENS the interstitial shadow instead of leaving a lit gap
+    // between every pair. That lattice is what makes a stack of bags read as a
+    // wall rather than as a grid of identical objects.
+    var per = 0.375;
     var n = Math.max(2, Math.round(len / per));
     var baseY = this._ground((x0 + x1) * 0.5, (z0 + z1) * 0.5);
     for (var c = 0; c < courses; c++) {
@@ -4535,10 +4604,13 @@
         if (t > 1.02) continue;
         var px = x0 + dx * t + R.gaussian(0, 0.035);
         var pz = z0 + dz * t + R.gaussian(0, 0.035);
-        this._drop(this.B.sack, px, pz, {
-          r: 0.15, y: baseY + c * bagH + R.range(-0.010, 0.010),
-          yaw: yaw + R.gaussian(0, 0.15), tilt: 0.05,
-          scale: R.range(0.94, 1.10), sy: R.range(0.88, 1.08),
+        // alternate the two lots on a 3-cycle offset per course, so neither the
+        // colour nor the geometry falls into a stripe
+        var bat = (((i * 2 + c * 5) % 3) === 1) ? this.B.sackB : this.B.sack;
+        this._drop(bat, px, pz, {
+          r: 0.15, y: baseY + c * bagH * 0.90 + R.range(-0.012, 0.012),
+          yaw: yaw + R.gaussian(0, 0.17), tilt: 0.06,
+          scale: R.range(0.92, 1.12), sy: R.range(0.86, 1.10),
           noClear: true, halo: c === 0, dry: true, lens: true, stack: c > 0
         });
       }

@@ -80,7 +80,13 @@
 //   anchors.reactor     { centre, bioR, vesselR, bioTop, vesselTop, domeTop,
 //                         platR0, platR1, bridges[], gantryY, gantryR0/R1,
 //                         craneY, craneX }
-//   anchors.lower       { floorY, waterY, centre, ring[], stair, sump }
+//   anchors.lower       { floorY, waterY, centre, ring[], stair, sump,
+//                         wadeable(x,z), exclude[] }   <- READ THE PREDICATE.
+//                         The well rectangle is NOT the pit floor: the operating
+//                         platform annulus, both access bridges and the pit
+//                         stair are all deck at y = 0 inside it, and that is
+//                         about 41% of the rectangle answering a height 4.6 m
+//                         too high through sampleGround.
 //   anchors.lamps       [ { name, kind, pos:Vector3, aim:Vector3, cone } ]
 //   anchors.beacons     [ { pos:Vector3, axis, radius } ]
 //   anchors.spawn       { centre, yaw }
@@ -168,6 +174,12 @@
 
   var UP = new THREE.Vector3(0, 1, 0);
 
+  // Every published capture in this project fires at t = 1.5 s. The alarm sweep
+  // is the one system in the level whose state is a function of time, so the two
+  // beacons that carry a framing solve their phase against this number instead
+  // of taking a random one and hoping. See beacon().
+  var CAPTURE_T = 1.5;
+
   // ---------------------------------------------------------------- surfaces --
   // `uv` is world-metres -> uv for the post-merge Geo.worldUV pass. `wear: true`
   // asks materials.js for the VERTEX WEAR shader (white = pristine, R grime,
@@ -200,7 +212,7 @@
     // library's painted_metal is an ENAMEL - its own metalness channel keeps the
     // dielectric film dielectric and only the chips conductive - which is what
     // makes it safe on a level whose environment probe is nearly black.
-    // THE ENAMEL. Three bases were tried and the reasons are worth keeping.
+    // THE ENAMEL. Four bases were tried and the reasons are worth keeping.
     // `paint_blue` is metal 0.55, and on a sealed level with a near-zero
     // environment probe that deletes half the diffuse and gives it nothing back
     // - every console, cabinet and door leaf rendered as a black silhouette.
@@ -208,15 +220,44 @@
     // blotch on a 1.5 m console. `plastic` is metal 0 and uv-mapped, but
     // gun_polymer's sheet is a close-range weapon texture and at any density
     // that hid the blotching it printed as a visible repeating damask.
-    // structural_steel is what a console case actually is: metal 0.06, so it
-    // cannot go black; STOCHASTICALLY tiled, so it cannot repeat; and its
-    // colour is made here rather than taken from the library.
-    hull_paint:  { uv: 1.85, cast: true,  recv: true,  wear: false,
-                   base: 'structural_steel', col: 0x7f8c8a, rough: 0.55, metal: 0.06 },
-    // Structural steel. metal 0.06 in the library, so gantries and handrails
-    // never go black under a dead probe - they are the level's silhouette.
-    steel:       { uv: 0.36, cast: true,  recv: true,  wear: false,
-                   base: 'structural_steel', col: 0x6a6e72, rough: 0.62, metal: 0.10 },
+    //
+    // `structural_steel` was the fourth and it was WRONG for a reason nothing in
+    // its def says out loud: it declares texAlt 'deck_plate', textures.js has no
+    // structural_steel recipe (RECIPES has no such key, and `names` does not
+    // list it), so materials.js's _texName silently serves DIAMOND TREAD. Every
+    // console fascia, cabinet, door leaf, crane girder and batten housing in the
+    // facility was wearing chequer plate, which at hull_paint's density printed
+    // as a herringbone weave with orange flecks - visibly tiling panel to panel
+    // across the status wall. The defect was a level-side base choice, not a
+    // library gap: `painted_metal` is a real recipe (genPaintedMetal), it is an
+    // ENAMEL whose own metalness channel is ~0 on the paint film and only rises
+    // on the chips, so a 0.9 metal scalar still cannot go black under a dead
+    // probe, and its colour is set here through albedoTarget rather than
+    // inherited. `libOpts` is merged into the materials.js request, so the base
+    // stays the library's calibrated entry and only the anchor moves.
+    hull_paint:  { uv: 4.40, cast: true,  recv: true,  wear: false,
+                   base: 'painted_metal', col: 0x7f8c8a, rough: 0.55, metal: 0.06,
+                   libOpts: { albedoTarget: 0x8b8d84, hue: 0.72 } },
+    // STRUCTURAL steel: handrail, strut, stanchion, stalk, small-section stock.
+    // uv 1.30 x painted_metal's own repeat 1.09 = 1.42 tiles/m, i.e. 0.71 m per
+    // tile. It was 0.36 (2.78 m/tile, the loosest metal in the table by a factor
+    // of two), so a 40 mm rail sampled a sub-tenth window of the macro blotch
+    // field and came out as ONE flat random colour - which is why the five
+    // identical coolant lines photographed cream, rust, cream, rust and yellow.
+    // At 0.71 m/tile a 3 m stanchion sees four tiles of variation along its own
+    // length and the members stop being randomly tinted.
+    steel:       { uv: 1.30, cast: true,  recv: true,  wear: false,
+                   base: 'painted_metal', col: 0x6a6e72, rough: 0.62, metal: 0.10,
+                   libOpts: { albedoTarget: 0x62676c, hue: 0.78 } },
+    // THE VESSEL and its head dome, its stiffeners and its drive standpipes.
+    // A 7.9 m drum needs a PLATE density, not a handrail one: 1.02 x 1.09 =
+    // 1.11 tiles/m, so the barrel gets nine tiles across instead of 2.8 and the
+    // welded courses read as steel rather than as speckled limestone. Kept as a
+    // separate entry from `steel` so the stiffeners share the vessel's density
+    // and stop rendering brighter than the drum they stand on.
+    vessel_steel: { uv: 1.95, cast: true, recv: true,  wear: false,
+                   base: 'painted_metal', col: 0x70747a, rough: 0.58, metal: 0.10,
+                   libOpts: { albedoTarget: 0x60646a, hue: 0.78 } },
     // Corroded pipework, brackets, conduit, the rails the door runs on.
     rust_metal:  { uv: 0.92, cast: true,  recv: true,  wear: false,
                    base: 'rusted_metal', col: 0x76483a, rough: 0.76, metal: 0.55 },
@@ -241,9 +282,17 @@
     // Spalled concrete, fallen ceiling, the collapse in the approach tunnel.
     rubble:      { uv: 0.55, cast: true,  recv: true,  wear: true,
                    base: 'rubble', col: 0x847f75 },
-    // THE FLOOD. See the header - a wet floor, not a water body.
+    // THE FLOOD. See the header - a wet floor, not a water body. wet_concrete is
+    // TRIPLANAR, so the uv above is inert on this one surface and the scale that
+    // actually lands is the def's own 0.5 tiles/m, i.e. a 2 m tile: the flood
+    // was printing full-size slab joints and coarse aggregate and reading as wet
+    // pavement rather than as 58 cm of standing water. triScale 1.15 puts the
+    // period at 0.87 m, which keeps the surface energy (it is the highest in the
+    // level and the one thing holding up 1.5 m from the lens in hero4) while
+    // taking the features below the size the eye reads as paving.
     flood:       { uv: 0.30, cast: false, recv: true,  wear: true,
-                   base: 'wet_concrete', col: 0x2f3336, rough: 0.12 },
+                   base: 'wet_concrete', col: 0x2f3336, rough: 0.12,
+                   libOpts: { triScale: 1.15 } },
     // This file's own alpha-tested signage / staining / stencil atlas.
     decal:       { uv: 1.0, cast: false, recv: true,  wear: false,
                    own: true, keepUV: true },
@@ -261,6 +310,7 @@
     dado_paint:  [0x7c3a2f, 0.72, 0.0],
     hull_paint:  [0x78858a, 0.54, 0.0],
     steel:       [0x5d6167, 0.62, 0.10],
+    vessel_steel: [0x6b6f75, 0.58, 0.10],
     rust_metal:  [0x67402f, 0.80, 0.50],
     grate:       [0x4a4d50, 0.70, 0.28],
     plate_steel: [0x565046, 0.62, 0.20],
@@ -565,8 +615,40 @@
     var dx = x - REAC_CX, dz = z - REAC_CZ;
     return Math.sqrt(dx * dx + dz * dz);
   }
+  // ---------------------------------------------------------------------------
+  // WHERE THE PIT FLOOR ACTUALLY IS.
+  //
+  // anchors.lower published {x0, x1, z0, z1, innerR}: the full 19.2 x 19.2 m
+  // well rectangle with one 5.5 m disc excluded. Of that 368.6 sq m, innerR
+  // removes 100.3, leaving 268.3 that a consumer reads as pit floor - but a
+  // further 81.2 sq m of operating-platform annulus, 13.3 of west bridge, 9.2 of
+  // north bridge and about 7.8 of stair are DECK at y = 0 and were not excluded.
+  // That is ~41% of the advertised pit floor silently answering a height 4.6 m
+  // too high, and props_bunker resolves both _drop and _settle through
+  // sampleGround - so half a pit dressing pass landed on the bridge deck with no
+  // error reported anywhere.
+  //
+  // `wadeable` is the predicate that is true only where pitY genuinely governs.
+  // It is published BOTH as a function on anchors.lower and as explicit
+  // `exclude` rectangles, so a consumer that never reads the predicate at least
+  // has the geometry to test against.
+  // ---------------------------------------------------------------------------
+  function onStair(x, z) {
+    return x >= STAIR_X0 - 0.15 && x <= STAIR_X1 + 0.15 &&
+           z >= STAIR_Z0 - 0.05 && z <= STAIR_Z1 + 0.05;
+  }
+  function wadeableAt(x, z) {
+    if (!inWell(x, z)) return false;
+    if (onStair(x, z)) return false;
+    if (onBridgeAt(x, z)) return false;
+    var d = reacDist(x, z);
+    if (d >= PLAT_R0 - 0.10 && d <= PLAT_R1 + 0.10) return false;
+    if (d <= BIO_R + 0.30) return false;
+    return true;
+  }
+
   // The two bridges from the ring deck onto the operating platform.
-  function onBridge(x, z) {
+  function onBridgeAt(x, z) {
     if (z >= REAC_CZ - BRIDGE_HW_W && z <= REAC_CZ + BRIDGE_HW_W &&
         x >= WELL_X0 - 0.3 && x <= REAC_CX - PLAT_R1 + 0.4) return true;
     if (Math.abs(x - REAC_CX) <= BRIDGE_HW_N && z >= WELL_Z0 - 0.3 &&
@@ -1292,7 +1374,7 @@
   // sealing rebate, six lifting eyes and a rack of dogs down its leading edge.
   // ===========================================================================
   function buildVestibule(L, B, rng, N) {
-    var i, k;
+    var i, k, s;
     var f = function (x, z) { return deckY(x, z, N); };
 
     // ---- floor -------------------------------------------------------------
@@ -1359,66 +1441,213 @@
     L.addCollider(APPR_X0 + 3.4, 1.8, 0, 3.4, 2.4, APPR_HZ, 'rubble');
 
     // ---- THE BLAST DOOR ----------------------------------------------------
+    // The level is NAMED around this object and for four rounds it was a painted
+    // rectangle: chevrons on a flat slab, no dogs you could read, no seal
+    // reveal, no thickness, no operating gear, and two featureless cream tubes
+    // beside it that photographed as rolled paper. A 5 x 4.3 x 1.35 m plug on
+    // floor rails is a MACHINE, and every part of the machine below is a part a
+    // real one has. It costs about 9k triangles against four million spare.
     var dz = DOOR_OPEN;                     // the plug's centre, slid north
+    var dfx = DOOR_X + DOOR_T * 0.5;        // the plug's east (visible) face
+    var dlz = dz - DOOR_W * 0.5;            // the leading (south) edge
     B.paint = 'clad';
     B.dark = 0.12;
-    // the plug: a stepped plug, so the sealing rebate reads at a glance
+    // the plug: three steps, so the sealing rebate reads as a rebate at a glance
     B.box('hull_paint', DOOR_T, DOOR_H, DOOR_W, DOOR_X, DOOR_H * 0.5 - 0.10, dz);
     B.box('hull_paint', DOOR_T - 0.34, DOOR_H - 0.30, DOOR_W + 0.30,
       DOOR_X, DOOR_H * 0.5 - 0.10, dz);
+    B.dark = 0.20;
+    // the sealing land: a proud boss on the face, so the eye gets a second plane
+    B.box('hull_paint', 0.11, DOOR_H - 0.86, DOOR_W - 0.80,
+      dfx + 0.055, DOOR_H * 0.5 - 0.10, dz);
     B.dark = 0;
     B.paint = 'metal';
-    // stiffening ribs across the face
+    // the gasket line round the rebate - a dark, slightly proud rubber bead
+    B.paint = 'cable';
+    for (k = -1; k <= 1; k += 2) {
+      B.box('cable_rub', DOOR_T - 0.40, 0.055, DOOR_W + 0.34, DOOR_X,
+        DOOR_H * 0.5 - 0.10 + k * (DOOR_H - 0.30) * 0.5, dz);
+    }
+    B.box('cable_rub', DOOR_T - 0.40, DOOR_H - 0.30, 0.055, DOOR_X,
+      DOOR_H * 0.5 - 0.10, dz - (DOOR_W + 0.30) * 0.5);
+    B.paint = 'metal';
+    // stiffening ribs across the face, terminating short of the arris
     for (i = 0; i < 5; i++) {
-      B.box('steel', 0.10, DOOR_H - 0.24, 0.13, DOOR_X + DOOR_T * 0.5 + 0.04,
-        DOOR_H * 0.5 - 0.10, dz - DOOR_W * 0.5 + 0.5 + i * ((DOOR_W - 1.0) / 4));
+      B.box('steel', 0.10, DOOR_H - 0.24, 0.13, dfx + 0.04,
+        DOOR_H * 0.5 - 0.10, dlz + 0.5 + i * ((DOOR_W - 1.0) / 4));
     }
-    // the dogs down the leading (south) edge, and their sockets in the jamb
-    for (i = 0; i < 6; i++) {
-      var dy = 0.32 + i * ((DOOR_H - 0.9) / 5);
-      B.cyl('steel', 0.085, 0.085, 0.52, DOOR_X, dy, dz - DOOR_W * 0.5 - 0.12,
-        Math.PI * 0.5, 0, 0, 8);
-      B.cyl('rust_metal', 0.13, 0.13, 0.22, DOOR_X, dy, -DOOR_W * 0.5 - 0.18,
-        Math.PI * 0.5, 0, 0, 8);
+    // ---- THE LOCKING LUGS, seven of them, and their sockets in the jamb -----
+    // Rectangular lugs, not pins: a lug is what a blast plug actually locks with
+    // and it is the one piece of hardware that reads from across the vestibule.
+    for (i = 0; i < 7; i++) {
+      var dy = 0.30 + i * ((DOOR_H - 0.80) / 6);
+      B.paint = 'clad';
+      B.dark = 0.06;
+      B.box('hull_paint', DOOR_T - 0.20, 0.30, 0.44, DOOR_X, dy, dlz - 0.20);
+      B.dark = 0;
+      B.paint = 'metal';
+      // the hardened nose and its retaining pin
+      B.box('steel', DOOR_T - 0.46, 0.20, 0.16, DOOR_X, dy, dlz - 0.48);
+      B.cyl('steel', 0.036, 0.036, DOOR_T - 0.16, DOOR_X, dy + 0.10, dlz - 0.20,
+        0, 0, Math.PI * 0.5, 8);
+      // the matching socket cast into the jamb, with its wear collar
+      B.box('rust_metal', DOOR_T - 0.30, 0.40, 0.26, DOOR_X, dy, -DOOR_W * 0.5 - 0.20);
+      B.cyl('rust_metal', 0.16, 0.16, 0.20, DOOR_X, dy, -DOOR_W * 0.5 - 0.06,
+        Math.PI * 0.5, 0, 0, 10);
     }
+    // the chipped leading arris: bare, bruised steel where the plug lands
+    B.box('rust_metal', DOOR_T + 0.03, DOOR_H - 0.20, 0.075, DOOR_X,
+      DOOR_H * 0.5 - 0.10, dlz + 0.02);
     // lifting eyes on the head
     for (i = 0; i < 3; i++) {
-      B.box('steel', 0.09, 0.22, 0.22, DOOR_X, DOOR_H - 0.06,
-        dz - 1.6 + i * 1.6);
+      B.box('steel', 0.09, 0.22, 0.22, DOOR_X, DOOR_H - 0.06, dz - 1.6 + i * 1.6);
     }
-    // hazard chevrons across the plug face and a radiation placard beside it
-    card(B, CELL.HAZARD, DOOR_X + DOOR_T * 0.5 + 0.03, 1.05, dz, DOOR_W - 0.4, 1.55,
+
+    // ---- THE ROLLER CARRIAGE AND THE RAIL INTERFACE AT THE SILL ------------
+    // Two four-wheel bogies under the plug, sitting ON the rails, with axle
+    // boxes and a scraper. It is what makes a 40-tonne slab believable.
+    for (i = 0; i < 2; i++) {
+      var bgz2 = dz - 1.55 + i * 3.10;
+      B.paint = 'clad';
+      B.dark = 0.24;
+      B.box('hull_paint', DOOR_T - 0.30, 0.34, 1.35, DOOR_X, 0.30, bgz2);
+      B.dark = 0;
+      B.paint = 'metal';
+      for (k = 0; k < 2; k++) {
+        var whz = bgz2 - 0.44 + k * 0.88;
+        for (s = -1; s <= 1; s += 2) {
+          B.cyl('steel', 0.155, 0.155, 0.13, DOOR_X + s * 0.42, 0.155, whz,
+            0, 0, Math.PI * 0.5, 14);
+          B.cyl('rust_metal', 0.055, 0.055, 0.20, DOOR_X + s * 0.42, 0.155, whz,
+            0, 0, Math.PI * 0.5, 8);
+        }
+        B.box('steel', 1.06, 0.10, 0.16, DOOR_X, 0.155, whz);
+      }
+      // the scraper that keeps grit off the rail
+      B.box('rust_metal', 1.10, 0.16, 0.045, DOOR_X, 0.10, bgz2 - 0.72);
+    }
+
+    // ---- THE OPERATING GEAR : rack, pinion, gearbox, motor -----------------
+    // A rack down the plug's head and the drive that engages it, bolted to the
+    // wall over the aperture. A door with no way of moving it is a wall.
+    B.paint = 'metal';
+    B.box('steel', 0.22, 0.16, DOOR_W - 0.30, dfx + 0.10, DOOR_H - 0.28, dz);
+    for (i = 0; i * 0.22 < DOOR_W - 0.40; i++) {
+      B.box('steel', 0.10, 0.13, 0.10, dfx + 0.20, DOOR_H - 0.28,
+        dz - (DOOR_W - 0.40) * 0.5 + i * 0.22);
+    }
+    B.cyl('steel', 0.30, 0.30, 0.20, dfx + 0.30, DOOR_H - 0.16, dlz - 0.55,
+      0, 0, Math.PI * 0.5, 16);
+    B.paint = 'clad';
+    B.dark = 0.16;
+    B.box('hull_paint', 0.62, 0.70, 0.70, dfx + 0.42, DOOR_H + 0.10, dlz - 0.55);
+    B.box('hull_paint', 0.44, 0.44, 0.86, dfx + 0.42, DOOR_H + 0.10, dlz - 1.35);
+    B.dark = 0;
+    B.paint = 'metal';
+    for (i = 0; i < 10; i++) {
+      B.box('steel', 0.46, 0.05, 0.04, dfx + 0.42, DOOR_H + 0.10,
+        dlz - 1.72 + i * 0.075);
+    }
+    B.box('rust_metal', 0.34, 0.26, 0.24, dfx + 0.42, DOOR_H - 0.30, dlz - 1.75);
+    L.addCollider(dfx + 0.42, DOOR_H + 0.10, dlz - 0.95, 0.34, 0.40, 0.95, 'metal');
+
+    // hazard chevrons across the plug face, a data plate and a placard
+    card(B, CELL.HAZARD, dfx + 0.115, 1.05, dz, DOOR_W - 0.86, 1.50,
       'x', 1, tint(0xfff0c0, 0.35));
-    card(B, CELL.HAZARD, DOOR_X + DOOR_T * 0.5 + 0.03, 3.35, dz, DOOR_W - 0.4, 1.55,
+    card(B, CELL.HAZARD, dfx + 0.115, 3.35, dz, DOOR_W - 0.86, 1.50,
       'x', 1, tint(0xfff0c0, 0.35));
-    card(B, CELL.NAME, DOOR_X + DOOR_T * 0.5 + 0.03, 2.30, dz - 0.1, 2.3, 2.3,
+    card(B, CELL.NAME, dfx + 0.118, 2.30, dz - 0.1, 2.2, 2.2,
       'x', 1, tint(0xf0f2ea, 0.4));
+    card(B, CELL.DOOR, dfx + 0.04, 1.35, dz + 2.00, 0.62, 0.62,
+      'x', 1, tint(0xdfe6da, 0.45));
+    card(B, CELL.STENCIL, dfx + 0.04, 0.62, dz + 1.75, 1.10, 0.55,
+      'x', 1, tint(0xe4e8dc, 0.4));
     card(B, CELL.RAD, VEST_X0 - 0.02, 2.55, -DOOR_W * 0.5 - 1.05, 1.5, 1.5,
       'x', 1, tint(0xfff4cc, 0.4));
-    card(B, CELL.WEEP, DOOR_X + DOOR_T * 0.5 + 0.02, 2.6, dz + 1.9, 1.5, 2.9,
+    card(B, CELL.WEEP, dfx + 0.02, 2.6, dz + 1.9, 1.5, 2.9,
       'x', 1, tint(0xc08858, 0.7));
+    // a plate behind the trefoil, so the placard is a fixture and not a card
+    // floating on black
+    B.paint = 'clad';
+    B.dark = 0.10;
+    B.box('hull_paint', 0.06, 1.72, 1.72, VEST_X0 + 0.02, 2.55, -DOOR_W * 0.5 - 1.05);
+    B.dark = 0;
+    B.paint = 'metal';
+    for (i = 0; i < 4; i++) {
+      B.cyl('steel', 0.030, 0.030, 0.05, VEST_X0 - 0.01,
+        2.55 + ((i < 2) ? 0.76 : -0.76), -DOOR_W * 0.5 - 1.05 + ((i % 2) ? 0.76 : -0.76),
+        0, 0, Math.PI * 0.5, 6);
+    }
 
     // the rails the plug runs on, carried right across the pocket
     B.paint = 'metal';
-    for (k = -1; k <= 1; k += 2) {
-      var rz2 = k * (DOOR_W * 0.5 - 0.55);
-      B.box('rust_metal', 0.30, 0.10, DOOR_W + DOOR_OPEN * 2 + 1.0,
-        DOOR_X + k * 0.0, 0.045, DOOR_OPEN * 0.4);
-    }
+    B.box('rust_metal', 0.30, 0.10, DOOR_W + DOOR_OPEN * 2 + 1.0,
+      DOOR_X, 0.045, DOOR_OPEN * 0.4);
     B.box('rust_metal', 0.34, 0.11, DOOR_W + DOOR_OPEN * 2 + 1.2, DOOR_X - 0.42, 0.05, DOOR_OPEN * 0.4);
     B.box('rust_metal', 0.34, 0.11, DOOR_W + DOOR_OPEN * 2 + 1.2, DOOR_X + 0.42, 0.05, DOOR_OPEN * 0.4);
-    // the hydraulic rams, still extended, and their anchor blocks
+
+    // ---- THE HYDRAULIC RAMS, still extended --------------------------------
+    // Rod and barrel are DIFFERENT diameters and different materials, with a
+    // gland nut at the break, a trunnion at the anchor and armoured hoses back
+    // to a power pack on the floor. Without the break they are two tubes with
+    // rounded caps.
     for (i = 0; i < 2; i++) {
       var ry2 = 0.85 + i * 2.35;
       B.paint = 'clad';
-      B.cyl('hull_paint', 0.19, 0.19, 2.20, DOOR_X, ry2, dz - DOOR_W * 0.5 - 2.4,
-        Math.PI * 0.5, 0, 0, 10);
+      B.dark = 0.14;
+      B.cyl('hull_paint', 0.215, 0.215, 2.10, DOOR_X, ry2, dlz - 2.45,
+        Math.PI * 0.5, 0, 0, 14);
+      B.dark = 0;
       B.paint = 'metal';
-      B.cyl('steel', 0.085, 0.085, 2.6, DOOR_X, ry2, dz - DOOR_W * 0.5 - 0.9,
-        Math.PI * 0.5, 0, 0, 8);
-      B.box('rust_metal', 0.55, 0.55, 0.42, DOOR_X, ry2, dz - DOOR_W * 0.5 - 3.6);
-      L.addCollider(DOOR_X, ry2, dz - DOOR_W * 0.5 - 2.6, 0.24, 0.24, 1.4, 'metal');
+      // the gland nut / rod wiper at the barrel mouth
+      B.cyl('steel', 0.245, 0.235, 0.16, DOOR_X, ry2, dlz - 1.34,
+        Math.PI * 0.5, 0, 0, 14);
+      for (k = 0; k < 8; k++) {
+        var ga = k / 8 * Math.PI * 2;
+        B.cyl('steel', 0.022, 0.022, 0.05, DOOR_X + Math.cos(ga) * 0.20,
+          ry2 + Math.sin(ga) * 0.20, dlz - 1.26, Math.PI * 0.5, 0, 0, 6);
+      }
+      // the chromed rod: a smaller, smoother, brighter cylinder
+      B.cyl('steel', 0.105, 0.105, 1.26, DOOR_X, ry2, dlz - 0.63,
+        Math.PI * 0.5, 0, 0, 14);
+      // the clevis at the plug and the trunnion at the anchor
+      B.box('steel', 0.10, 0.34, 0.28, DOOR_X, ry2, dlz - 0.08);
+      B.cyl('steel', 0.055, 0.055, 0.44, DOOR_X, ry2, dlz - 0.08,
+        0, 0, Math.PI * 0.5, 8);
+      B.cyl('steel', 0.075, 0.075, 0.62, DOOR_X, ry2, dlz - 3.52,
+        0, 0, Math.PI * 0.5, 10);
+      B.box('rust_metal', 0.55, 0.55, 0.42, DOOR_X, ry2, dlz - 3.60);
+      // two armoured hoses, sagging back to the power pack
+      B.paint = 'cable';
+      for (k = -1; k <= 1; k += 2) {
+        var prevH = null;
+        for (var q2 = 0; q2 <= 6; q2++) {
+          var tq = q2 / 6;
+          var hx3 = DOOR_X + k * 0.20;
+          var hy3 = ry2 - 0.30 - Math.sin(tq * Math.PI) * 0.30 - tq * (ry2 - 0.55);
+          var hz3 = dlz - 2.95 - tq * 1.35;
+          if (prevH) B.pipe('cable_rub', prevH[0], prevH[1], prevH[2], hx3, hy3, hz3, 0.034, 6);
+          prevH = [hx3, hy3, hz3];
+        }
+      }
+      B.paint = 'metal';
+      L.addCollider(DOOR_X, ry2, dlz - 2.5, 0.24, 0.24, 1.4, 'metal');
     }
+    // the power pack the hoses run to
+    B.paint = 'clad';
+    B.dark = 0.18;
+    B.box('hull_paint', 0.95, 1.05, 1.55, DOOR_X, 0.52, dlz - 4.45);
+    B.dark = 0;
+    B.paint = 'metal';
+    for (i = 0; i < 7; i++) {
+      B.box('steel', 0.03, 0.62, 0.055, DOOR_X + 0.49, 0.62, dlz - 5.05 + i * 0.16);
+    }
+    B.cyl('rust_metal', 0.20, 0.20, 0.55, DOOR_X - 0.10, 1.30, dlz - 4.45, 0, 0, 0, 12);
+    B.box('steel', 0.30, 0.10, 0.30, DOOR_X - 0.10, 1.62, dlz - 4.45);
+    card(B, CELL.STENCIL, DOOR_X + 0.50, 0.72, dlz - 4.45, 1.00, 0.50, 'x', 1,
+      tint(0xe4e8dc, 0.4));
+    L.addCollider(DOOR_X, 0.52, dlz - 4.45, 0.48, 0.52, 0.78, 'metal');
+
     // the plug's collider, and the jamb reveal it seals against
     L.addCollider(DOOR_X, DOOR_H * 0.5 - 0.10, dz, DOOR_T * 0.5, DOOR_H * 0.5 + 0.10,
       DOOR_W * 0.5, 'metal');
@@ -1689,9 +1918,13 @@
 
   // The console rows. Published as anchors so props can put a chair, a mug and a
   // fallen binder against a console that actually exists.
+  // `face` -1 means the operator stands NORTH of the unit, i.e. the fascia and
+  // the tubes point SOUTH. The near row faces south and the far row faces north,
+  // so the two of them enclose a real operating well between them and any
+  // standpoint in the room sees instrument faces rather than nine box backs.
   var CTL_ROWS = [
-    { z: 8.30, x0: -28.20, n: 5, w: 1.62 },
-    { z: 11.70, x0: -27.40, n: 4, w: 1.62 }
+    { z: 8.30, x0: -28.20, n: 5, w: 1.62, face: -1 },
+    { z: 11.70, x0: -27.40, n: 4, w: 1.62, face: 1 }
   ];
 
   // ===========================================================================
@@ -1853,7 +2086,7 @@
         var cx2 = row.x0 + i * row.w;
         var cz2 = row.z;
         var lean = (r === 0 && i === 2) ? 0.05 : 0;   // one unit shoved out of line
-        buildConsole(L, B, rng, N, cx2, cz2 + lean, row.w - 0.06, (r * 7 + i));
+        buildConsole(L, B, rng, N, cx2, cz2 + lean, row.w - 0.06, (r * 7 + i), row.face);
       }
     }
     // equipment racks down the west wall
@@ -1931,29 +2164,105 @@
     card(B, CELL.SOOT, -17.2, CTL_FLOOR + 0.017, 8.0, 5.0, 4.4, 'y', 1, null);
   }
 
-  // One operator console: pedestal, sloped switch fascia, a CRT bay above with
-  // two tubes in it. `seed` decides which tubes are alive - three in the room
-  // still are, and they are the only warm chroma in the interior framing.
-  function buildConsole(L, B, rng, N, cx, cz, w, seed) {
+  // One operator console: plinth with a shadow gap, louvred case, a bezelled
+  // sloped fascia carrying toggles, rotaries and two round meters, and a CRT bay
+  // above with two tubes in it. `seed` decides which tubes are alive - three in
+  // the room still are, and they are the only warm chroma in the interior.
+  //
+  // `face` is +1 for a console whose operator stands to the SOUTH of it and -1
+  // for one whose operator stands to the NORTH; the whole unit mirrors in z.
+  // Both rows used to be +1, which put every operator in the room with his back
+  // to the status wall and meant the only standpoint that could see the wall saw
+  // nothing but nine identical box backs. A real control room is a HORSESHOE and
+  // this file's own comment already claimed it was one.
+  function buildConsole(L, B, rng, N, cx, cz, w, seed, face) {
     var y0 = CTL_FLOOR;
-    var i;
+    var i, k;
+    var F = (face < 0) ? -1 : 1;
     B.paint = 'clad';
     B.dark = 0.14;
+    // ---- THE PLINTH, with a real shadow gap --------------------------------
+    // The case stands 60 mm proud of a set-back plinth. That gap is the single
+    // cheapest thing that stops a console being a prism: it puts a dark line
+    // under the whole unit that reads at any distance and in any light.
+    B.dark = 0.40;
+    B.box('hull_paint', w - 0.16, 0.085, 0.74, cx, y0 + 0.042, cz);
+    B.dark = 0.14;
     // pedestal + kick recess
-    B.box('hull_paint', w, 0.72, 0.86, cx, y0 + 0.40, cz);
-    B.box('hull_paint', w - 0.12, 0.10, 0.72, cx, y0 + 0.05, cz);
-    // worktop
-    B.dark = 0.26;
-    B.box('hull_paint', w + 0.06, 0.055, 0.94, cx, y0 + 0.79, cz);
+    B.box('hull_paint', w, 0.62, 0.86, cx, y0 + 0.415, cz);
+    B.dark = 0.30;
+    B.box('hull_paint', w - 0.10, 0.075, 0.80, cx, y0 + 0.098, cz);
+    B.dark = 0.14;
+    // ventilation louvres in the case side and a carrying handle
+    B.paint = 'metal';
+    for (i = 0; i < 6; i++) {
+      B.box('steel', 0.02, 0.030, 0.50, cx + w * 0.5 + 0.005, y0 + 0.30 + i * 0.070, cz);
+      B.box('steel', 0.02, 0.030, 0.50, cx - w * 0.5 - 0.005, y0 + 0.30 + i * 0.070, cz);
+    }
+    B.box('steel', 0.055, 0.10, 0.24, cx + w * 0.5 + 0.03, y0 + 0.62, cz - F * 0.24);
+    // the door of the lower cabinet, with its hinges and its quarter-turn lock
+    B.paint = 'clad';
+    B.dark = 0.22;
+    B.box('hull_paint', w - 0.14, 0.46, 0.035, cx, y0 + 0.42, cz + F * 0.445);
     B.dark = 0;
     B.paint = 'metal';
-    // the sloped fascia of switches and lamps
+    for (i = 0; i < 2; i++) {
+      B.box('steel', 0.05, 0.10, 0.045, cx - w * 0.5 + 0.10, y0 + 0.26 + i * 0.32, cz + F * 0.455);
+    }
+    B.cyl('steel', 0.030, 0.030, 0.035, cx + w * 0.5 - 0.14, y0 + 0.42, cz + F * 0.468,
+      Math.PI * 0.5, 0, 0, 8);
     B.paint = 'clad';
-    B.boxR('panel_bake', w - 0.08, 0.34, 0.05, cx, y0 + 0.94, cz + 0.30, -0.62, 0, 0);
+    B.dark = 0.14;
+    // worktop with a nosing lip
+    B.dark = 0.26;
+    B.box('hull_paint', w + 0.06, 0.055, 0.94, cx, y0 + 0.79, cz);
+    B.dark = 0.34;
+    B.box('hull_paint', w + 0.08, 0.038, 0.045, cx, y0 + 0.755, cz + F * 0.47);
+    B.dark = 0;
     B.paint = 'metal';
+    // ---- THE SLOPED FASCIA, in a bezel -------------------------------------
+    // The panel is now RECESSED into a frame rather than laid on the case: the
+    // four bezel members are what give the sloped face an edge highlight, and an
+    // edge highlight is most of what says "instrument" under a small source.
+    B.paint = 'clad';
+    B.boxR('panel_bake', w - 0.16, 0.30, 0.035, cx, y0 + 0.94, cz + F * 0.298, F * -0.62, 0, 0);
+    B.paint = 'metal';
+    B.boxR('steel', w + 0.02, 0.045, 0.055, cx, y0 + 1.055, cz + F * 0.245, F * -0.62, 0, 0);
+    B.boxR('steel', w + 0.02, 0.045, 0.055, cx, y0 + 0.828, cz + F * 0.375, F * -0.62, 0, 0);
+    B.boxR('steel', 0.05, 0.36, 0.055, cx - w * 0.5, y0 + 0.94, cz + F * 0.310, F * -0.62, 0, 0);
+    B.boxR('steel', 0.05, 0.36, 0.055, cx + w * 0.5, y0 + 0.94, cz + F * 0.310, F * -0.62, 0, 0);
+    // toggle switches in two banks, with their guards
     for (i = 0; i < 9; i++) {
       var sx = cx - w * 0.42 + i * (w * 0.84 / 8);
-      B.boxR('steel', 0.028, 0.075, 0.028, sx, y0 + 0.99, cz + 0.245, -0.62, 0, 0);
+      B.boxR('steel', 0.028, 0.075, 0.028, sx, y0 + 0.99, cz + F * 0.245, F * -0.62, 0, 0);
+      B.cyl('steel', 0.026, 0.030, 0.020, sx, y0 + 0.972, cz + F * 0.258, F * -0.62 + F * Math.PI * 0.5, 0, 0, 8);
+    }
+    // ---- ROTARY SWITCHES and a METER CLUSTER -------------------------------
+    // Three rotaries with pointer flags and two round meters in chromed bezels.
+    // A cold-war operator console without a single round instrument on it is
+    // the box-standing-in-for-an-object failure with a slope cut on the top.
+    for (i = 0; i < 3; i++) {
+      var kx = cx - w * 0.30 + i * (w * 0.30);
+      B.cyl('steel', 0.052, 0.058, 0.026, kx, y0 + 0.905, cz + F * 0.352,
+        F * -0.62 + F * Math.PI * 0.5, 0, 0, 12);
+      B.paint = 'clad';
+      B.dark = 0.30;
+      B.cyl('panel_bake', 0.036, 0.040, 0.048, kx, y0 + 0.913, cz + F * 0.362,
+        F * -0.62 + F * Math.PI * 0.5, 0, 0, 10);
+      B.dark = 0;
+      B.paint = 'metal';
+      B.boxR('steel', 0.014, 0.055, 0.030, kx, y0 + 0.930, cz + F * 0.372, F * -0.62, 0, 0);
+    }
+    for (i = 0; i < 2; i++) {
+      var mx = cx - w * 0.24 + i * (w * 0.48);
+      B.cyl('steel', 0.072, 0.078, 0.034, mx, y0 + 1.020, cz + F * 0.212,
+        F * -0.62 + F * Math.PI * 0.5, 0, 0, 14);
+      B.paint = 'glass';
+      B.cyl('glass_dirty', 0.058, 0.058, 0.012, mx, y0 + 1.030, cz + F * 0.226,
+        F * -0.62 + F * Math.PI * 0.5, 0, 0, 12);
+      B.paint = 'metal';
+      B.boxR('steel', 0.010, 0.050, 0.008, mx, y0 + 1.038, cz + F * 0.232,
+        F * -0.62, 0, 0.6 + i * 0.9);
     }
     var PILOT = [0xff3a18, 0xffb437, 0x8fe37a, 0xff3a18, 0xffb437,
                  0x8fe37a, 0xff8a20, 0xff3a18];
@@ -1961,48 +2270,57 @@
       var lx = cx - w * 0.40 + i * (w * 0.80 / 7);
       var on = ((seed * 5 + i * 3) % 4) !== 0;
       B.paint = 'metal';
-      B.boxR('steel', 0.036, 0.036, 0.022, lx, y0 + 0.885, cz + 0.29, -0.62, 0, 0);
+      B.boxR('steel', 0.036, 0.036, 0.022, lx, y0 + 0.885, cz + F * 0.29, F * -0.62, 0, 0);
       if (on) {
-        emitBox(L, lx, y0 + 0.878, cz + 0.302, 0.028, 0.028, 0.014, 0,
-          PILOT[i], 1.15, ((seed + i) % 5 === 0) ? 'crt' : 'steady', -0.62);
+        emitBox(L, lx, y0 + 0.878, cz + F * 0.302, 0.028, 0.028, 0.014, 0,
+          PILOT[i], 1.15, ((seed + i) % 5 === 0) ? 'crt' : 'steady', F * -0.62);
       }
     }
-    // the CRT bay
+    // the CRT bay, in a bezel of its own with a capping rail and a label strip
     B.paint = 'clad';
     B.dark = 0.20;
-    B.box('hull_paint', w, 1.02, 0.62, cx, y0 + 1.36, cz - 0.20);
+    B.box('hull_paint', w, 1.02, 0.62, cx, y0 + 1.36, cz - F * 0.20);
     B.dark = 0;
+    B.paint = 'metal';
+    B.box('steel', w + 0.045, 0.055, 0.66, cx, y0 + 1.885, cz - F * 0.20);
+    B.box('steel', w + 0.03, 0.045, 0.045, cx, y0 + 1.845, cz + F * 0.10);
+    B.box('steel', w + 0.03, 0.045, 0.045, cx, y0 + 0.885, cz + F * 0.10);
+    for (k = -1; k <= 1; k += 2) {
+      B.box('steel', 0.045, 1.02, 0.045, cx + k * (w * 0.5 + 0.012), y0 + 1.36, cz + F * 0.10);
+    }
+    B.paint = 'clad';
+    B.box('panel_bake', w - 0.20, 0.075, 0.02, cx, y0 + 1.795, cz + F * 0.115);
     B.paint = 'metal';
     for (i = 0; i < 2; i++) {
       var tx = cx - w * 0.24 + i * (w * 0.48);
       var live = ((seed * 3 + i * 5) % 7) === 1;
       B.paint = 'clad';
       B.dark = 0.34;
-      B.box('hull_paint', 0.50, 0.44, 0.50, tx, y0 + 1.46, cz - 0.22);
+      B.box('hull_paint', 0.50, 0.44, 0.50, tx, y0 + 1.46, cz - F * 0.22);
       B.dark = 0;
       B.paint = 'metal';
       // the tube face, sunk into its bezel
       B.paint = 'glass';
       B.dark = live ? 0.0 : 0.62;
-      B.box('glass_dirty', 0.40, 0.34, 0.035, tx, y0 + 1.46, cz + 0.055);
+      B.box('glass_dirty', 0.40, 0.34, 0.035, tx, y0 + 1.46, cz + F * 0.055);
       B.dark = 0;
       B.paint = 'metal';
       if (live) {
-        card(B, CELL.CRT, tx, y0 + 1.46, cz + 0.082, 0.38, 0.32, 'z', 1, null);
-        L.crtFaces.push({ x: tx, y: y0 + 1.46, z: cz + 0.09, w: 0.38, h: 0.32 });
+        card(B, CELL.CRT, tx, y0 + 1.46, cz + F * 0.082, 0.38, 0.32, 'z', F, null);
+        L.crtFaces.push({ x: tx, y: y0 + 1.46, z: cz + F * 0.09, w: 0.38, h: 0.32 });
       } else {
-        card(B, CELL.CRT, tx, y0 + 1.46, cz + 0.082, 0.38, 0.32, 'z', 1,
+        card(B, CELL.CRT, tx, y0 + 1.46, cz + F * 0.082, 0.38, 0.32, 'z', F,
           tint(0x4a4e50, 0.95));
       }
     }
     B.paint = 'metal';
-    B.box('steel', w - 0.10, 0.06, 0.05, cx, y0 + 0.845, cz + 0.455);
-    emitBox(L, cx, y0 + 0.818, cz + 0.470, w - 0.16, 0.026, 0.030, 0,
+    B.box('steel', w - 0.10, 0.06, 0.05, cx, y0 + 0.845, cz + F * 0.455);
+    emitBox(L, cx, y0 + 0.818, cz + F * 0.470, w - 0.16, 0.026, 0.030, 0,
       0xffdcb0, ((seed * 7) % 6 === 0) ? 0.0 : 0.86,
       ((seed * 7) % 6 === 0) ? 'dying' : 'emerg');
     L.addCollider(cx, y0 + 0.45, cz, w * 0.5, 0.45, 0.48, 'metal');
-    L.addCollider(cx, y0 + 1.36, cz - 0.20, w * 0.5, 0.52, 0.32, 'metal');
-    L.consoles.push({ x: cx, y: y0, z: cz, w: w });
+    L.addCollider(cx, y0 + 1.36, cz - F * 0.20, w * 0.5, 0.52, 0.32, 'metal');
+    L.consoles.push({ x: cx, y: y0, z: cz, w: w, face: F });
   }
 
   // ===========================================================================
@@ -2278,27 +2596,46 @@
     // the barrel shades instead of mirroring.
     B.paint = 'clad';
     B.dark = 0.10;
-    B.add('steel', revolveY(vesProf, REAC_CX, REAC_CZ, 44, 0, Math.PI * 2, false));
+    B.add('vessel_steel', revolveY(vesProf, REAC_CX, REAC_CZ, 56, 0, Math.PI * 2, false));
     B.dark = 0;
     B.paint = 'metal';
-    // vertical stiffeners on the barrel so a 4 m cylinder is not a smooth tube
+    // vertical stiffeners on the barrel so a 4 m cylinder is not a smooth tube.
+    // These live in the VESSEL bucket, not the structural one: on `steel`'s old
+    // 2.78 m tile each 0.09 x 3.30 box sampled a different corner of the macro
+    // field and the twenty-two of them rendered BRIGHTER than the drum they
+    // stand on, which is backwards for a rib on a diffusely lit barrel and read
+    // as painted stripes round the vessel.
     for (i = 0; i < 22; i++) {
       var va = i / 22 * Math.PI * 2;
-      B.boxR('steel', 0.09, 3.30, 0.17,
+      B.boxR('vessel_steel', 0.09, 3.30, 0.17,
         REAC_CX + Math.cos(va) * (VES_R + 0.05), 3.65,
         REAC_CZ + Math.sin(va) * (VES_R + 0.05), 0, -va, 0);
     }
-    // the control-rod drive stalks and the service bridge over them
+    buildVesselDetail(L, B, rng, N);
+    // the control-rod drive stalks and the service bridge over them. 14 segments,
+    // not 8: at hero1 range an 8-sided 85 mm tube shows a polygonal silhouette
+    // against a lit dome, and twenty-six of them do it in unison. Each stalk now
+    // gets a STANDPIPE COLLAR where it penetrates the head - a flanged, bolted
+    // nozzle - because without one they read as candles pushed into a cake.
     B.paint = 'metal';
     for (i = 0; i < 26; i++) {
       var sa = (i / 26) * Math.PI * 2 + 0.12;
       var sr = (i % 3 === 0) ? 0.9 : ((i % 3 === 1) ? 1.9 : 2.8);
       var sx2 = REAC_CX + Math.cos(sa) * sr, sz2 = REAC_CZ + Math.sin(sa) * sr;
       var sh = STALK_TOP - DOME_TOP - (sr * 0.10);
-      B.cyl('steel', 0.085, 0.10, sh, sx2,
-        DOME_TOP - 0.25 + sh * 0.5 - Math.pow(sr / 3.2, 2) * 0.9, sz2, 0, 0, 0, 8);
-      B.box('rust_metal', 0.18, 0.10, 0.18, sx2,
-        DOME_TOP - 0.25 + sh - Math.pow(sr / 3.2, 2) * 0.9, sz2);
+      var sBase = DOME_TOP - 0.25 - Math.pow(sr / 3.2, 2) * 0.9;
+      B.cyl('vessel_steel', 0.085, 0.10, sh, sx2, sBase + sh * 0.5, sz2, 0, 0, 0, 14);
+      // the collar: a raised standpipe, a flange and a ring of studs
+      B.cyl('vessel_steel', 0.155, 0.175, 0.26, sx2, sBase + 0.13, sz2, 0, 0, 0, 14);
+      B.cyl('vessel_steel', 0.225, 0.225, 0.045, sx2, sBase + 0.27, sz2, 0, 0, 0, 14);
+      for (k = 0; k < 6; k++) {
+        var ka = k / 6 * Math.PI * 2 + sa;
+        B.cyl('vessel_steel', 0.021, 0.021, 0.045, sx2 + Math.cos(ka) * 0.196,
+          sBase + 0.315, sz2 + Math.sin(ka) * 0.196, 0, 0, 0, 6);
+      }
+      // the drive head itself, with its position indicator can
+      B.box('rust_metal', 0.18, 0.10, 0.18, sx2, sBase + sh, sz2);
+      B.cyl('vessel_steel', 0.062, 0.062, 0.19, sx2, sBase + sh + 0.14, sz2, 0, 0, 0, 10);
     }
     B.paint = 'plate';
     B.box('plate_steel', 1.40, 0.05, 7.20, REAC_CX, STALK_TOP + 0.10, REAC_CZ);
@@ -2381,6 +2718,8 @@
       REAC_CX + BRIDGE_HW_N, DECK_Y, REAC_CZ - PLAT_R1 + 0.35);
     L.addCollider(REAC_CX, DECK_Y - 0.14, (WELL_Z0 - 0.2 + REAC_CZ - PLAT_R1 + 0.35) * 0.5,
       BRIDGE_HW_N, 0.14, (REAC_CZ - PLAT_R1 + 0.55 - WELL_Z0) * 0.5, 'metal', true);
+
+    buildPlatformDressing(L, B, rng, N);
 
     // ---- THE COOLANT LINES -------------------------------------------------
     // Four 0.42 m lines on the bridge's north rack, running from the west wall
@@ -2630,6 +2969,303 @@
     B.paint = 'metal';
   }
 
+  // ===========================================================================
+  // THE COMBAT DECK'S MASS.
+  //
+  // The operating-platform annulus is where the firefight happens and it was a
+  // bare grating ring with a handrail: an actor standing on it had nothing to
+  // break his silhouette, nothing to be lit against and nothing to take cover
+  // behind, which is a gameplay-readability failure as much as an art one. The
+  // same argument applies to the west deck band in the signature framing, where
+  // nothing at all occupied the 0.15-0.50 luminance band between the near
+  // grating and the lit vessel, so the vessel read as an object floating in a
+  // void. Waist-to-chest-height plant, placed against the published anchors.
+  // ===========================================================================
+  function instrumentCabinet(L, B, x, z, yaw, w, h, d, seedN) {
+    var i;
+    B.paint = 'clad';
+    B.dark = 0.40;
+    B.boxR('hull_paint', w - 0.14, 0.085, d - 0.12, x, 0.042, z, 0, yaw, 0);
+    B.dark = 0.16;
+    B.boxR('hull_paint', w, h, d, x, 0.085 + h * 0.5, z, 0, yaw, 0);
+    B.dark = 0;
+    B.paint = 'metal';
+    var fx = Math.sin(yaw), fz = Math.cos(yaw);
+    // the door, its hinges, its handle and a mimic strip
+    B.paint = 'clad';
+    B.dark = 0.26;
+    B.boxR('hull_paint', w - 0.12, h - 0.16, 0.03, x + fx * (d * 0.5 + 0.016),
+      0.085 + h * 0.5, z + fz * (d * 0.5 + 0.016), 0, yaw, 0);
+    B.dark = 0;
+    B.paint = 'metal';
+    B.boxR('steel', 0.05, 0.24, 0.05, x + fx * (d * 0.5 + 0.05) - fz * (w * 0.5 - 0.14),
+      0.085 + h * 0.55, z + fz * (d * 0.5 + 0.05) + fx * (w * 0.5 - 0.14), 0, yaw, 0);
+    for (i = 0; i < 3; i++) {
+      B.boxR('steel', 0.06, 0.09, 0.045, x + fx * (d * 0.5 + 0.03) + fz * (w * 0.5 - 0.08),
+        0.20 + i * (h - 0.45) * 0.5, z + fz * (d * 0.5 + 0.03) - fx * (w * 0.5 - 0.08),
+        0, yaw, 0);
+    }
+    // louvres and a top-hat vent, so it is not a smooth box from any side
+    for (i = 0; i < 5; i++) {
+      B.boxR('steel', w - 0.30, 0.028, 0.02, x + fx * (d * 0.5 + 0.033),
+        0.34 + i * 0.075, z + fz * (d * 0.5 + 0.033), 0, yaw, 0);
+    }
+    B.boxR('steel', w * 0.44, 0.10, d * 0.44, x, 0.085 + h + 0.05, z, 0, yaw, 0);
+    // an instrument in the upper door and a stencilled plate
+    B.paint = 'clad';
+    B.dark = 0.30;
+    B.boxR('panel_bake', w * 0.5, 0.26, 0.02, x + fx * (d * 0.5 + 0.035),
+      0.085 + h - 0.30, z + fz * (d * 0.5 + 0.035), 0, yaw, 0);
+    B.dark = 0;
+    B.paint = 'metal';
+    card(B, (seedN % 2) ? CELL.STENCIL : CELL.DOOR,
+      x + fx * (d * 0.5 + 0.05), 0.085 + h * 0.30, z + fz * (d * 0.5 + 0.05),
+      Math.min(w * 0.6, 0.7), 0.36, 'z', 1, tint(0xdfe6da, 0.42),
+      0);
+    L.addCollider(x, 0.085 + h * 0.5, z, w * 0.5, h * 0.5 + 0.05, d * 0.5, 'metal',
+      false, new THREE.Euler(0, yaw, 0, 'YXZ'));
+  }
+
+  function buildPlatformDressing(L, B, rng, N) {
+    var i, k;
+    // ---- on the annulus, clear of both bridge landings ---------------------
+    var RM = (PLAT_R0 + PLAT_R1) * 0.5;
+    var CAB = [2.62, 3.42, 4.55, 5.62, 0.55, 1.20];
+    for (i = 0; i < CAB.length; i++) {
+      var a = CAB[i];
+      var cxx = REAC_CX + Math.cos(a) * RM, czz = REAC_CZ + Math.sin(a) * RM;
+      instrumentCabinet(L, B, cxx, czz, -a + Math.PI * 0.5,
+        0.78 + (i % 3) * 0.16, 1.05 + (i % 2) * 0.42, 0.56, i);
+    }
+    // a two-wheel sack trolley loaded with drums, parked against the inner rail
+    var ta = 3.92;
+    var tx5 = REAC_CX + Math.cos(ta) * (PLAT_R0 + 0.55);
+    var tz5 = REAC_CZ + Math.sin(ta) * (PLAT_R0 + 0.55);
+    B.paint = 'metal';
+    for (k = -1; k <= 1; k += 2) {
+      B.strut('steel', tx5 + Math.sin(ta) * k * 0.24, 0.06, tz5 - Math.cos(ta) * k * 0.24,
+        tx5 + Math.sin(ta) * k * 0.24 - Math.cos(ta) * 0.22, 1.12,
+        tz5 - Math.cos(ta) * k * 0.24 - Math.sin(ta) * 0.22, 0.030, 0.030);
+      B.cyl('steel', 0.13, 0.13, 0.05, tx5 + Math.sin(ta) * k * 0.30, 0.13,
+        tz5 - Math.cos(ta) * k * 0.30, 0, 0, Math.PI * 0.5 + ta, 12);
+    }
+    B.box('steel', 0.52, 0.030, 0.30, tx5 + Math.cos(ta) * 0.14, 0.06, tz5 + Math.sin(ta) * 0.14);
+    B.paint = 'clad';
+    B.dark = 0.18;
+    for (k = 0; k < 2; k++) {
+      B.cyl('hull_paint', 0.20, 0.20, 0.58, tx5 - Math.sin(ta) * 0.16 + k * Math.sin(ta) * 0.32,
+        0.38, tz5 + Math.cos(ta) * 0.16 - k * Math.cos(ta) * 0.32, 0, 0, 0, 14);
+    }
+    B.dark = 0;
+    B.paint = 'metal';
+    L.addCollider(tx5, 0.55, tz5, 0.42, 0.55, 0.42, 'metal');
+    // a hose reel on a stand, and the coil hanging off it
+    var ha = 1.86;
+    var hx4 = REAC_CX + Math.cos(ha) * (PLAT_R1 - 0.55);
+    var hz4 = REAC_CZ + Math.sin(ha) * (PLAT_R1 - 0.55);
+    B.paint = 'metal';
+    B.box('steel', 0.44, 0.055, 0.44, hx4, 0.03, hz4);
+    B.box('steel', 0.09, 0.95, 0.09, hx4, 0.50, hz4);
+    B.cyl('rust_metal', 0.40, 0.40, 0.055, hx4, 1.02, hz4, 0, 0, Math.PI * 0.5, 16);
+    B.cyl('rust_metal', 0.40, 0.40, 0.055, hx4, 1.02, hz4, 0, Math.PI * 0.5, Math.PI * 0.5, 16);
+    B.paint = 'cable';
+    for (i = 0; i < 10; i++) {
+      var qa = i / 10 * Math.PI * 2;
+      B.cyl('cable_rub', 0.30 - i * 0.012, 0.30 - i * 0.012, 0.030,
+        hx4, 1.02, hz4 + (i - 5) * 0.020, 0, 0, Math.PI * 0.5, 14);
+      if (qa < 0) break;
+    }
+    B.paint = 'metal';
+    L.addCollider(hx4, 0.55, hz4, 0.42, 0.55, 0.42, 'metal');
+
+    // ---- the west deck band, flanking the signature sightline ---------------
+    // Deliberately OFF the bridge axis: the west bridge is the frame's leading
+    // line and putting mass on it would trade one defect for a worse one.
+    instrumentCabinet(L, B, 12.55, -3.55, Math.PI * 0.5, 1.05, 1.55, 0.62, 1);
+    instrumentCabinet(L, B, 12.55, -4.75, Math.PI * 0.5, 1.05, 1.28, 0.62, 2);
+    instrumentCabinet(L, B, 12.70, 4.35, -Math.PI * 0.5, 1.10, 1.62, 0.62, 3);
+    instrumentCabinet(L, B, 12.70, 5.55, -Math.PI * 0.5, 1.10, 1.20, 0.62, 4);
+    // a valve station between them: three risers, handwheels and a header
+    B.paint = 'metal';
+    for (i = 0; i < 3; i++) {
+      var vx2 = 12.30, vz2 = -6.30 + i * 0.62;
+      B.pipe('rust_metal', vx2, 0.10, vz2, vx2, 1.42, vz2, 0.085, 10);
+      B.cyl('rust_metal', 0.15, 0.15, 0.30, vx2, 1.05, vz2, 0, 0, 0, 12);
+      B.cyl('rust_metal', 0.24, 0.24, 0.040, vx2 + 0.24, 1.05, vz2, 0, 0, Math.PI * 0.5, 14);
+      B.cyl('rust_metal', 0.045, 0.045, 0.24, vx2 + 0.14, 1.05, vz2, 0, 0, Math.PI * 0.5, 8);
+    }
+    B.pipe('rust_metal', 12.30, 1.42, -6.45, 12.30, 1.42, -4.95, 0.10, 10);
+    L.addCollider(12.30, 0.75, -5.70, 0.30, 0.75, 0.95, 'metal');
+  }
+
+  // A proud half-round weld bead swept round the barrel. A pressure vessel is
+  // rolled plate welded in courses, and the ONE thing that says so at any
+  // distance is the bead standing off the girth seam catching the light. The
+  // revolve profile already stepped the radius at each course join; a step is a
+  // shadow, not a highlight, so the seams simply vanished under a diffuse rig.
+  function weldBead(B, key, cx, cz, r, y, bead, segs) {
+    var prof = [], i;
+    var n = 6;
+    for (i = 0; i <= n; i++) {
+      var a = -Math.PI * 0.5 + (i / n) * Math.PI;
+      prof.push([r + Math.cos(a) * bead, y + Math.sin(a) * bead * 1.25]);
+    }
+    B.add(key, revolveY(prof, cx, cz, segs || 40, 0, Math.PI * 2, false));
+  }
+
+  // ===========================================================================
+  // THE VESSEL'S MANUFACTURED DETAIL.
+  //
+  // The revolve profile implies a welded pressure vessel and builds none of the
+  // evidence: no bead on any girth seam, no studs at the head flange, no manway,
+  // no nozzle penetrations, no access ladder. At 2.2x the barrel was a smooth
+  // drum carrying a random blotch field, which is why the level's hero object
+  // photographed as speckled limestone rather than as steel. All of it goes in
+  // the VESSEL bucket so it shares the drum's texel density.
+  //
+  // Azimuths are chosen against the WEST flank (angle pi), because that is the
+  // face the spine portal, hero1 and the overview all look at. Detail on the
+  // east flank would be honest and invisible.
+  // ===========================================================================
+  function buildVesselDetail(L, B, rng, N) {
+    var i, k;
+    var CX = REAC_CX, CZ = REAC_CZ;
+    B.paint = 'clad';
+    B.dark = 0.10;
+
+    // ---- girth seams: a bead on each course join the profile steps at -------
+    var SEAMS = [2.42, 2.86, 4.40, 4.72];
+    for (i = 0; i < SEAMS.length; i++) {
+      weldBead(B, 'vessel_steel', CX, CZ, VES_R + 0.175, SEAMS[i], 0.036, 44);
+    }
+    // and the two the profile does NOT step at, so the courses are not all the
+    // same height - a vessel is built out of whatever plate width the mill sent
+    weldBead(B, 'vessel_steel', CX, CZ, VES_R + 0.012, 3.62, 0.028, 44);
+    weldBead(B, 'vessel_steel', CX, CZ, VES_R + 0.012, 5.58, 0.028, 44);
+    // the seam where the barrel meets the bioshield collar
+    weldBead(B, 'vessel_steel', CX, CZ, VES_R + 0.012, BIO_TOP + 0.34, 0.030, 44);
+
+    // ---- the head flange: a bolted ring, 44 studs ---------------------------
+    weldBead(B, 'vessel_steel', CX, CZ, VES_R + 0.235, VES_TOP - 0.09, 0.040, 44);
+    B.paint = 'metal';
+    for (i = 0; i < 44; i++) {
+      var fa = i / 44 * Math.PI * 2;
+      var fx = CX + Math.cos(fa) * (VES_R + 0.115);
+      var fz = CZ + Math.sin(fa) * (VES_R + 0.115);
+      B.cyl('vessel_steel', 0.036, 0.040, 0.135, fx, VES_TOP + 0.045, fz, 0, 0, 0, 6);
+      B.cyl('vessel_steel', 0.050, 0.050, 0.030, fx, VES_TOP + 0.125, fz, 0, 0, 0, 6);
+    }
+    // four lifting lugs on the head flange
+    for (i = 0; i < 4; i++) {
+      var la = i / 4 * Math.PI * 2 + 0.78;
+      B.boxR('vessel_steel', 0.10, 0.34, 0.30,
+        CX + Math.cos(la) * (VES_R + 0.24), VES_TOP + 0.16,
+        CZ + Math.sin(la) * (VES_R + 0.24), 0, -la, 0);
+    }
+
+    // ---- THE MANWAY, on the west flank -------------------------------------
+    var mwA = Math.PI + 0.34, mwY = 2.05, mwR = 0.44;
+    B.paint = 'clad';
+    // the raised neck and its flange
+    B.cyl('vessel_steel', mwR + 0.06, mwR + 0.06, 0.22, CX + Math.cos(mwA) * (VES_R + 0.10),
+      mwY, CZ + Math.sin(mwA) * (VES_R + 0.10), Math.PI * 0.5, -mwA, 0, 20);
+    B.cyl('vessel_steel', mwR + 0.16, mwR + 0.16, 0.055, CX + Math.cos(mwA) * (VES_R + 0.20),
+      mwY, CZ + Math.sin(mwA) * (VES_R + 0.20), Math.PI * 0.5, -mwA, 0, 20);
+    // the dished cover, standing 8 cm proud of the flange
+    B.cyl('vessel_steel', mwR + 0.02, mwR + 0.10, 0.11, CX + Math.cos(mwA) * (VES_R + 0.28),
+      mwY, CZ + Math.sin(mwA) * (VES_R + 0.28), Math.PI * 0.5, -mwA, 0, 20);
+    B.paint = 'metal';
+    for (i = 0; i < 16; i++) {
+      var ma = i / 16 * Math.PI * 2;
+      var mu = Math.cos(ma) * (mwR + 0.115), mv = Math.sin(ma) * (mwR + 0.115);
+      // (u along the tangent, v vertical) mapped into world about the azimuth
+      B.cyl('vessel_steel', 0.028, 0.030, 0.09,
+        CX + Math.cos(mwA) * (VES_R + 0.26) - Math.sin(mwA) * mu,
+        mwY + mv, CZ + Math.sin(mwA) * (VES_R + 0.26) + Math.cos(mwA) * mu,
+        Math.PI * 0.5, -mwA, 0, 6);
+    }
+    // the davit the cover swings on, and its pin
+    B.strut('vessel_steel',
+      CX + Math.cos(mwA) * (VES_R + 0.05) - Math.sin(mwA) * (mwR + 0.30), mwY - 0.55,
+      CZ + Math.sin(mwA) * (VES_R + 0.05) + Math.cos(mwA) * (mwR + 0.30),
+      CX + Math.cos(mwA) * (VES_R + 0.05) - Math.sin(mwA) * (mwR + 0.30), mwY + 0.72,
+      CZ + Math.sin(mwA) * (VES_R + 0.05) + Math.cos(mwA) * (mwR + 0.30), 0.085, 0.085);
+    B.strut('vessel_steel',
+      CX + Math.cos(mwA) * (VES_R + 0.05) - Math.sin(mwA) * (mwR + 0.30), mwY + 0.72,
+      CZ + Math.sin(mwA) * (VES_R + 0.05) + Math.cos(mwA) * (mwR + 0.30),
+      CX + Math.cos(mwA) * (VES_R + 0.34), mwY + 0.72, CZ + Math.sin(mwA) * (VES_R + 0.34),
+      0.070, 0.070);
+    card(B, CELL.STENCIL, CX + Math.cos(mwA) * (VES_R + 0.20) - Math.sin(mwA) * 1.05,
+      mwY - 0.05, CZ + Math.sin(mwA) * (VES_R + 0.20) + Math.cos(mwA) * 1.05,
+      0.85, 0.42, 'x', -1, tint(0xe4e8dc, 0.4), 0);
+
+    // ---- three nozzle penetrations, all on the visible arc ------------------
+    var NOZ = [[Math.PI - 0.62, 3.30, 0.30], [Math.PI + 0.92, 4.95, 0.22],
+               [Math.PI - 1.28, 5.62, 0.18]];
+    for (i = 0; i < NOZ.length; i++) {
+      var na = NOZ[i][0], ny2 = NOZ[i][1], nr = NOZ[i][2];
+      B.paint = 'clad';
+      B.cyl('vessel_steel', nr, nr, 0.52, CX + Math.cos(na) * (VES_R + 0.26), ny2,
+        CZ + Math.sin(na) * (VES_R + 0.26), Math.PI * 0.5, -na, 0, 14);
+      B.cyl('vessel_steel', nr + 0.13, nr + 0.13, 0.06, CX + Math.cos(na) * (VES_R + 0.50),
+        ny2, CZ + Math.sin(na) * (VES_R + 0.50), Math.PI * 0.5, -na, 0, 14);
+      B.paint = 'metal';
+      for (k = 0; k < 8; k++) {
+        var ba2 = k / 8 * Math.PI * 2;
+        var bu = Math.cos(ba2) * (nr + 0.085), bv = Math.sin(ba2) * (nr + 0.085);
+        B.cyl('vessel_steel', 0.022, 0.022, 0.075,
+          CX + Math.cos(na) * (VES_R + 0.51) - Math.sin(na) * bu, ny2 + bv,
+          CZ + Math.sin(na) * (VES_R + 0.51) + Math.cos(na) * bu,
+          Math.PI * 0.5, -na, 0, 6);
+      }
+      // the run of pipe leaving it, dropping away out of frame
+      B.paint = 'clad';
+      B.pipe('vessel_steel', CX + Math.cos(na) * (VES_R + 0.52), ny2,
+        CZ + Math.sin(na) * (VES_R + 0.52),
+        CX + Math.cos(na) * (VES_R + 1.55), ny2 - 0.10,
+        CZ + Math.sin(na) * (VES_R + 1.55), nr * 0.86, 12);
+      B.paint = 'metal';
+    }
+
+    // ---- the inspection ladder, bioshield top to head flange ---------------
+    var ldA = Math.PI - 0.30;
+    var ldx = CX + Math.cos(ldA) * (VES_R + 0.22), ldz = CZ + Math.sin(ldA) * (VES_R + 0.22);
+    var tx4 = -Math.sin(ldA), tz4 = Math.cos(ldA);
+    B.paint = 'metal';
+    for (k = -1; k <= 1; k += 2) {
+      B.pipe('vessel_steel', ldx + tx4 * k * 0.22, BIO_TOP + 0.05, ldz + tz4 * k * 0.22,
+        ldx + tx4 * k * 0.22, VES_TOP + 0.30, ldz + tz4 * k * 0.22, 0.026, 6);
+    }
+    var nRung = Math.floor((VES_TOP + 0.30 - BIO_TOP - 0.05) / 0.30);
+    for (i = 0; i <= nRung; i++) {
+      var ry3 = BIO_TOP + 0.20 + i * 0.30;
+      B.pipe('vessel_steel', ldx - tx4 * 0.22, ry3, ldz - tz4 * 0.22,
+        ldx + tx4 * 0.22, ry3, ldz + tz4 * 0.22, 0.017, 5);
+      // the standoff brackets back to the shell, every fourth rung
+      if (i % 4 === 2) {
+        for (k = -1; k <= 1; k += 2) {
+          B.strut('vessel_steel', ldx + tx4 * k * 0.22, ry3, ldz + tz4 * k * 0.22,
+            CX + Math.cos(ldA) * VES_R + tx4 * k * 0.22, ry3,
+            CZ + Math.sin(ldA) * VES_R + tz4 * k * 0.22, 0.040, 0.040);
+        }
+      }
+    }
+    // the safety hoops - a caged ladder is unmistakable at any distance
+    for (i = 0; i < 8; i++) {
+      var hy2 = BIO_TOP + 0.90 + i * 0.72;
+      if (hy2 > VES_TOP) break;
+      var prof2 = [], q;
+      for (q = 0; q <= 9; q++) {
+        var qa = -1.05 + (q / 9) * 2.10;
+        prof2.push([0.36 + Math.cos(qa) * 0.02, hy2 + Math.sin(qa) * 0.02]);
+      }
+      B.add('vessel_steel', revolveY(prof2, ldx - Math.cos(ldA) * 0.34,
+        ldz - Math.sin(ldA) * 0.34, 16, ldA - 1.30, ldA + 1.30, false));
+    }
+    B.dark = 0;
+    B.paint = 'metal';
+  }
+
   // A handrail following a circle, with optional angular gaps where a bridge or
   // a stair lands. Gaps matter: a continuous rail across an access opening reads
   // as a cage and, worse, tells the player the route is closed.
@@ -2780,7 +3416,7 @@
     }
     return emitBox(L, x, y - 0.068, z, len - 0.12, 0.058, 0.175, ry,
       state === 'dying' ? 0xc8dcf0 : 0xd8e6f4,
-      state === 'dying' ? 1.55 : 2.25, state === 'dying' ? 'dying' : 'fluoro');
+      state === 'dying' ? 1.28 : 1.82, state === 'dying' ? 'dying' : 'fluoro');
   }
 
   // A recessed low-level escape marker. Warm, weak, and CONTINUOUS along every
@@ -2821,7 +3457,23 @@
   // are the only lights in the level this file owns rather than publishes, and
   // they are what make the sweep land as light and not just as haze.
   // ---------------------------------------------------------------------------
-  function beacon(L, B, x, y, z, len, gain, key) {
+  // `opt` carries the three things a beacon cannot be given as a constant:
+  //   spotI   the rotating SpotLight's candela, SOLVED against the distance to
+  //           the surface this beacon is meant to bar rather than picked. The
+  //           hall pair were built with len 13.0, so the spot got distance
+  //           13.0*1.15 = 14.95 with decay 2 while the vessel flank it exists to
+  //           sweep sat 13.3 m away - inside the falloff tail and hard against
+  //           the cutoff - and delivered about 0.4 against the hall key's 6.1.
+  //           The signature effect of the whole level measured as ABSENT in its
+  //           own signature framing: saturation on the vessel never moved off
+  //           0.040 across a full revolution.
+  //   aimAt   [x, z] the sweep should be pointing at when the capture fires.
+  //           A signature that only lands on some frames is not a signature; the
+  //           phase is therefore solved so the bar crosses the named object at
+  //           CAPTURE_T, and the rotation is otherwise untouched.
+  //   sweepY  vertical drop of the beam axis over its own length (default 0.26).
+  function beacon(L, B, x, y, z, len, gain, key, opt) {
+    opt = opt || {};
     B.paint = 'metal';
     // the back plate and the pillar it stands on
     B.box('steel', 0.20, 0.30, 0.30, x, y - 0.26, z);
@@ -2840,10 +3492,20 @@
       B.box('steel', 0.022, 0.30, 0.022, x + Math.cos(a) * 0.215, y, z + Math.sin(a) * 0.215);
     }
     emitBox(L, x, y, z, 0.30, 0.185, 0.30, 0, 0xff2410, gain || 2.1, 'beacon');
+    var speed = 2.35 + L.rng.range(-0.25, 0.25);
+    var phase = L.rng.range(0, 6.2832);
+    if (opt.aimAt) {
+      // local +X under a Y rotation of `a` maps to (cos a, 0, -sin a), so the
+      // angle that points the arm at (tx, tz) is atan2(-(tz - z), tx - x).
+      var wa = Math.atan2(-(opt.aimAt[1] - z), opt.aimAt[0] - x);
+      phase = wa - CAPTURE_T * speed;
+    }
     L.sweeps.push({
       x: x, y: y, z: z, len: len || 7.0, gain: gain || 2.1,
-      speed: 2.35 + L.rng.range(-0.25, 0.25),
-      phase: L.rng.range(0, 6.2832), key: !!key
+      speed: speed, phase: phase, key: !!key,
+      spotI: isFinite(opt.spotI) ? opt.spotI : null,
+      spotCone: isFinite(opt.spotCone) ? opt.spotCone : 0.30,
+      drop: isFinite(opt.sweepY) ? opt.sweepY : 0.26
     });
     return L.sweeps.length - 1;
   }
@@ -2930,10 +3592,18 @@
   // keeps the lit-to-unlit ratio inside the ~50:1 any tone curve holds.
   //
   // Ordered by importance, and that ordering is load bearing: lighting.js caps a
-  // declarative level at 24 practicals and truncates the TAIL. Twenty-two
-  // entries are published here; the remaining two slots are deliberately left
-  // free for the two rotating beacon spots this file owns itself, so the total
-  // count in the scene matches what the module would have allowed anyway.
+  // declarative level at MAX_PRACTICALS_RIG = 24 and truncates the TAIL.
+  // EXACTLY TWENTY-FOUR are published below, so there is no headroom and adding
+  // one silently deletes the last entry. (An earlier version of this header
+  // claimed twenty-two with two slots held back for the beacon spots. The
+  // arithmetic was wrong - it was already twenty-four - and the beacon spots are
+  // level-owned THREE.SpotLights that never went through practicalLights in the
+  // first place, so they were never inside that budget to begin with.)
+  //
+  // Same trap on the OTHER published list: lighting.js takes the first
+  // MAX_WINDOWS_RIG = 20 entries of litWindows. This file authors more than
+  // that, so glowCard() queues by priority and flushGlowCards() emits the best
+  // twenty - see the note there.
   // ---------------------------------------------------------------------------
   function buildLighting(L, B, rng, N) {
     var i, k, s;
@@ -2941,11 +3611,26 @@
     var W = L.litWindows;
 
     function lamp(d) { P.push(d); return d; }
-    function glowCard(x, y, z, w, h, kelvin, gain, yaw, tintC) {
-      if (W.length >= 20) return;
-      W.push({ x: x, y: y, z: z, w: w, h: h, kelvin: kelvin, gain: gain,
+
+    // GLOW CARDS ARE A BUDGET, AND IT WAS BEING SPENT FIRST-COME.
+    // lighting.js takes the first MAX_WINDOWS_RIG = 20 entries of litWindows and
+    // silently drops the rest. This file authored twenty-eight in BUILD order -
+    // corridor battens, then the control room, then the vestibule, then the
+    // hall - so the eight that fell off the end were every glow card in the
+    // reactor gallery, the vestibule flood and the plant room, i.e. the sources
+    // in three of the six published framings had no visible bloom at all while
+    // eight corridor battens nobody photographs kept theirs. Queue them with a
+    // priority and emit the best twenty.
+    var WQ = [];
+    function glowCard(x, y, z, w, h, kelvin, gain, yaw, tintC, prio) {
+      WQ.push({ prio: (prio === undefined) ? 5 : prio, seq: WQ.length, d: {
+        x: x, y: y, z: z, w: w, h: h, kelvin: kelvin, gain: gain,
         yaw: yaw || 0, scale: 1.25, tint: tintC || null, tintAmt: 0.55,
-        haloSize: Math.min(w, 1.6) * 1.1 });
+        haloSize: Math.min(w, 1.6) * 1.1 } });
+    }
+    function flushGlowCards() {
+      WQ.sort(function (a, b) { return (b.prio - a.prio) || (a.seq - b.seq); });
+      for (var q = 0; q < WQ.length && W.length < 20; q++) W.push(WQ[q].d);
     }
 
     var FL = new THREE.Color(0.82, 0.90, 1.00);   // cool failing fluorescent
@@ -2958,7 +3643,7 @@
     // rest are dead. The lit ones are deliberately CLUSTERED rather than spread:
     // an evenly failing corridor is just a dim corridor, and what the brief asks
     // for is long dark stretches with light at the ends of them.
-    var SPN_STATE = { 2: 'lit', 3: 'dying', 7: 'lit', 8: 'dying', 10: 'lit',
+    var SPN_STATE = { 2: 'lit', 3: 'dying', 7: 'lit', 8: 'dying', 9: 'lit', 10: 'lit',
       12: 'lit', 13: 'dying', 15: 'lit' };
     for (i = 1; i < 17; i++) {
       var bx = SPN_X0 + i * BEAM_PITCH;
@@ -2966,8 +3651,8 @@
       var st = SPN_STATE[i] || 'dead';
       batten(L, B, bx - 1.3, SPN_CEIL - 0.30, 0, 1.55, 0, st, 0.16);
       if (st !== 'dead') {
-        glowCard(bx - 1.3, SPN_CEIL - 0.40, 0, 1.4, 0.18, 4300, st === 'dying' ? 0.42 : 0.62,
-          0, new THREE.Color(0.86, 0.93, 1.0));
+        glowCard(bx - 1.3, SPN_CEIL - 0.40, 0, 1.4, 0.18, 4300, st === 'dying' ? 0.28 : 0.42,
+          0, new THREE.Color(0.86, 0.93, 1.0), st === 'dying' ? 2 : 4);
       }
     }
     // the continuous escape marker line, both walls, the whole 42 m
@@ -3003,17 +3688,54 @@
     emergStrip(L, B, 5.6, 2.36, -SPN_HZ + 0.10, 2.4, 0, 0.048);
 
     // ======================================================= the beacons =====
-    // Eight of them. The two marked `key` also carry a rotating SpotLight.
-    beacon(L, B, -6.20, 2.22, SPN_HZ - 0.30, 7.0, 2.0, true);   // over the mid door
-    beacon(L, B, -21.5, 2.22, -SPN_HZ + 0.30, 6.0, 1.8, false);
-    beacon(L, B, 4.40, 2.22, -SPN_HZ + 0.30, 6.0, 1.8, false);
-    beacon(L, B, -30.4, 2.22, SPN_HZ - 0.30, 5.6, 1.7, false);
-    beacon(L, B, RG_X0 + 1.05, 5.40, -8.60, 13.0, 2.6, true);   // the reactor hall
-    beacon(L, B, RG_X1 - 1.05, 5.40, 8.60, 12.0, 2.2, false);
+    // Ten of them; three are `key` and carry a rotating SpotLight solved against
+    // the distance to the thing they are meant to bar.
+    //
+    // The corridor pair sweep a 3.9 m corridor, so 34-38 cd puts about 2.5 on a
+    // wall 3.7 m away. The two hall beacons are the level's signature and both
+    // had to MOVE to work at all: the old one at x = 10.05 sat 1.05 m off the
+    // west wall, so any candela high enough to reach the vessel 13.3 m away
+    // burned a hole in the wall behind it - a geometry problem no intensity
+    // solves. Off the wall, the same fitting can do both.
+    beacon(L, B, -6.20, 2.22, SPN_HZ - 0.30, 7.6, 2.0, true,
+      { spotI: 38, spotCone: 0.30, aimAt: [-3.2, -SPN_HZ] });                   // over the mid door
+    beacon(L, B, -21.5, 2.22, -SPN_HZ + 0.30, 6.4, 1.8, false);
+    beacon(L, B, 4.40, 2.22, -SPN_HZ + 0.30, 6.4, 1.8, false);
+    beacon(L, B, -30.4, 2.22, SPN_HZ - 0.30, 5.8, 1.7, false);
+    // THE HALL PAIR. len 19 so the wedge crosses the vessel AND reaches the far
+    // wall instead of dying two metres short of its own subject.
+    beacon(L, B, 12.60, 5.40, -8.60, 19.0, 2.6, true,
+      { spotI: 104, spotCone: 0.44, sweepY: 0.20, aimAt: [REAC_CX - 3.0, REAC_CZ - 2.0] });
+    // and one bracketed under the gantry ring, INSIDE the hero1 frustum at
+    // -36 degrees azimuth and +22 degrees elevation, so the audience sees the
+    // source as well as the bar. Its phase is solved so the bar is crossing the
+    // vessel flank at capture time.
+    beacon(L, B, 16.57, 5.05, -3.47, 11.5, 2.4, true,
+      { spotI: 118, spotCone: 0.36, sweepY: 0.16, aimAt: [REAC_CX, REAC_CZ] });
+    beacon(L, B, RG_X1 - 1.05, 5.40, 8.60, 13.0, 2.2, false);
     beacon(L, B, VEST_X1 - 1.10, 3.90, -VEST_HZ + 0.30, 8.0, 2.2, false);
     beacon(L, B, CTL_X1 - 0.35, 3.05, 12.20, 8.0, 2.0, false);
-    beacon(L, B, 17.20, PIT_Y + 2.30, 6.80, 7.0, 1.9, false);   // in the pit
+    beacon(L, B, 17.20, PIT_Y + 2.30, 6.80, 7.4, 1.9, false);   // in the pit
     beacon(L, B, RG_X1 - 1.05, 6.90, -4.20, 15.0, 2.5, false);  // across the vessel
+    // Glow cards on the four beacons that matter to a framing. The lens is an
+    // emissive drum on an unlit basic material, which gives it a bright core and
+    // no bloom whatever - so from 20 m the level's signature source read as a
+    // 6-pixel red dot. These are the only RED entries in litWindows and they
+    // are what puts the alarm's colour into the establishing frame.
+    for (i = 0; i < L.sweeps.length; i++) {
+      var sw2 = L.sweeps[i];
+      if (!sw2.key && i !== 6 && i !== 9) continue;
+      glowCard(sw2.x, sw2.y, sw2.z, 0.46, 0.34, 1600,
+        sw2.key ? 0.72 : 0.46, 0, RD.clone(), sw2.key ? 12 : 7);
+    }
+    // the mast the hall beacon stands on, and the hanger the gantry one drops
+    // from. A beacon floating 5 m up in clear air is a decal with a light on it.
+    B.paint = 'metal';
+    B.box('steel', 0.16, 5.40, 0.16, 12.60, 2.70, -8.60);
+    B.box('steel', 0.44, 0.10, 0.44, 12.60, 0.06, -8.60);
+    B.strut('steel', 12.60, 4.05, -8.60, 12.60 - 0.62, 5.28, -8.60, 0.07, 0.07);
+    B.pipe('steel', 16.57, GANT_Y - 0.02, -3.47, 16.57, 5.20, -3.47, 0.030, 6);
+    B.box('steel', 0.24, 0.09, 0.24, 16.57, 5.24, -3.47);
 
     // ==================================================== the control room ===
     var CTL_STATE = ['dead', 'lit', 'dying', 'lit', 'dying', 'lit', 'lit', 'dead'];
@@ -3038,7 +3760,7 @@
           cst === 'dying' ? 0xc8dcf0 : 0xd8e6f4, cst === 'dying' ? 0.95 : 1.45,
           cst === 'dying' ? 'dying' : 'fluoro');
         glowCard(tx, 2.88, tz, 1.10, 0.20, 4300, cst === 'dying' ? 0.35 : 0.52, 0,
-          new THREE.Color(0.86, 0.93, 1.0));
+          new THREE.Color(0.86, 0.93, 1.0), cst === 'dying' ? 3 : 6);
       }
     }
     // the status wall's own tubes, behind the three live bays
@@ -3048,14 +3770,14 @@
       emitBox(L, bay.x, bay.y, bay.z + 0.005, bay.w, bay.h, 0.02, 0,
         0xf0e2c4, 0.56, i === 4 ? 'dying' : 'fluoro');
       glowCard(bay.x, bay.y, bay.z - 0.05, bay.w * 0.55, 0.30, 3900, 0.30, 0,
-        new THREE.Color(1.0, 0.94, 0.82));
+        new THREE.Color(1.0, 0.94, 0.82), 8);
     }
     // the live CRTs
     for (i = 0; i < L.crtFaces.length; i++) {
       var cf = L.crtFaces[i];
       emitBox(L, cf.x, cf.y, cf.z, cf.w, cf.h, 0.02, 0, 0xffa63c, 0.85,
         (i % 3 === 1) ? 'crt' : 'steady');
-      if (i < 2) glowCard(cf.x, cf.y, cf.z + 0.02, 0.36, 0.16, 2300, 0.30, 0, AM.clone());
+      if (i < 2) glowCard(cf.x, cf.y, cf.z + 0.02, 0.36, 0.16, 2300, 0.30, 0, AM.clone(), 4);
     }
     // A cove down both side walls at 3.10 m. Same reasoning as the corridor's:
     // eight ceiling panels light the floor and nothing else, and a 16 x 13 m
@@ -3081,14 +3803,14 @@
     // and a batten in the link corridor, so the doorway spills into the spine
     batten(L, B, (LINK_X0 + LINK_X1) * 0.5, 2.30, LINK_Z1 - 0.9, 1.40, Math.PI * 0.5, 'dying', 0.10);
     glowCard((LINK_X0 + LINK_X1) * 0.5, 2.20, LINK_Z1 - 0.9, 1.3, 0.18, 4300, 0.45,
-      Math.PI * 0.5, new THREE.Color(0.86, 0.93, 1.0));
+      Math.PI * 0.5, new THREE.Color(0.86, 0.93, 1.0), 3);
 
     // ===================================================== the vestibule =====
     highBay(L, B, VEST_X0 + 4.2, VEST_CEIL - 0.95, 2.60, 2.4, 'lit');
     highBay(L, B, VEST_X0 + 6.6, VEST_CEIL - 0.95, -3.60, 2.2, 'dying');
     highBay(L, B, VEST_X0 + 10.4, VEST_CEIL - 0.95, 3.40, 0, 'dead');
     glowCard(VEST_X0 + 4.2, VEST_CEIL - 1.18, 2.60, 0.95, 0.26, 4200, 0.55, 0,
-      new THREE.Color(0.88, 0.94, 1.0));
+      new THREE.Color(0.88, 0.94, 1.0), 9);
     for (i = 0; i < 6; i++) {
       var vcx = VEST_X0 + 1.6 + i * 2.15;
       if (vcx > VEST_X1 - 0.8) break;
@@ -3096,7 +3818,7 @@
         B.paint = 'metal';
         B.box('rust_metal', 1.90, 0.09, 0.14, vcx, 3.72, s * (VEST_HZ - 0.16));
         emitBox(L, vcx, 3.765, s * (VEST_HZ - 0.22), 1.70, 0.032, 0.10, 0,
-          0xcfe0f2, (i % 4 === 1) ? 0.0 : 1.35, (i % 4 === 1) ? 'dying' : 'fluoro');
+          0xcfe0f2, (i % 4 === 1) ? 0.0 : 1.00, (i % 4 === 1) ? 'dying' : 'fluoro');
       }
     }
     // a lit reveal round the door aperture itself, so the 2.4 m of concrete the
@@ -3108,9 +3830,9 @@
       emitBox(L, VEST_X0 + 0.20, dvy, -DOOR_W * 0.5 - 0.28, 0.075, 0.030, 0.22, 0,
         0xffd7a4, (i === 2) ? 0.0 : 0.95, (i === 2) ? 'dying' : 'emerg');
     }
-    workLight(L, B, VEST_X0 + 7.6, 3.05, -2.60, DOOR_X, 1.60, DOOR_OPEN * 0.4,
-      0xffd2a0, 3.4, 1.42);
-    glowCard(VEST_X0 + 7.72, 3.05, -2.44, 0.32, 0.24, 3100, 0.60, 0, WK.clone());
+    workLight(L, B, VEST_X0 + 7.0, 3.15, -3.60, DOOR_X + 0.40, 1.45, DOOR_OPEN * 0.05,
+      0xffd2a0, 3.0, 1.52);
+    glowCard(VEST_X0 + 6.86, 3.15, -3.44, 0.32, 0.24, 3100, 0.48, 0, WK.clone(), 10);
     for (i = 0; i < 7; i++) {
       marker(L, B, VEST_X0 + 1.4 + i * 1.7, 0.34, -VEST_HZ + 0.06, 1.45, 0, 0.045);
     }
@@ -3121,7 +3843,7 @@
     // the guard cabin's own light, seen through its glazing
     emitBox(L, VEST_X0 + 5.0, 4.35, VEST_HZ - 1.55, 1.30, 0.05, 0.22, 0, 0xd8e6f4, 1.9, 'fluoro');
     glowCard(VEST_X0 + 5.0, 4.28, VEST_HZ - 3.10, 1.6, 0.28, 4300, 0.45, 0,
-      new THREE.Color(0.86, 0.93, 1.0));
+      new THREE.Color(0.86, 0.93, 1.0), 7);
     // and one lamp down the approach tunnel, so the collapse is not a black hole
     workLight(L, B, VEST_X0 - 4.2, 2.35, 1.40, APPR_X0 + 6.4, 1.2, 0.0, 0xffe0b0, 2.4, 1.60);
 
@@ -3129,7 +3851,7 @@
     batten(L, B, PLT_X0 + 3.0, PLT_CEIL - 0.34, PLT_Z0 + 2.6, 1.60, 0, 'lit', 0.24);
     batten(L, B, PLT_X1 - 2.6, PLT_CEIL - 0.34, PLT_Z1 - 2.4, 1.60, 0, 'dying', 0.24);
     glowCard(PLT_X0 + 3.0, PLT_CEIL - 0.44, PLT_Z0 + 2.6, 1.4, 0.18, 4300, 0.50, 0,
-      new THREE.Color(0.86, 0.93, 1.0));
+      new THREE.Color(0.86, 0.93, 1.0), 5);
     for (i = 0; i < 5; i++) {
       marker(L, B, PLT_X0 + 1.2 + i * 1.9, 0.34, PLT_Z0 + 0.06, 1.55, 0, 0.045);
     }
@@ -3146,7 +3868,7 @@
       highBay(L, B, HB[i][0], RG_CEIL - 1.55, HB[i][1], 2.4, HB[i][2]);
       if (HB[i][2] !== 'dead') {
         glowCard(HB[i][0], RG_CEIL - 1.78, HB[i][1], 0.95, 0.26, 4300,
-          HB[i][2] === 'dying' ? 0.42 : 0.58, 0, new THREE.Color(0.88, 0.94, 1.0));
+          HB[i][2] === 'dying' ? 0.42 : 0.58, 0, new THREE.Color(0.88, 0.94, 1.0), 11);
       }
     }
     // the gantry cove, throwing UP into the coffers
@@ -3229,7 +3951,7 @@
     // pit at the foot of the stair. These are the warm accents in two framings.
     workLight(L, B, RG_X0 + 3.30, 2.95, -3.10, REAC_CX - BIO_R, 1.30, -0.60,
       0xffd2a0, 3.2, 1.44);
-    glowCard(RG_X0 + 3.46, 2.95, -2.94, 0.32, 0.24, 3100, 0.58, 0, WK.clone());
+    glowCard(RG_X0 + 3.46, 2.95, -2.94, 0.32, 0.24, 3100, 0.58, 0, WK.clone(), 10);
     workLight(L, B, 16.30, PIT_Y + 2.05, -7.60, 20.6, PIT_Y + 0.4, -4.2,
       0xffdcae, 2.8, 1.46);
 
@@ -3254,153 +3976,250 @@
     glint(B, 28.4, 6.2, 8.0, 1.30, WC, WATER_Y + 0.013, 'x');
 
     // ========================================================================
-    // THE PRACTICALS.  Twenty-two, most important first.
+    // THE PRACTICALS.  EXACTLY TWENTY-FOUR, most important first.
+    //
+    // The count is not a coincidence and the old header's "twenty-two ... the
+    // remaining two slots deliberately left free for the beacon spots" was
+    // simply wrong arithmetic: 6 reactor + 3 pit + 4 spine + 4 vestibule +
+    // 4 control + 1 plant + 2 wall wash = 24, i.e. the table was already flush
+    // against lighting.js's MAX_PRACTICALS_RIG with zero headroom, the beacon
+    // SpotLights were additional on top rather than inside the budget, and
+    // adding one lamp would have silently deleted bnk_hall_wall_s off the tail.
+    // Headroom was bought by MERGING the four near-identical spine battens
+    // (b/c/d/e, 44-48 cd each, all aimed straight down at DECK_Y) into two wider
+    // wall-aimed fittings, which paid for the two strip-run lights below.
+    //
+    // ---- AND EVERY AIM MOVED. --------------------------------------------
+    // Fifteen of the old twenty-four aimed at DECK_Y, CTL_FLOOR or WATER_Y.
+    // Measured consequence: floor luminance 0.628-0.692 against whole-frame
+    // means of 0.153-0.267, ceilings and upper bands at 0.026-0.034 with 94-98%
+    // of their pixels under L = 0.05 - a 20:1 floor-to-ceiling ratio in rooms
+    // lit entirely by CEILING fittings, which is inverted from how a real room
+    // behaves. It also washed the texture out of the surfaces carrying the most
+    // screen area (hf_rel 0.157-0.169 against the shipped market street's
+    // 0.257). coverage.vertical_imbalance cannot see it: the shared gate only
+    // tests the > 2.5 direction, and these frames measured 0.217 and 0.248.
+    //
+    // A ceiling batten's aim now goes to the OPPOSITE wall between 1.3 and 2.0 m
+    // - which is where the light that describes a space actually lands - and the
+    // room lamps are cut by roughly 40%.
     // ========================================================================
-    // 1-6 : the reactor gallery. These carry the signature framing.
+    // 1-9 : the reactor gallery. These carry the signature framing.
     lamp({ name: 'bnk_reac_key', kind: 'fluoro', pos: [13.6, RG_CEIL - 1.70, -6.4],
-      color: FL.clone(), kelvin: 4300, intensity: 340, distance: 26, cone: 1.00, penumbra: 0.44,
-      dayBase: 1, aimPos: [REAC_CX - 2.0, 3.20, -1.20], fixed: true, halo: 1.5, haloGain: 0.22,
+      color: FL.clone(), kelvin: 4300, intensity: 320, distance: 26, cone: 1.00, penumbra: 0.44,
+      dayBase: 1, aimPos: [REAC_CX - 2.6, 4.10, -1.20], fixed: true, halo: 1.5, haloGain: 0.22,
       bulbR: 0.11, bulbFlat: 0.5, bulbGain: 0.16, beam: 0.20 });
+    // THE PLATFORM RAKE. bnk_reac_key aims at the vessel wall three metres up,
+    // which is scenery: the operating-platform annulus where the firefight
+    // actually happens got nothing but the ambient floor, and the near enemy in
+    // lv_firefight measured 0.468 on his lit side against 0.588 on his shadow
+    // side and 0.446 on the grating under him - a 1:1 inverted key/fill with no
+    // rim, no contact shadow and target-to-background separation of 0.02-0.14
+    // across his whole silhouette. This one is harder, cooler and rakes ACROSS
+    // the annulus at 12 degrees above horizontal, so anything standing on the
+    // platform gets an edge and throws a shadow along the grating.
+    lamp({ name: 'bnk_reac_rake', kind: 'led', pos: [29.90, 3.05, 5.40],
+      color: new THREE.Color(0.82, 0.89, 1.00), kelvin: 5200, intensity: 170,
+      distance: 22, cone: 0.58, penumbra: 0.26,
+      dayBase: 1, aimPos: [REAC_CX - 2.2, 1.05, -2.60], fixed: true, halo: 0.7,
+      haloGain: 0.20, bulbR: 0.07, bulbFlat: 0.3, bulbGain: 0.14, beam: 0.26 });
     lamp({ name: 'bnk_reac_work', kind: 'led', pos: [RG_X0 + 3.30, 2.95, -3.10],
       color: WK.clone(), kelvin: 3100, intensity: 105, distance: 22, cone: 0.72, penumbra: 0.46,
       dayBase: 1, aimPos: [REAC_CX - BIO_R, 1.30, -0.60], fixed: true, halo: 0.8, haloGain: 0.24,
       bulbR: 0.08, bulbFlat: 0.3, bulbGain: 0.14, beam: 0.22 });
-    lamp({ name: 'bnk_reac_deck', kind: 'fluoro', pos: [10.30, 4.60, 3.60],
-      color: FL.clone(), kelvin: 4200, intensity: 110, distance: 16, cone: 1.15, penumbra: 0.50,
-      dayBase: 1, aimPos: [12.0, DECK_Y, 2.40], fixed: true, halo: 0.9, haloGain: 0.20,
-      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.12, beam: 0.14 });
-    lamp({ name: 'bnk_reac_fill', kind: 'fluoro', pos: [33.4, RG_CEIL - 1.70, -6.4],
-      color: FL.clone(), kelvin: 4400, intensity: 300, distance: 26, cone: 1.00, penumbra: 0.46,
-      dayBase: 1, aimPos: [REAC_CX + 2.4, 3.60, 1.40], fixed: true, halo: 1.4, haloGain: 0.22,
+    // WARM, and deliberately the only large warm source in the hall. With both
+    // hall keys cool and the alarm sweep laying red into the shadows, the
+    // establishing frame measured grade_split -0.0233 - the grade inverted,
+    // exactly the failure the metric was added to catch. A tungsten flood on the
+    // east wall is a plausible rig for a facility that has been repaired in a
+    // hurry, and it puts warmth on the vessel's highlight side where the grade
+    // wants it.
+    lamp({ name: 'bnk_reac_fill', kind: 'led', pos: [33.4, RG_CEIL - 1.70, -6.4],
+      color: new THREE.Color(1.00, 0.88, 0.71), kelvin: 3300, intensity: 280,
+      distance: 26, cone: 1.00, penumbra: 0.46,
+      dayBase: 1, aimPos: [REAC_CX + 2.4, 4.40, 1.40], fixed: true, halo: 1.4, haloGain: 0.22,
       bulbR: 0.11, bulbFlat: 0.5, bulbGain: 0.16, beam: 0.20 });
     lamp({ name: 'bnk_reac_north', kind: 'fluoro', pos: [24.0, RG_CEIL - 1.70, -10.4],
-      color: FL.clone(), kelvin: 4300, intensity: 260, distance: 24, cone: 1.05, penumbra: 0.48,
-      dayBase: 1, aimPos: [24.0, 1.20, -6.4], fixed: true, halo: 1.3, haloGain: 0.22,
+      color: FL.clone(), kelvin: 4300, intensity: 230, distance: 24, cone: 1.05, penumbra: 0.48,
+      dayBase: 1, aimPos: [24.0, 5.40, -3.40], fixed: true, halo: 1.3, haloGain: 0.22,
       bulbR: 0.10, bulbFlat: 0.5, bulbGain: 0.14, beam: 0.18 });
+    // the west wall of the hall, washed UP from the deck-band cove. It replaces
+    // bnk_reac_deck, which put 110 cd straight down onto 3 sq m of floor 12 m
+    // from the vessel and lit nothing a framing could use.
+    lamp({ name: 'bnk_reac_westwall', kind: 'fluoro', pos: [RG_X0 + 0.70, 4.55, 2.20],
+      color: FL.clone(), kelvin: 4200, intensity: 66, distance: 18, cone: 1.28, penumbra: 0.62,
+      dayBase: 1, aimPos: [RG_X0 - 0.2, 7.90, 0.60], fixed: true, halo: 0.9, haloGain: 0.18,
+      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.11, beam: 0.16 });
     lamp({ name: 'bnk_gantry', kind: 'fluoro', pos: [REAC_CX, GANT_Y + 0.36, REAC_CZ + GANT_R1 - 0.1],
       color: FL.clone(), kelvin: 4600, intensity: 84, distance: 16, cone: 1.10, penumbra: 0.52,
       dayBase: 1, aimPos: [REAC_CX, RG_CEIL - 0.4, REAC_CZ + 2.0], fixed: true,
       halo: 0.9, haloGain: 0.20, bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.10, beam: 0.32 });
+    lamp({ name: 'bnk_hall_wall_n', kind: 'fluoro', pos: [20.0, 4.62, RG_HZ - 0.75],
+      color: FL.clone(), kelvin: 4300, intensity: 70, distance: 22, cone: 1.30, penumbra: 0.66,
+      dayBase: 1, aimPos: [20.0, 8.40, RG_HZ + 0.4], fixed: true, halo: 1.0, haloGain: 0.18,
+      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.10, beam: 0.24 });
+    lamp({ name: 'bnk_hall_wall_s', kind: 'fluoro', pos: [26.0, 4.62, -RG_HZ + 0.75],
+      color: FL.clone(), kelvin: 4400, intensity: 70, distance: 22, cone: 1.30, penumbra: 0.66,
+      dayBase: 1, aimPos: [26.0, 8.40, -RG_HZ - 0.4], fixed: true, halo: 1.0, haloGain: 0.18,
+      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.10, beam: 0.24 });
 
-    // 7-9 : the lower level. Weak, red, and aimed at the WATER - the standing
-    // water is the only surface down here that can return a strip as a
-    // highlight, and it can only do that if a source is actually pointed at it.
+    // 10-12 : the lower level. The two red ones are STRIP-RUN lights, and that
+    // is a different fixture from a pool: wide, weak, short range, and aimed
+    // ALONG the wall rather than at it. The emergency strips were emitBox-only -
+    // emissive geometry with no entry here at all - so a 2.5 m red strip 5 cm
+    // off the pit wall sat as a hard-edged bar on a wall measuring p50 0.042
+    // with 62.9% of its pixels under L = 0.05. A light source that lights
+    // nothing is the emissiveLamps:0 bug wearing a different hat.
     lamp({ name: 'bnk_pit_work', kind: 'led', pos: [16.30, PIT_Y + 2.05, -7.60],
-      color: WK.clone(), kelvin: 3200, intensity: 96, distance: 18, cone: 0.72, penumbra: 0.46,
-      dayBase: 1, aimPos: [20.6, PIT_Y + 0.4, -4.2], fixed: true, halo: 0.75, haloGain: 0.24,
+      color: WK.clone(), kelvin: 3200, intensity: 88, distance: 18, cone: 0.78, penumbra: 0.50,
+      dayBase: 1, aimPos: [20.6, PIT_Y + 1.30, -4.2], fixed: true, halo: 0.75, haloGain: 0.24,
       bulbR: 0.08, bulbFlat: 0.3, bulbGain: 0.14, beam: 0.42 });
-    lamp({ name: 'bnk_pit_w', kind: 'led', pos: [WELL_X0 + 0.30, PIT_Y + 1.85, 3.0],
-      color: RD.clone(), kelvin: 1900, intensity: 30, distance: 12, cone: 1.25, penumbra: 0.58,
-      dayBase: 1, aimPos: [WELL_X0 + 2.8, WATER_Y, 1.6], fixed: true, halo: 0.45,
+    lamp({ name: 'bnk_pit_w', kind: 'led', pos: [WELL_X0 + 0.34, PIT_Y + 1.85, 1.6],
+      color: RD.clone(), kelvin: 1900, intensity: 22, distance: 8, cone: 1.40, penumbra: 0.86,
+      dayBase: 1, aimPos: [WELL_X0 + 0.55, PIT_Y + 1.55, 7.4], fixed: true, halo: 0.45,
       haloGain: 0.26, bulbR: 0.05, bulbFlat: 0.5, bulbGain: 0.18, beam: 0.22 });
-    lamp({ name: 'bnk_pit_e', kind: 'led', pos: [WELL_X1 - 0.30, PIT_Y + 1.85, -3.0],
-      color: RD.clone(), kelvin: 1900, intensity: 30, distance: 12, cone: 1.25, penumbra: 0.58,
-      dayBase: 1, aimPos: [WELL_X1 - 2.8, WATER_Y, -1.6], fixed: true, halo: 0.45,
+    lamp({ name: 'bnk_pit_e', kind: 'led', pos: [WELL_X1 - 0.34, PIT_Y + 1.85, -1.6],
+      color: RD.clone(), kelvin: 1900, intensity: 22, distance: 8, cone: 1.40, penumbra: 0.86,
+      dayBase: 1, aimPos: [WELL_X1 - 0.55, PIT_Y + 1.55, -7.4], fixed: true, halo: 0.45,
       haloGain: 0.26, bulbR: 0.05, bulbFlat: 0.5, bulbGain: 0.18, beam: 0.22 });
 
-    // 10-13 : the spine. Three battens and the doorway spill from the link.
-    lamp({ name: 'bnk_spine_c', kind: 'fluoro', pos: [-16.10, SPN_CEIL - 0.42, 0],
-      color: FL.clone(), kelvin: 4300, intensity: 48, distance: 15, cone: 1.18, penumbra: 0.50,
-      dayBase: 1, aimPos: [-15.4, DECK_Y, 0], fixed: true, halo: 1.1, haloGain: 0.22,
-      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.14, beam: 0.45 });
-    lamp({ name: 'bnk_spine_e', kind: 'fluoro', pos: [4.70, SPN_CEIL - 0.42, 0],
-      color: FL.clone(), kelvin: 4300, intensity: 44, distance: 14, cone: 1.10, penumbra: 0.46,
-      dayBase: 1, aimPos: [5.8, DECK_Y, 0], fixed: true, halo: 1.1, haloGain: 0.22,
-      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.14, beam: 0.45 });
-    lamp({ name: 'bnk_spine_link', kind: 'fluoro', pos: [(LINK_X0 + LINK_X1) * 0.5, 2.24, LINK_Z1 - 0.9],
-      color: FL.clone(), kelvin: 4300, intensity: 40, distance: 12, cone: 1.15, penumbra: 0.52,
-      dayBase: 1, aimPos: [(LINK_X0 + LINK_X1) * 0.5, DECK_Y, LINK_Z0 - 1.2], fixed: true,
-      halo: 0.9, haloGain: 0.22, bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.12, beam: 0.38 });
-    lamp({ name: 'bnk_spine_w', kind: 'fluoro', pos: [-29.10, SPN_CEIL - 0.42, 0],
-      color: FL.clone(), kelvin: 4200, intensity: 42, distance: 13, cone: 1.10, penumbra: 0.46,
-      dayBase: 1, aimPos: [-28.4, DECK_Y, 0], fixed: true, halo: 1.0, haloGain: 0.22,
-      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.14, beam: 0.45 });
+    // 13-16 : the spine. Two merged wall-aimed battens, the west end, and a red
+    // strip-run down the north wall - which is the largest surface in hero2, sat
+    // 2.4 m from the eye, carried a continuous red line at 2.36 m, and still
+    // measured Lmean 0.033 with 96.4% of its pixels under 0.05.
+    // Both sit on an EXISTING lit batten housing - a practical with no fitting
+    // over it is a light with no source, which is the same class of lie as a
+    // fitting with no light.
+    lamp({ name: 'bnk_spine_mid', kind: 'fluoro', pos: [-10.90, SPN_CEIL - 0.42, 0],
+      color: FL.clone(), kelvin: 4300, intensity: 29, distance: 16, cone: 0.80, penumbra: 0.52,
+      dayBase: 1, aimPos: [-5.20, 1.05, -SPN_HZ - 0.1], fixed: true, halo: 0.62, haloGain: 0.11,
+      bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.07, beam: 0.12 });
+    lamp({ name: 'bnk_spine_east', kind: 'fluoro', pos: [4.70, SPN_CEIL - 0.42, 0],
+      color: FL.clone(), kelvin: 4300, intensity: 46, distance: 16, cone: 0.98, penumbra: 0.58,
+      dayBase: 1, aimPos: [8.60, 1.40, SPN_HZ + 0.1], fixed: true, halo: 0.75, haloGain: 0.14,
+      bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.09, beam: 0.18 });
+    // The old bnk_spine_w (west end of the corridor, 42 cd straight down) has
+    // been spent on bnk_ctl_fill below. Nothing published looks at x = -29 and
+    // the brief asks for long dark stretches; the control room's console well is
+    // a subject in a published pose and had nothing on it at all.
+    lamp({ name: 'bnk_spine_strip', kind: 'led', pos: [-12.70, 2.34, SPN_HZ - 0.16],
+      color: RD.clone(), kelvin: 1900, intensity: 25, distance: 11.0, cone: 1.42, penumbra: 0.88,
+      dayBase: 1, aimPos: [-5.60, 2.05, SPN_HZ - 0.22], fixed: true, halo: 0.40,
+      haloGain: 0.26, bulbR: 0.04, bulbFlat: 0.5, bulbGain: 0.16, beam: 0.18 });
 
-    // 14-17 : the vestibule. The flood on the blast door is hero3's key.
-    lamp({ name: 'bnk_vest_flood', kind: 'led', pos: [VEST_X0 + 7.6, 3.05, -2.60],
-      color: WK.clone(), kelvin: 3100, intensity: 250, distance: 22, cone: 0.62, penumbra: 0.42,
-      dayBase: 1, aimPos: [DOOR_X, 1.60, DOOR_OPEN * 0.4], fixed: true, halo: 0.85,
-      haloGain: 0.26, bulbR: 0.09, bulbFlat: 0.3, bulbGain: 0.16, beam: 0.48 });
+    // 17-20 : the vestibule. The flood on the blast door is hero3's key.
+    // It was 250 cd on a cone of 0.62 firing near-normal at the plug, and the
+    // wall-wash column measured Lmean 0.891 with 45.72% of its own pixels above
+    // L = 0.97 - a solid clipped bar running down the middle of the door,
+    // eating the 'K-17' stencil, and leaving the frame with no mid-tone at all.
+    // 100 cd on a 0.94 cone with a 0.80 penumbra gives the pool a shoulder, and
+    // the fitting has moved 1.7 m south so the hot axis RAKES the chevrons from
+    // the side rather than firing straight through the only place in the level
+    // where the facility names itself.
+    lamp({ name: 'bnk_vest_flood', kind: 'led', pos: [VEST_X0 + 7.00, 3.15, -3.60],
+      color: WK.clone(), kelvin: 3100, intensity: 62, distance: 20, cone: 0.98, penumbra: 0.86,
+      dayBase: 1, aimPos: [DOOR_X + 0.40, 1.45, DOOR_OPEN * 0.05], fixed: true, halo: 0.70,
+      haloGain: 0.15, bulbR: 0.09, bulbFlat: 0.3, bulbGain: 0.12, beam: 0.16 });
     lamp({ name: 'bnk_vest_bay', kind: 'fluoro', pos: [VEST_X0 + 4.2, VEST_CEIL - 1.20, 2.60],
-      color: FL.clone(), kelvin: 4200, intensity: 112, distance: 17, cone: 1.05, penumbra: 0.48,
-      dayBase: 1, aimPos: [VEST_X0 + 4.6, DECK_Y, 1.20], fixed: true, halo: 1.2,
+      color: FL.clone(), kelvin: 4200, intensity: 62, distance: 17, cone: 1.15, penumbra: 0.60,
+      dayBase: 1, aimPos: [DOOR_X + 1.60, 2.10, -2.60], fixed: true, halo: 1.2,
       haloGain: 0.22, bulbR: 0.09, bulbFlat: 0.5, bulbGain: 0.14, beam: 0.48 });
     lamp({ name: 'bnk_vest_bay2', kind: 'fluoro', pos: [VEST_X0 + 6.6, VEST_CEIL - 1.20, -3.60],
-      color: FL.clone(), kelvin: 4300, intensity: 108, distance: 17, cone: 1.05, penumbra: 0.50,
-      dayBase: 1, aimPos: [VEST_X0 + 7.4, DECK_Y, -4.6], fixed: true, halo: 1.1,
+      color: FL.clone(), kelvin: 4300, intensity: 56, distance: 17, cone: 1.15, penumbra: 0.62,
+      dayBase: 1, aimPos: [VEST_X0 + 7.4, 1.55, -VEST_HZ - 0.2], fixed: true, halo: 1.1,
       haloGain: 0.22, bulbR: 0.08, bulbFlat: 0.5, bulbGain: 0.14, beam: 0.44 });
-    lamp({ name: 'bnk_spine_d', kind: 'fluoro', pos: [-3.10, SPN_CEIL - 0.42, 0],
-      color: FL.clone(), kelvin: 4300, intensity: 46, distance: 14, cone: 1.12, penumbra: 0.46,
-      dayBase: 1, aimPos: [-2.20, DECK_Y, 0], fixed: true, halo: 1.1, haloGain: 0.22,
-      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.14, beam: 0.30 });
+    // and one aimed UP at the vestibule soffit, which is 5.4 m of concrete lid
+    // over the level's landmark and measured 0.026 with 97.7% under L = 0.05.
+    lamp({ name: 'bnk_vest_up', kind: 'fluoro', pos: [VEST_X0 + 3.10, 3.62, -VEST_HZ + 0.55],
+      color: FL.clone(), kelvin: 4200, intensity: 40, distance: 14, cone: 1.34, penumbra: 0.70,
+      dayBase: 1, aimPos: [VEST_X0 + 4.60, VEST_CEIL - 0.1, -VEST_HZ + 2.4], fixed: true,
+      halo: 0.8, haloGain: 0.18, bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.10, beam: 0.16 });
 
-    // 18-21 : the control room.
-    lamp({ name: 'bnk_ctl_key', kind: 'fluoro', pos: [-25.60, 2.88, 7.90],
-      color: FL.clone(), kelvin: 4300, intensity: 62, distance: 16, cone: 1.15, penumbra: 0.50,
-      dayBase: 1, aimPos: [-25.0, CTL_FLOOR, 8.60], fixed: true, halo: 1.1, haloGain: 0.22,
-      bulbR: 0.08, bulbFlat: 0.5, bulbGain: 0.14, beam: 0.42 });
-    lamp({ name: 'bnk_ctl_wall', kind: 'led', pos: [-22.0, 3.05, 14.6],
-      color: new THREE.Color(1.0, 0.94, 0.82), kelvin: 3900, intensity: 78, distance: 15,
-      cone: 1.20, penumbra: 0.55, dayBase: 1, aimPos: [-22.0, CTL_FLOOR + 2.1, CTL_Z1],
+    // 21-23 : the control room. bnk_ctl_wall is FIRST of the three now, because
+    // the three backlit status bays are the interior framing's subject and have
+    // to be the brightest thing in it - the pose used to look at a near-white
+    // floor with a black void above it.
+    lamp({ name: 'bnk_ctl_wall', kind: 'led', pos: [-22.0, 3.05, 14.2],
+      color: new THREE.Color(1.0, 0.94, 0.82), kelvin: 3900, intensity: 92, distance: 15,
+      cone: 1.24, penumbra: 0.55, dayBase: 1, aimPos: [-22.0, CTL_FLOOR + 2.15, CTL_Z1],
       fixed: true, halo: 0.8, haloGain: 0.22, bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.12, beam: 0.30 });
-    lamp({ name: 'bnk_ctl_fill', kind: 'fluoro', pos: [-17.6, 2.88, 15.8],
-      color: FL.clone(), kelvin: 4400, intensity: 62, distance: 16, cone: 1.15, penumbra: 0.52,
-      dayBase: 1, aimPos: [-18.4, CTL_FLOOR, 14.2], fixed: true, halo: 1.0, haloGain: 0.22,
+    // A RAKE across the console well rather than a pool on the floor beneath the
+    // fitting: the fascias, the meters and the CRT bezels are all vertical or
+    // near-vertical, so a lamp aimed at 15 degrees along the rows describes
+    // every one of them and puts only its spill on the access floor.
+    lamp({ name: 'bnk_ctl_key', kind: 'fluoro', pos: [-20.20, 2.86, 14.20],
+      color: FL.clone(), kelvin: 4300, intensity: 78, distance: 18, cone: 1.02, penumbra: 0.44,
+      dayBase: 1, aimPos: [-25.60, 1.15, 9.00], fixed: true, halo: 1.1, haloGain: 0.22,
+      bulbR: 0.08, bulbFlat: 0.5, bulbGain: 0.14, beam: 0.42 });
+    // and one on the SOUTH wall raking the near row's fascias. A console is lit
+    // from behind its operator or it is a black box: with only the north-side
+    // rake the whole of row one - the row the interior framing stands in front
+    // of - presented its shadow side to the lens.
+    lamp({ name: 'bnk_ctl_fill', kind: 'fluoro', pos: [-23.60, 2.88, 5.60],
+      color: FL.clone(), kelvin: 4400, intensity: 60, distance: 14, cone: 1.10, penumbra: 0.50,
+      dayBase: 1, aimPos: [-26.20, 1.25, 8.30], fixed: true, halo: 1.0, haloGain: 0.22,
       bulbR: 0.07, bulbFlat: 0.5, bulbGain: 0.12, beam: 0.38 });
-    lamp({ name: 'bnk_spine_b', kind: 'fluoro', pos: [-8.30, SPN_CEIL - 0.42, 0],
-      color: FL.clone(), kelvin: 4200, intensity: 45, distance: 14, cone: 1.12, penumbra: 0.48,
-      dayBase: 1, aimPos: [-7.4, DECK_Y, 0], fixed: true, halo: 1.0, haloGain: 0.22,
-      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.14, beam: 0.28 });
+    // up into the coffers and the torn suspended grid
+    lamp({ name: 'bnk_ctl_up', kind: 'fluoro', pos: [-18.40, 3.10, 8.60],
+      color: FL.clone(), kelvin: 4400, intensity: 34, distance: 14, cone: 1.36, penumbra: 0.72,
+      dayBase: 1, aimPos: [-21.60, CTL_CEIL - 0.1, 10.20], fixed: true, halo: 1.0, haloGain: 0.18,
+      bulbR: 0.07, bulbFlat: 0.5, bulbGain: 0.10, beam: 0.16 });
 
-    // 22 : the plant room, so the corridor's side opening is not a black slot.
+    // 24 : the plant room, so the corridor's side opening is not a black slot.
+    // Aimed at the switchgear FACES, which is a vertical surface the corridor
+    // can see through the doorway, not at 3 sq m of floor it cannot.
     lamp({ name: 'bnk_plant', kind: 'fluoro', pos: [PLT_X0 + 3.0, PLT_CEIL - 0.46, PLT_Z0 + 2.6],
-      color: FL.clone(), kelvin: 4300, intensity: 50, distance: 15, cone: 1.10, penumbra: 0.48,
-      dayBase: 1, aimPos: [PLT_X0 + 3.4, DECK_Y, PLT_Z0 + 3.6], fixed: true, halo: 1.1,
+      color: FL.clone(), kelvin: 4300, intensity: 32, distance: 15, cone: 1.22, penumbra: 0.58,
+      dayBase: 1, aimPos: [PLT_X0 + 3.4, 1.60, PLT_Z0 + 1.40], fixed: true, halo: 1.1,
       haloGain: 0.22, bulbR: 0.08, bulbFlat: 0.5, bulbGain: 0.14, beam: 0.42 });
-
-    // 23-24 : the wall wash. Appended LAST on purpose - the module caps a
-    // declarative level at 24 and truncates the tail, so these are the two that
-    // can be lost without costing a framing its subject. They exist so the hall
-    // has walls in it rather than a horizon of black.
-    lamp({ name: 'bnk_hall_wall_n', kind: 'fluoro', pos: [20.0, 4.62, RG_HZ - 0.55],
-      color: FL.clone(), kelvin: 4300, intensity: 74, distance: 22, cone: 1.30, penumbra: 0.60,
-      dayBase: 1, aimPos: [20.0, 7.60, RG_HZ + 0.4], fixed: true, halo: 1.0, haloGain: 0.18,
-      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.10, beam: 0.24 });
-    lamp({ name: 'bnk_hall_wall_s', kind: 'fluoro', pos: [26.0, 4.62, -RG_HZ + 0.55],
-      color: FL.clone(), kelvin: 4400, intensity: 74, distance: 22, cone: 1.30, penumbra: 0.60,
-      dayBase: 1, aimPos: [26.0, 7.60, -RG_HZ - 0.4], fixed: true, halo: 1.0, haloGain: 0.18,
-      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.10, beam: 0.24 });
 
     // ---- the shafts ---------------------------------------------------------
     // Four real fixtures, one per framing that needs one. lighting.js builds a
     // spot plus an additive haze cone for each; `lux` marks them as FIXTURES so
     // they stop tracking a sun this level does not have. Ordered, because the
     // module caps a declarative level at four and takes the first four.
+    //
+    // COLOUR COMES FROM THE FIXTURE, NOT FROM A NUMBER. Each of these was
+    // specified by `kelvin`, which lighting.js resolves through
+    // GAME.Color.kelvin() - and 4300 K on that curve is a warm white, while the
+    // high bay that physically emits the beam is 0xdce8f6, a cool blue-white.
+    // The hall shaft therefore printed as an opaque TAN column hanging under a
+    // cold lamp, which at 2.6x is unmissable and is a physical impossibility: a
+    // beam cannot be warmer than the lamp it comes out of. `color` takes
+    // precedence over `kelvin` in _solveShaft, so each shaft now carries the
+    // emitter hex of the fitting it belongs to. Only the pit shaft is warm,
+    // because only the pit fixture is - it is a 3200 K rigged worklight.
+    var HB_EMIT = 0xdce8f6;              // highBay() 'lit' emitter
+    var WK_EMIT = 0xffdcae;              // workLight() in the pit
     L.lightShafts.push({
       origin: new THREE.Vector3(13.6, RG_CEIL - 1.85, -6.4),
-      dir: new THREE.Vector3(0.30, -1, 0.16), width: 2.40, length: 10.5,
-      strength: 0.62, lux: 10, kelvin: 4300, always: true, kind: 'hall'
+      dir: new THREE.Vector3(0.30, -1, 0.16), width: 3.20, length: 10.5,
+      strength: 0.58, lux: 10, color: HB_EMIT, always: true, kind: 'hall'
     });
     L.lightShafts.push({
       origin: new THREE.Vector3(VEST_X0 + 4.2, VEST_CEIL - 1.35, 2.60),
-      dir: new THREE.Vector3(0.10, -1, -0.22), width: 2.20, length: 4.2,
-      strength: 0.90, lux: 9, kelvin: 4200, always: true, kind: 'vestibule'
-    });
-    L.lightShafts.push({
-      origin: new THREE.Vector3(-25.6, 2.82, 7.90),
-      dir: new THREE.Vector3(0.06, -1, 0.10), width: 1.70, length: 3.0,
-      strength: 0.85, lux: 8, kelvin: 4300, always: true, kind: 'control'
+      dir: new THREE.Vector3(0.10, -1, -0.22), width: 2.10, length: 4.2,
+      strength: 0.50, lux: 5, color: HB_EMIT, always: true, kind: 'vestibule'
     });
     L.lightShafts.push({
       origin: new THREE.Vector3(16.30, PIT_Y + 1.95, -7.60),
-      dir: new THREE.Vector3(0.62, -1, 0.44), width: 1.90, length: 4.0,
-      strength: 0.90, lux: 9, kelvin: 3200, always: true, kind: 'pit'
+      dir: new THREE.Vector3(0.62, -1, 0.44), width: 2.20, length: 4.0,
+      strength: 0.90, lux: 9, color: WK_EMIT, always: true, kind: 'pit'
     });
     L.lightShafts.push({
       origin: new THREE.Vector3(33.4, RG_CEIL - 1.85, -6.4),
-      dir: new THREE.Vector3(-0.26, -1, 0.14), width: 2.90, length: 10.0,
-      strength: 0.80, lux: 9, kelvin: 4400, always: true, kind: 'hall2'
+      dir: new THREE.Vector3(-0.26, -1, 0.14), width: 3.40, length: 10.0,
+      strength: 0.74, lux: 9, color: HB_EMIT, always: true, kind: 'hall2'
     });
+    // the control room troffer. Fifth in the list and lighting.js caps a
+    // declarative level's shafts at four, so it is the one that can be lost.
+    L.lightShafts.push({
+      origin: new THREE.Vector3(-25.6, 2.82, 7.90),
+      dir: new THREE.Vector3(0.06, -1, 0.10), width: 1.80, length: 3.0,
+      strength: 0.80, lux: 7, color: 0xd8e6f4, always: true, kind: 'control'
+    });
+
+    flushGlowCards();
 
     // ---- publish the rig as anchors ----------------------------------------
     for (i = 0; i < P.length; i++) {
@@ -3590,6 +4409,19 @@
       centre: V(REAC_CX, PIT_Y, REAC_CZ),
       x0: WELL_X0, x1: WELL_X1, z0: WELL_Z0, z1: WELL_Z1,
       innerR: BIO_R,
+      // THE PREDICATE, and the geometry behind it. See wadeableAt().
+      wadeable: wadeableAt,
+      platR0: PLAT_R0, platR1: PLAT_R1,
+      exclude: [
+        { name: 'westBridge', x0: WELL_X0 - 0.3, x1: REAC_CX - PLAT_R1 + 0.4,
+          z0: REAC_CZ - BRIDGE_HW_W, z1: REAC_CZ + BRIDGE_HW_W, y: DECK_Y },
+        { name: 'northBridge', x0: REAC_CX - BRIDGE_HW_N, x1: REAC_CX + BRIDGE_HW_N,
+          z0: WELL_Z0 - 0.3, z1: REAC_CZ - PLAT_R1 + 0.4, y: DECK_Y },
+        { name: 'pitStair', x0: STAIR_X0 - 0.15, x1: STAIR_X1 + 0.15,
+          z0: STAIR_Z0 - 0.05, z1: STAIR_Z1 + 0.05, y: null },
+        { name: 'platformAnnulus', ring: [PLAT_R0 - 0.1, PLAT_R1 + 0.1],
+          cx: REAC_CX, cz: REAC_CZ, y: DECK_Y }
+      ],
       ring: [V(WELL_X0 + 2.0, PIT_Y, 0), V(WELL_X1 - 2.0, PIT_Y, 0),
              V(REAC_CX, PIT_Y, WELL_Z0 + 2.0), V(REAC_CX, PIT_Y, WELL_Z1 - 2.0)],
       stair: { x0: STAIR_X0, x1: STAIR_X1, z0: STAIR_Z0, z1: STAIR_Z1,
@@ -3630,6 +4462,18 @@
     } else if (lib && typeof lib.get === 'function') {
       var name = libHas ? key : (surf.base || 'concrete');
       var opts = { vertexColors: true, wearMode: surf.wear ? 'wear' : 'multiply' };
+      // `libOpts` is a DECLARED, documented request against materials.js's own
+      // public option list (albedoTarget / hue / roughness / metalness). It is
+      // how two surfaces can share one calibrated library base and still be
+      // different colours, which is what stops this file inventing a fourth
+      // grey by hand and getting it wrong under a near-black probe.
+      if (surf.libOpts) {
+        for (var ok in surf.libOpts) {
+          if (Object.prototype.hasOwnProperty.call(surf.libOpts, ok)) {
+            opts[ok] = surf.libOpts[ok];
+          }
+        }
+      }
       try { m = lib.get(name, opts); }
       catch (e2) { GAME.logError('bunker.material:' + key, e2); m = null; }
     }
@@ -3825,6 +4669,14 @@
         mode = 'flat';
       } else if (key === 'hull_paint') {
         mode = 'hull';
+      } else if (key === 'steel' || key === 'vessel_steel') {
+        // Structural and vessel steel take their OWN mode. On the shared 'metal'
+        // mode the rust field ran at 0.80 world-frequency (a 1.25 m period) with
+        // a +-0.44 swing, so every member shorter than a metre - which is every
+        // strut, stalk, coolant line and stiffener in the level - sampled ONE
+        // value and came out uniformly cream or uniformly rust. Rust belongs to
+        // the JOINT, not to the part.
+        mode = 'struct';
       } else if (ent.paint === 'clad') {
         mode = 'clad';
       } else if (ent.paint === 'glass') {
@@ -3845,6 +4697,16 @@
         // Below the deck the facility is genuinely under water; above it, it is
         // dust. One test, used by every branch, so the two never blend.
         var sub = M.smoothstep(-3.10, -4.20, y);
+        // THE WATERLINE. `sub` is a 1.1 m ramp, which is right for "the lower
+        // level is damp" and wrong for "this pipe is half in the water": a ring
+        // main whose centre sits 3 cm under the surface rendered as a fully dry
+        // rusty pipe because the ramp had barely started. `wl` is a 9 cm step at
+        // the actual surface, and `tide` is the 12 cm band of salt bloom and
+        // staining immediately above it. Together they are the only reason
+        // anything in the pit reads as half submerged.
+        var wl = M.smoothstep(WATER_Y + 0.045, WATER_Y - 0.045, y);
+        var tide = M.smoothstep(WATER_Y + 0.20, WATER_Y + 0.055, y) *
+          (1 - wl) * 0.9;
 
         if (mode === 'floor') {
           // ---- DUST --------------------------------------------------------
@@ -3889,10 +4751,23 @@
           var st = M.smoothstep(0.54, 0.94,
             noise.fbm2((Math.abs(nx) > Math.abs(nz) ? z : x) * 2.2, y * 0.13, 3) * 0.5 + 0.5);
           gw = M.saturate(gw + st * 0.26);
-          var ww = M.saturate(0.04 + W * 0.22 + st * 0.22 * W + sub * 0.84 +
+          // THE WATERLINE ON THE PIT WALLS. A 30 cm dirty band immediately under
+          // the surface and a 25 cm salt/efflorescence bloom immediately above
+          // it. Without this the flood met the wall on a bare geometric line -
+          // hero4 had no tide mark, no depth cue and no evidence anywhere that
+          // the 58 cm existed. The band is grime (R) below and substrate (B)
+          // above, so it survives the wear shader as a value break rather than
+          // as a painted stripe.
+          var band = M.smoothstep(WATER_Y - 0.34, WATER_Y - 0.02, y) * (1 - wl * 0.0);
+          band *= M.smoothstep(WATER_Y + 0.06, WATER_Y - 0.02, y);
+          gw = M.saturate(gw + band * 0.34);
+          var ww = M.saturate(0.04 + W * 0.22 + st * 0.22 * W + Math.max(sub * 0.84, wl * 0.90) +
             M.smoothstep(-2.4, -4.4, y) * 0.30);
           var ew = M.saturate(M.smoothstep(0.62, 0.94, noise.fbm3(x * 1.2, y * 1.0, z * 1.2, 2) * 0.5 + 0.5) * 0.34
             + M.saturate(ny) * 0.34);
+          // salt bloom sits ABOVE the line: B toward the pale substrate
+          ew = M.saturate(ew - M.smoothstep(WATER_Y + 0.30, WATER_Y + 0.05, y) *
+            (1 - wl) * 0.42);
           r = 1 - gw * 0.70; g = 1 - ww; b = 1 - ew * (1 - sub * 0.6);
         } else if (mode === 'ceil') {
           // Soffits: sooty from forty years of a plant that vented indoors,
@@ -3941,19 +4816,45 @@
           g = pv * (1 - chip * 0.12 + scuff * 0.62);
           b = pv * (1 - chip * 0.20 + scuff * 0.66);
         } else if (mode === 'hull') {
-          // Painted plant. lime_wash is a pale wash, so the enamel's colour is
-          // made here: a desaturated grey-green, streaked below every fixing,
-          // dirty in the first metre off the floor and dusty on top.
+          // THE ENAMEL. painted_metal's albedo anchor is set through libOpts, so
+          // this attribute is now nothing but variation: streaks below every
+          // fixing, dirt thrown up off the floor, dust on the top faces. It used
+          // to carry (1.44, 1.70, 1.62), i.e. a 60% brightness lift with a hard
+          // green-blue bias baked into it - which is where the metro's palette
+          // was leaking into a level briefed grey and red, and why the status
+          // wall photographed sage.
           var f5 = 0.92 + (noise.fbm3(x * 1.0, y * 0.8, z * 1.0, 3) * 0.5 + 0.5) * 0.16;
           var s5 = M.smoothstep(0.58, 0.94, noise.fbm2((Math.abs(nx) > Math.abs(nz) ? z : x) * 2.3,
             y * 0.12, 3) * 0.5 + 0.5) * M.saturate(1 - Math.abs(ny));
           f5 *= 1 - s5 * 0.24;
           f5 *= 1 - M.smoothstep(1.15, 0.04, y - DECK_Y) * 0.24;
-          if (ny > 0.4) f5 *= 1.12;
-          var wetH = M.saturate(W * 0.20 + sub * 0.45);
-          r = f5 * 1.44 * (1 + s5 * 0.16) * (1 - wetH * 0.22);
-          g = f5 * 1.70 * (1 - s5 * 0.02) * (1 - wetH * 0.24);
-          b = f5 * 1.62 * (1 - s5 * 0.16) * (1 - wetH * 0.24);
+          if (ny > 0.4) f5 *= 1.10;
+          var wetH = M.saturate(W * 0.20 + Math.max(sub * 0.45, wl * 0.62));
+          r = f5 * 1.03 * (1 + s5 * 0.14) * (1 - wetH * 0.22) * (1 - tide * 0.10);
+          g = f5 * 1.02 * (1 - s5 * 0.02) * (1 - wetH * 0.24) * (1 + tide * 0.04);
+          b = f5 * 0.99 * (1 - s5 * 0.14) * (1 - wetH * 0.24) * (1 + tide * 0.10);
+        } else if (mode === 'struct') {
+          // STRUCTURAL / VESSEL STEEL. Two deliberate departures from the shared
+          // metal mode. The value field runs at 1.9 world-frequency instead of
+          // 0.28 so a 3 m stanchion varies ALONG itself rather than differing
+          // from its neighbour, and the rust field runs at 3.1 with half the
+          // swing so corrosion sits in bands and at joints instead of tinting
+          // whole members. The result is that the twenty-two vessel stiffeners
+          // stop reading as painted stripes and the five coolant lines stop
+          // coming out five different colours.
+          var f6 = 0.88 + (noise.fbm3(x * 1.9, y * 1.55, z * 1.9, 3) * 0.5 + 0.5) * 0.22;
+          var rs2 = M.smoothstep(0.56, 0.93,
+            noise.fbm3(x * 3.1 + 3, y * 2.4, z * 3.1 - 4, 3) * 0.5 + 0.5) * 0.72;
+          // a horizontal weep band under every girth seam and flange
+          rs2 = M.saturate(rs2 + M.smoothstep(0.72, 0.96,
+            noise.fbm2(y * 5.4, (Math.abs(nx) > Math.abs(nz) ? z : x) * 0.8, 2) * 0.5 + 0.5) * 0.30);
+          rs2 = M.saturate(rs2 + Math.max(sub * 0.26, tide * 0.55));
+          f6 *= 1 - M.smoothstep(0.85, 0.02, y - DECK_Y) * 0.20;
+          if (ny > 0.45) f6 *= 1.07;
+          var wetS = M.saturate(W * 0.22 + Math.max(sub * 0.28, wl * 0.55));
+          r = f6 * (1 + rs2 * 0.26) * (1 - wetS * 0.30);
+          g = f6 * (1 - rs2 * 0.07) * (1 - wetS * 0.32);
+          b = f6 * (1 - rs2 * 0.25) * (1 - wetS * 0.32);
         } else if (mode === 'clad') {
           // Painted plant: value variation, streaks below every fixing, dirt
           // thrown up off the floor, and dust on every up-facing surface.
@@ -3973,10 +4874,15 @@
           // filthy - and anything below the deck has been standing in water.
           var f4 = 0.76 + (noise.fbm3(x * 0.28, y * 0.26, z * 0.28, 3) * 0.5 + 0.5) * 0.38;
           var rs = M.smoothstep(0.46, 0.90, noise.fbm3(x * 0.80 + 3, y * 0.66, z * 0.80 - 4, 3) * 0.5 + 0.5);
-          rs = M.saturate(rs + sub * 0.34);
+          rs = M.saturate(rs + sub * 0.34 + tide * 0.60);
           f4 *= 1 - M.smoothstep(0.9, 0.02, y - DECK_Y) * 0.24;
           if (ny > 0.4) f4 *= 1.08;
-          var wetM = M.saturate(W * 0.24 + sub * (0.30 + 0.24 * M.saturate(ny)));
+          // The ring main sits 3 cm under the surface. Without the hard step it
+          // took only the 1.1 m `sub` ramp and rendered as a dry pipe lying on
+          // the water; with it, the lower main goes wet-dark and the upper one
+          // does not, which is what makes 58 cm of standing water exist at all.
+          var wetM = M.saturate(W * 0.24 + Math.max(sub * (0.30 + 0.24 * M.saturate(ny)),
+            wl * 0.66));
           r = f4 * (1 + rs * 0.44) * (1 - wetM * 0.30);
           g = f4 * (1 - rs * 0.10) * (1 - wetM * 0.32);
           b = f4 * (1 - rs * 0.42) * (1 - wetM * 0.32);
@@ -4058,7 +4964,14 @@
         blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
         toneMapped: false, fog: true
       });
-      mat.color.setRGB(0.150 * d.gain, 0.0180 * d.gain, 0.0105 * d.gain);
+      // The wedge is a fixed-alpha additive sheet whose AREA grows with len, so a
+      // beacon lengthened from 7 m to 19 m to reach the vessel put three times
+      // the screen coverage at the same brightness and the reactor hall filled
+      // with red haze. Divide the emission by the length ratio so a long beacon
+      // throws a longer BAR rather than a bigger fog.
+      var lenGain = Math.pow(7.0 / Math.max(3.0, d.len), 0.30);
+      mat.color.setRGB(0.150 * d.gain * lenGain, 0.0180 * d.gain * lenGain,
+        0.0105 * d.gain * lenGain);
       var mesh = new THREE.Mesh(geo, mat);
       mesh.name = 'bunker_sweep_' + i;
       mesh.position.set(d.x, d.y, d.z);
@@ -4071,15 +4984,21 @@
       // only lights this file owns rather than publishes; without them the
       // sweep is haze crossing an unlit wall, which reads as a decal.
       if (d.key && THREE.SpotLight) {
-        var lt = new THREE.SpotLight(0xffffff, 0, d.len * 1.15, 0.30, 0.55, 2);
+        // distance is len * 1.6, not len * 1.15: at 1.15 the hard cutoff sat
+        // barely past the surface the bar is supposed to cross, so the target
+        // was already deep in the falloff tail before the window closed on it.
+        var lt = new THREE.SpotLight(0xffffff, 0, d.len * 1.6, d.spotCone, 0.52, 2);
         lt.color.setRGB(1.0, 0.16, 0.09);
         lt.castShadow = false;
         lt.position.set(d.x, d.y, d.z);
-        lt.target.position.set(d.x + d.len, d.y - 0.35, d.z);
+        lt.target.position.set(d.x + d.len, d.y - d.len * d.drop, d.z);
         lt.name = 'bunker_beacon_' + i;
         this.root.add(lt);
         this.root.add(lt.target);
-        this._beaconLights.push({ light: lt, def: d, intensity: 26 * d.gain });
+        this._beaconLights.push({
+          light: lt, def: d,
+          intensity: (d.spotI != null) ? d.spotI : 26 * d.gain
+        });
       }
     }
   };
@@ -4099,7 +5018,7 @@
       if (inWell(x, z)) {
         if (x >= STAIR_X0 - 0.15 && x <= STAIR_X1 + 0.15 &&
             z >= STAIR_Z0 - 0.05 && z <= STAIR_Z1 + 0.05) return stairY(z);
-        if (onBridge(x, z)) return DECK_Y;
+        if (onBridgeAt(x, z)) return DECK_Y;
         var d = reacDist(x, z);
         if (d >= PLAT_R0 - 0.1 && d <= PLAT_R1 + 0.1) return DECK_Y;
         return pitY(x, z, N);
@@ -4107,6 +5026,13 @@
       return deckY(x, z, N);
     }
     return deckY(x, z, N);
+  };
+
+  // True only where the lower level's floor genuinely governs the height, i.e.
+  // where a consumer may place something that will end up standing in 58 cm of
+  // water. Also on anchors.lower.wadeable, which is where props should read it.
+  LevelBunker.prototype.wadeable = function (x, z) {
+    return wadeableAt(x, z);
   };
 
   LevelBunker.prototype._walkRects = function () {
@@ -4285,9 +5211,17 @@
     // chevrons and throws the ram shadows the length of the floor. The rails run
     // out of the bottom of frame to the aperture, and the guard cabin's lit
     // window sits high on the right.
-    var h3x = -36.20, h3z = 2.60;
+    // Moved SOUTH of the plug's leading edge (z = 0.42). At z = +2.60 the eye
+    // stood inside the plug's own z span, so the only thing in frame was its
+    // east face and the 1.35 m thickness the level is built around had no
+    // face-on return anywhere in the pose - the landmark photographed as a
+    // painted rectangle partly because it was being shown as one. From z =
+    // -2.30 the leading edge, the locking lugs, the rams and the roller
+    // carriage all present at about 20 degrees, and the open aperture beyond
+    // reads as a hole with depth rather than as a black panel.
+    var h3x = -37.20, h3z = 0.55;
     var hero3 = pose(h3x, this.sampleGround(h3x, h3z) + 1.68, h3z,
-      DOOR_X, 1.95, DOOR_OPEN * 0.5);
+      DOOR_X + 0.35, 1.95, 1.70);
 
     // ---- HERO4 - the flooded lower level -----------------------------------
     // Wading the west leg of the pit ring: 4 m wide, 4.6 m below the deck, 58 cm
@@ -4301,13 +5235,22 @@
       17.00, -2.20, -8.40);
 
     // ---- INTERIOR - the control room ---------------------------------------
-    // The enclosed space. Across two rows of dead CRT consoles to the status
-    // wall, with three of its eight bays still backlit; the suspended ceiling
-    // has come down over the near half so the frame has a torn edge across its
-    // top, and one live tube burns amber on the left.
-    var icx = -27.90, icz = 9.30;
-    var interior = pose(icx, this.sampleGround(icx, icz) + 1.66, icz,
-      -21.50, 2.05, CTL_Z1 - 0.50);
+    // REBUILT, not tuned. The old standpoint sat in the room's south-west corner
+    // looking diagonally across it, and what that framed was a featureless
+    // near-white floor (Lmean 0.692, p50 0.773) under 55% of frame below
+    // L = 0.05 - no readable subject anywhere, the instant-fail case three times
+    // over. It also put the three backlit status bays - the only large emitting
+    // surface in the level and the obvious subject - small and off to one side.
+    //
+    // This pose is built the other way round: stand SOUTH of the near console
+    // row on the room's axis, so the row crosses the bottom third in silhouette
+    // 1.9 m from the lens, the second row steps back behind it, and the lit bays
+    // close the frame 10.8 m away as the brightest thing in it. Pitched up 3
+    // degrees so the suspended grid and its torn-down section carry the top edge
+    // instead of a black void.
+    var icx = -17.60, icz = 5.60;
+    var interior = pose(icx, this.sampleGround(icx, icz) + 1.64, icz,
+      -24.90, 2.12, 15.80);
 
     this.cameraPoses = {
       overview: overview, hero1: hero1, hero2: hero2, hero3: hero3, hero4: hero4,
@@ -4468,7 +5411,7 @@
       // local +X under a Y rotation of `a` maps to (cos a, 0, -sin a)
       bl.light.target.position.set(
         bl.def.x + Math.cos(ba) * bl.def.len,
-        bl.def.y - bl.def.len * 0.26,
+        bl.def.y - bl.def.len * bl.def.drop,
         bl.def.z - Math.sin(ba) * bl.def.len);
       bl.light.target.updateMatrixWorld();
       bl.light.intensity = bl.intensity;
