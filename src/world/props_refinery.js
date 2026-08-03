@@ -776,19 +776,60 @@
         cell * rng.range(0.08, 0.26), 'rgba(42,36,29,0.15)', rng.range(0, 6), 0.5);
     }
 
-    // ---- 14 boot / tread trail ----------------------------------------------
+    // ---- 14 TYRE TRACK PAIR, TILING VERTICALLY -------------------------------
+    // REPLACED. This was eleven boot ellipses, and the pump-house floor was
+    // dressed with five of them stretched into a hard-edged "ladder" of evenly
+    // spaced rungs at constant apparent width from the lens to the far wall -
+    // railway sleepers, not rubber on dust.
+    //
+    // The cell is now a PAIR OF TREAD BANDS that runs the full height of the
+    // cell and MATCHES AT TOP AND BOTTOM, so a chain of quads laid end to end
+    // in world metres tiles seamlessly and the rung pitch is fixed in METRES.
+    // Perspective then shortens it on its own, which is the whole point. The
+    // lug edges are drawn at about 30% alpha so the track sits in the dust
+    // instead of on it, and a pale displaced berm runs down each outer edge.
     o = at(MARK.tread);
-    g.fillStyle = 'rgba(34,29,24,0.20)';
-    for (var t14 = 0; t14 < 11; t14++) {
-      var ty = o.y + cell * (0.06 + t14 * 0.084 + rng.range(-0.02, 0.02));
-      var tx = o.x + cell * (0.36 + (t14 % 2) * 0.20 + rng.range(-0.06, 0.06));
-      g.save();
-      g.translate(tx, ty);
-      g.rotate(rng.range(-0.45, 0.45));
-      g.beginPath();
-      g.ellipse(0, 0, cell * 0.036, cell * 0.062, 0, 0, 6.2832);
-      g.fill();
-      g.restore();
+    var TW = cell * 0.185;                  // tread width
+    var TC = [cell * 0.295, cell * 0.705];  // the two track centres
+    var LUG = cell / 9;                     // lug pitch: divides the cell, so it tiles
+    for (var tk = 0; tk < 2; tk++) {
+      var tcx = o.x + TC[tk];
+      // the pale berm of displaced dust outside each track
+      for (var bs = 0; bs < 2; bs++) {
+        var bgx = tcx + (bs ? 1 : -1) * TW * 0.62;
+        var bg2 = g.createLinearGradient(bgx - TW * 0.34, 0, bgx + TW * 0.34, 0);
+        bg2.addColorStop(0, 'rgba(196,180,148,0.00)');
+        bg2.addColorStop(0.5, 'rgba(196,180,148,0.30)');
+        bg2.addColorStop(1, 'rgba(196,180,148,0.00)');
+        g.fillStyle = bg2;
+        g.fillRect(bgx - TW * 0.34, o.y, TW * 0.68, cell);
+      }
+      // the soft contact band, darkest at the centre of the tread
+      var tg2 = g.createLinearGradient(tcx - TW * 0.5, 0, tcx + TW * 0.5, 0);
+      tg2.addColorStop(0.00, 'rgba(30,26,22,0.00)');
+      tg2.addColorStop(0.16, 'rgba(30,26,22,0.30)');
+      tg2.addColorStop(0.50, 'rgba(26,22,19,0.46)');
+      tg2.addColorStop(0.84, 'rgba(30,26,22,0.30)');
+      tg2.addColorStop(1.00, 'rgba(30,26,22,0.00)');
+      g.fillStyle = tg2;
+      g.fillRect(tcx - TW * 0.5, o.y, TW, cell);
+      // the lugs: darker in the valleys, skewed, and every few missing where
+      // the tyre lifted
+      for (var lg = 0; lg < 9; lg++) {
+        if (rng.bool(0.13)) continue;
+        var ly2 = o.y + lg * LUG + LUG * 0.16;
+        var skew = (tk ? 1 : -1) * TW * 0.18;
+        g.save();
+        g.beginPath();
+        g.moveTo(tcx - TW * 0.42, ly2);
+        g.lineTo(tcx + TW * 0.42, ly2 + skew * 0.5);
+        g.lineTo(tcx + TW * 0.42, ly2 + LUG * 0.52 + skew * 0.5);
+        g.lineTo(tcx - TW * 0.42, ly2 + LUG * 0.52);
+        g.closePath();
+        g.fillStyle = 'rgba(20,17,15,' + rng.range(0.16, 0.30).toFixed(3) + ')';
+        g.fill();
+        g.restore();
+      }
     }
 
     // ---- 15 manufacturer's data plate ---------------------------------------
@@ -1088,27 +1129,51 @@
   };
 
   // ---- cable drum, resting on its flanges ---------------------------------
-  K.cableDrum = function (N) {
+  // `full` winds actual cable onto it and leaves a tail hanging over the flange
+  // with a taped end; `full` false is the empty barrel a drum looks like when
+  // the cable has been pulled. Two identical drums standing side by side, both
+  // apparently empty, is the exact "props that scatter uniformly" tell.
+  K.cableDrum = function (N, full) {
     var p = [];
     var R = 0.72, w = 0.78;
-    for (var s = 0; s < 2; s++) {
-      var x = (s ? 1 : -1) * w * 0.5;
-      var fl = cyl(R, R, 0.055, 20);
-      p.push(part(fl, T(x, R, 0, 0, 0, Math.PI * 0.5)));
+    var s, b, a, x;
+    for (s = 0; s < 2; s++) {
+      x = (s ? 1 : -1) * w * 0.5;
+      p.push(part(cyl(R, R, 0.055, 20), T(x, R, 0, 0, 0, Math.PI * 0.5)));
       // the radial battens that stop a drum rolling off a lorry
-      for (var b = 0; b < 8; b++) {
-        var a = b / 8 * Math.PI * 2;
+      for (b = 0; b < 8; b++) {
+        a = b / 8 * Math.PI * 2;
         p.push(part(box(0.05, R * 0.9, 0.075, 0.006),
           T(x + (s ? 0.04 : -0.04), R + Math.sin(a) * R * 0.5, Math.cos(a) * R * 0.5, 0, 0, a)));
       }
     }
     p.push(part(cyl(0.28, 0.28, w - 0.09, 14), T(0, R, 0, 0, 0, Math.PI * 0.5)));
-    // the wound cable itself
-    for (var k = 0; k < 5; k++) {
-      var rr = 0.30 + k * 0.075;
-      p.push(part(cyl(rr, rr, w - 0.14 - k * 0.012, 18, true), T(0, R, 0, 0, 0, Math.PI * 0.5)));
+    if (full !== false) {
+      // the wound cable: out to 0.62 m, so it fills the flange instead of
+      // hiding inside the shadow of it
+      for (var k = 0; k < 7; k++) {
+        var rr = 0.31 + k * 0.048;
+        p.push(part(cyl(rr, rr, w - 0.13 - k * 0.010, 18, true), T(0, R, 0, 0, 0, Math.PI * 0.5)));
+      }
+      // the tail: over the flange, down the outside and coiled on the ground
+      p.push(part(cyl(0.030, 0.030, 0.34, 7), T(0.30, R + 0.60, 0.30, 0.9, 0.5, 0)));
+      p.push(part(cyl(0.030, 0.030, 0.68, 7), T(0.44, R * 0.55, 0.52, 0.25, 0.4, 0.15)));
+      for (var c2 = 0; c2 < 3; c2++) {
+        p.push(part(tor(0.16 + c2 * 0.05, 0.030, 5, 12),
+          T(0.52 + c2 * 0.02, 0.032 + c2 * 0.010, 0.74, Math.PI * 0.5, c2 * 0.4, 0)));
+      }
+      // the taped end
+      p.push(part(cyl(0.042, 0.030, 0.11, 8), T(0.30, 0.05, 0.86, Math.PI * 0.42, 0.7, 0)));
+    } else {
+      // bare barrel with the drive slots and the last few turns still on it
+      for (var d2 = 0; d2 < 4; d2++) {
+        var da = d2 / 4 * Math.PI * 2 + 0.3;
+        p.push(part(box(0.06, 0.10, 0.10, 0.008),
+          T(w * 0.5 - 0.02, R + Math.sin(da) * 0.20, Math.cos(da) * 0.20)));
+      }
+      p.push(part(cyl(0.315, 0.315, w * 0.30, 16, true), T(-w * 0.22, R, 0, 0, 0, Math.PI * 0.5)));
     }
-    // hub bore and the tail of cable hanging off
+    // hub bore
     p.push(part(cyl(0.075, 0.075, w + 0.06, 10), T(0, R, 0, 0, 0, Math.PI * 0.5)));
     var g = mergeParts(p);
     disposeParts(p);
@@ -1552,14 +1617,29 @@
   };
 
   // ---- flat-coiled hose ----------------------------------------------------
+  // MEASURED: "a set of mathematically perfect concentric rings with no loose
+  // end and no crossing loops". Nobody coils a hose concentrically - it goes
+  // down in overlapping loops that wander, the last turn crosses the ones under
+  // it, and there is always a tail with a coupling on it lying clear of the
+  // stack. The rings are now offset, tilted and unequally spaced, one of them
+  // rides up over its neighbours, and the tail runs out to a real branch.
   K.coilHose = function () {
     var p = [];
+    var off = [[0, 0], [0.028, -0.019], [-0.022, 0.031], [0.041, 0.024], [-0.015, -0.036]];
     for (var k = 0; k < 5; k++) {
-      var r = 0.20 + k * 0.075;
-      p.push(part(tor(r, 0.032, 5, 16), T(0, 0.034 + (k % 2) * 0.012, 0, Math.PI * 0.5)));
+      var r = 0.195 + k * 0.071 + (k % 2 ? 0.012 : -0.008);
+      p.push(part(tor(r, 0.032, 5, 16),
+        T(off[k][0], 0.032 + k * 0.011, off[k][1],
+          Math.PI * 0.5 + (k % 2 ? 0.055 : -0.038), k * 0.7, (k % 3 === 1) ? 0.05 : -0.03)));
     }
-    p.push(part(cyl(0.032, 0.032, 0.42, 6), T(0.36, 0.034, 0.30, 0, 0.7, Math.PI * 0.5)));
-    p.push(part(cyl(0.045, 0.028, 0.13, 8), T(0.56, 0.034, 0.44, 0, 0.7, Math.PI * 0.5)));
+    // the crossing turn: it rides up and over the stack instead of nesting
+    p.push(part(tor(0.315, 0.032, 5, 16), T(0.03, 0.098, -0.02, Math.PI * 0.5 - 0.20, 1.1, 0.10)));
+    // the tail: out of the coil, a slack bight, then the coupling
+    p.push(part(cyl(0.032, 0.032, 0.30, 6), T(0.33, 0.052, 0.22, 0, 0.62, Math.PI * 0.5)));
+    p.push(part(cyl(0.032, 0.032, 0.34, 6), T(0.56, 0.040, 0.40, 0, 1.05, Math.PI * 0.5)));
+    p.push(part(cyl(0.032, 0.032, 0.26, 6), T(0.72, 0.036, 0.62, 0, 0.30, Math.PI * 0.5)));
+    p.push(part(cyl(0.048, 0.030, 0.14, 8), T(0.80, 0.036, 0.76, 0, 0.30, Math.PI * 0.5)));
+    p.push(part(tor(0.052, 0.010, 4, 10), T(0.755, 0.036, 0.715, 0, 0.30, Math.PI * 0.5)));
     var g = mergeParts(p);
     disposeParts(p);
     return g;
@@ -1933,6 +2013,11 @@
     await this._phase('heavy', this._dressHeavy);
     await this._phase('laydown', this._dressLaydown);
     await this._phase('racks', this._dressRacks);
+    // The carriageway pass runs BEFORE the kerbside one because it is the only
+    // pass that has to win its ground: the occupancy grid is first-come, and
+    // the near foreground of the level's signature frame is not something to
+    // leave to whatever is left over.
+    await this._phase('carriageway', this._dressCarriageway);
     await this._phase('road', this._dressRoad);
     await this._phase('unit200', this._dressUnit200);
     await this._phase('tankfarm', this._dressTankFarm);
@@ -2279,6 +2364,15 @@
       _vn.z += this.rng.gaussian(0, tilt);
       _vn.normalize();
     }
+    // KNOCKED OVER. `lay` tilts the settle normal by a real angle about a
+    // chosen azimuth, so a cone can lie on its side and a drum can be on its
+    // end. A prop set in which nothing has ever been hit by a fork truck is
+    // the "perfectly uniform anything" on the instant-fail list.
+    if (opts.lay) {
+      var la2 = opts.layDir === undefined ? this.rng.range(0, M.TAU) : opts.layDir;
+      var ca2 = Math.cos(opts.lay), sa2 = Math.sin(opts.lay);
+      _vn.set(Math.cos(la2) * sa2, ca2, Math.sin(la2) * sa2).normalize();
+    }
     var sc = opts.scale === undefined ? 1 : opts.scale;
     var ok = batch.add(
       settleT(x, y - (opts.sink || 0), z, yaw, _vn,
@@ -2420,7 +2514,8 @@
     bat('jbox', fin(K.junctionBox(), 'painted_metal', { noise: N, grime: 0.44, edge: 0.24, dust: 0.5, hiY: 0.4 }, 700), m.paintPale, 48, false);
     bat('tray', fin(K.cableTray(2.4), 'structural_steel', { noise: N, grime: 0.46, edge: 0.26, dust: 0.6, hiY: 0.3 }, 560), m.steel, 46, false);
     bat('toolbox', fin(K.toolChest(), 'painted_metal', { noise: N, grime: 0.42, edge: 0.34, dust: 0.5, hiY: 0.9 }, 620), m.paintRed, 16);
-    bat('cableDrum', fin(K.cableDrum(N), 'wood_plank', { noise: N, grime: 0.46, edge: 0.30, dust: 0.6, hiY: 1.4 }, 480), m.timber, 22);
+    bat('cableDrum', fin(K.cableDrum(N, true), 'wood_plank', { noise: N, grime: 0.46, edge: 0.30, dust: 0.6, hiY: 1.4 }, 480), m.timber, 22);
+    bat('cableDrumBare', fin(K.cableDrum(N, false), 'wood_plank', { noise: N, grime: 0.52, edge: 0.36, dust: 0.6, hiY: 1.4 }, 480), m.timber, 10);
     bat('gully', fin(K.gully(N), 'steel_grate', { noise: N, grime: 0.62, edge: 0.30, dust: 0.4, hiY: 0.2 }, 640), m.grate, 44, false);
 
     // ---- laydown -------------------------------------------------------------
@@ -2447,6 +2542,11 @@
     opts = opts || {};
     var tilt = opts.tilt === undefined ? 0.012 : opts.tilt;
     _vn.set(this.rng.gaussian(0, tilt), 1, this.rng.gaussian(0, tilt)).normalize();
+    if (opts.lay) {
+      var la3 = opts.layDir === undefined ? this.rng.range(0, M.TAU) : opts.layDir;
+      var ca3 = Math.cos(opts.lay), sa3 = Math.sin(opts.lay);
+      _vn.set(Math.cos(la3) * sa3, ca3, Math.sin(la3) * sa3).normalize();
+    }
     var sc = opts.scale === undefined ? 1 : opts.scale;
     return batch.add(
       settleT(x, y, z, yaw === undefined ? this.rng.range(0, M.TAU) : yaw, _vn,
@@ -2775,6 +2875,181 @@
   };
 
   // ---- the main road -------------------------------------------------------
+  // ==========================================================================
+  // THE CARRIAGEWAY.  The near foreground of the signature frame.
+  //
+  // MEASURED FAILURE: the lower 250 px of lv_hero1 - 35% of the image - was
+  // bare apron with nothing nearer than about 18 m, and it was not a lighting
+  // problem (that region measures 0.239 mean at 0.08 std, so anything standing
+  // there would read).  It was structural.  _dressRoad confines every kerbside
+  // placement to the 3 m strip outside the kerb, and _place refuses the
+  // carriageway outright unless `road:true` - so the crown of the road, which
+  // IS the bottom third of the level's hero pose, was swept clean by
+  // construction.  A hero frame always carries a near anchor to set scale.
+  //
+  // Everything here is a real reason for a road to be occupied - a lifted
+  // plate over a cable pull, its cordon, the gully line across the crown, a
+  // hose run out from the hydrant, drifted sand against the windward kerb -
+  // and everything except the cordon itself is kept under 0.4 m so the road's
+  // leading line runs through it rather than into it.
+  // ==========================================================================
+  PropsRefinery.prototype._dressCarriageway = function () {
+    var R = this.rng;
+    var rx0 = this.road.x0, rx1 = this.road.x1;
+    var i;
+
+    // ---- 1. the steel road plate over a cable trench ------------------------
+    // 8 m ahead of the hero mark and just right of the crown, so it sits on the
+    // third line rather than blocking the vanishing point.
+    var plx = 1.9, plz = 18.6, pyaw = 0.14;
+    var ply = this._ground(plx, plz);
+    var PW = 2.55, PD = 3.10;
+    // the trench itself, showing at the plate's uphill edge
+    this._static('rust', box(PW + 0.5, 0.30, 0.55, 0.01),
+      Tn(plx - Math.sin(pyaw) * 0, ply - 0.15, plz - PD * 0.5 - 0.30, 0, pyaw, 0));
+    // the plate: a chequer sheet with a chamfered lip all round and two lifting
+    // eyes, sitting 35 mm proud, which is what you trip over on a real site
+    this._static('grate', box(PW, 0.035, PD, 0.006), Tn(plx, ply + 0.035, plz, 0, pyaw, 0));
+    this._static('steel', box(PW + 0.22, 0.018, PD + 0.22, 0.004),
+      Tn(plx, ply + 0.012, plz, 0, pyaw, 0));
+    for (i = 0; i < 2; i++) {
+      this._static('steel', tor(0.075, 0.014, 5, 10),
+        Tn(plx + (i ? 0.85 : -0.85), ply + 0.055, plz + PD * 0.32, Math.PI * 0.5, pyaw, 0));
+    }
+    // spoil and a shovel-scraped ramp of sand banked on the downhill lip
+    this._place(this.B.drift, plx - 1.7, plz + 1.5,
+      { r: 0.5, h: 0.2, low: true, road: true, tilt: 0, yaw: pyaw,
+        sx: 1.7, sy: 0.32, sz: 0.9, sink: 0.03, maxRelief: 0.5 });
+    this._place(this.B.drift, plx + 1.6, plz - 1.2,
+      { r: 0.5, h: 0.2, low: true, road: true, tilt: 0, yaw: pyaw + 0.4,
+        sx: 1.4, sy: 0.28, sz: 0.8, sink: 0.03, maxRelief: 0.5 });
+    this._mark(MARK.oil, plx + 0.6, plz + 2.3, 2.0, 2.4, 0.3, { maxRelief: 0.5 });
+    this._mark(MARK.scuff, plx - 0.4, plz - 2.4, 3.0, 3.6, 0.1, { maxRelief: 0.5 });
+
+    // ---- 2. the cordon ------------------------------------------------------
+    // Seven cones on a jittered ellipse, one of them flat on its side where a
+    // wheel has clipped it, and the tape strung between the standing ones.
+    this._coneRing(plx, plz, 2.5, 3.0, 7, { road: true, lay: 2 });
+    this._tapeRing(plx, plz, 2.6, 3.1, 0.88);
+    this._placeAt(this.B.hat, plx - 1.6, this._ground(plx - 1.6, plz + 2.9) + 0.02, plz + 2.9,
+      R.range(0, 6), { tilt: 0.06 });
+
+    // ---- 3. the gully line across the crown ---------------------------------
+    // A transverse channel at the low point of the crossfall, 11 m ahead. Three
+    // hard, small-scale, strongly-lit objects laid straight across the leading
+    // line: the cheapest depth cue a receding road has.
+    var gz = 15.2;
+    for (i = 0; i < 5; i++) {
+      var gxx = rx0 + 1.3 + i * ((rx1 - rx0 - 2.6) / 4) + R.range(-0.22, 0.22);
+      var gyy = this._ground(gxx, gz);
+      this._placeAt(this.B.gully, gxx, gyy + 0.010, gz + R.range(-0.18, 0.18),
+        Math.PI * 0.5, { tilt: 0.008 });
+    }
+    this._static('steel', box(rx1 - rx0 - 1.6, 0.055, 0.10, 0.008),
+      Tn((rx0 + rx1) * 0.5, this._ground(0, gz) + 0.025, gz - 0.52, 0, 0, 0));
+
+    // ---- 4. the hose run ----------------------------------------------------
+    // Charged 65 mm line run out from the hydrant on the east verge and left
+    // lying across the carriageway. A hose is the one prop that draws a long,
+    // soft, non-orthogonal CURVE in a level made entirely of straight lines.
+    var hose = [
+      [8.4, 23.4], [7.2, 22.1], [5.6, 21.4], [3.9, 21.3], [2.4, 20.6],
+      [1.1, 19.4], [0.2, 17.9], [-0.4, 16.3], [-0.2, 14.6], [0.9, 13.4]
+    ];
+    for (i = 0; i + 1 < hose.length; i++) {
+      var ax = hose[i][0], az = hose[i][1], bx = hose[i + 1][0], bz = hose[i + 1][1];
+      var ay = this._ground(ax, az) + 0.048, by = this._ground(bx, bz) + 0.048;
+      // three sub-segments per span so the run bends instead of faceting
+      for (var s = 0; s < 3; s++) {
+        var t0 = s / 3, t1 = (s + 1) / 3;
+        this._static('rubber', cyl(0.042, 0.042, 1, 7),
+          strutT(M.lerp(ax, bx, t0), M.lerp(ay, by, t0) + Math.sin(t0 * 3.1) * 0.006,
+                 M.lerp(az, bz, t0),
+                 M.lerp(ax, bx, t1), M.lerp(ay, by, t1) + Math.sin(t1 * 3.1) * 0.006,
+                 M.lerp(az, bz, t1)));
+      }
+      // a coupling every other span
+      if (i % 2 === 1) {
+        this._static('steel', cyl(0.058, 0.058, 0.13, 8),
+          strutT(ax, ay, az, ax + (bx - ax) * 0.1, ay, az + (bz - az) * 0.1));
+      }
+    }
+    // the branch on the working end, and the hydrant it came from
+    this._static('paintB', cyl(0.055, 0.038, 0.36, 9),
+      strutT(0.9, this._ground(0.9, 13.4) + 0.05, 13.4, 1.35, this._ground(0.9, 13.4) + 0.10, 12.7));
+    var hyy = this._ground(8.9, 23.8);
+    this._static('paintB', cyl(0.10, 0.12, 0.86, 10), Tn(8.9, hyy + 0.43, 23.8));
+    this._static('paintB', sph(0.11, 10, 6), Tn(8.9, hyy + 0.88, 23.8));
+    this._static('steel', cyl(0.055, 0.055, 0.22, 8),
+      Tn(8.78, hyy + 0.62, 23.8, 0, 0, Math.PI * 0.5));
+
+    // ---- 5. the sand against the windward kerb ------------------------------
+    // The wind runs 0.72/0.69, so it drops its load on the west kerb line and
+    // nowhere else. This is the one thing in the near field that is not man-made
+    // and it is what stops the foreground reading as a tidy set of objects.
+    for (i = 0; i < 9; i++) {
+      var sz2 = 12.5 + i * 1.55 + R.range(-0.4, 0.4);
+      this._place(this.B.drift, rx0 + R.range(0.25, 1.05), sz2,
+        { r: 0.55, h: 0.2, low: true, road: true, tilt: 0,
+          yaw: Math.atan2(this._wx(), this._wz()) + R.range(-0.35, 0.35),
+          sx: R.range(1.3, 2.6), sy: R.range(0.25, 0.55), sz: R.range(0.9, 1.9),
+          sink: 0.04, maxRelief: 0.6 });
+    }
+    for (i = 0; i < 3; i++) {
+      this._mark(MARK.sand, rx0 + R.range(0.6, 2.0), 13.0 + i * 4.4, 2.6, 3.4,
+        R.range(0, 3), { maxRelief: 0.6, lift: 0.010 });
+    }
+
+    // ---- 6. the chained-off bollard pair ------------------------------------
+    // Standing on the west verge line, closing the old access. Two posts and a
+    // catenary is the only near-field object here with real height, and it is
+    // deliberately at the frame edge so it frames rather than blocks.
+    var b0 = [rx0 + 0.9, 23.9], b1 = [rx0 + 2.9, 24.4];
+    var by0 = this._place(this.B.bollard, b0[0], b0[1],
+      { r: 0.4, h: 1.0, road: true, tilt: 0.04, collider: [0.14, 0.5, 0.14] });
+    var by1 = this._place(this.B.bollard, b1[0], b1[1],
+      { r: 0.4, h: 1.0, road: true, tilt: 0.03, collider: [0.14, 0.5, 0.14] });
+    if (by0 !== null && by1 !== null) {
+      var links = 9;
+      for (i = 0; i < links; i++) {
+        var u0 = i / links, u1 = (i + 1) / links;
+        var sag = 0.30;
+        this._static('rust', cyl(0.020, 0.020, 1, 5),
+          strutT(M.lerp(b0[0], b1[0], u0), by0 + 0.78 - sag * 4 * u0 * (1 - u0),
+                 M.lerp(b0[1], b1[1], u0),
+                 M.lerp(b0[0], b1[0], u1), by1 + 0.78 - sag * 4 * u1 * (1 - u1),
+                 M.lerp(b0[1], b1[1], u1)));
+      }
+    }
+
+    // ---- 7. the wear the traffic leaves ------------------------------------
+    this._mark(MARK.scuff, -2.2, 21.0, 4.4, 6.0, 0.05, { maxRelief: 0.5 });
+    this._mark(MARK.grime, 2.6, 13.6, 3.6, 4.4, 0.0, { maxRelief: 0.5 });
+    this._mark(MARK.drip, -3.4, 17.2, 1.8, 2.4, 0.6, { maxRelief: 0.5 });
+    this._placeAt(this.B.offcut, -4.2, this._ground(-4.2, 19.6) + 0.02, 19.6, 1.1, { tilt: 0.05 });
+    this._placeAt(this.B.rag, 3.4, this._ground(3.4, 15.8) + 0.02, 15.8, 0.4, { tilt: 0.03 });
+  };
+
+  // A ring of cones with the spacing jittered +/-35% and one or two laid over.
+  // Seven cones at identical spacing, all perfectly upright, is a metronome.
+  PropsRefinery.prototype._coneRing = function (cx, cz, rx, rz, n, opts) {
+    var R = this.rng;
+    opts = opts || {};
+    var flat = opts.lay === undefined ? -1 : opts.lay;
+    var a = R.range(0, M.TAU);
+    for (var i = 0; i < n; i++) {
+      // walk round in jittered steps rather than dividing the circle evenly
+      a += (M.TAU / n) * R.range(0.65, 1.35);
+      var px = cx + Math.cos(a) * rx * R.range(0.90, 1.10);
+      var pz = cz + Math.sin(a) * rz * R.range(0.90, 1.10);
+      var o = { r: 0.30, h: 0.7, low: true, road: !!opts.road,
+                yaw: R.range(0, M.TAU), tilt: 0.055 };
+      if (i === flat) { o.lay = R.range(1.15, 1.45); o.sink = 0.06; o.tilt = 0; }
+      else if (R.bool(0.22)) { o.lay = R.range(0.16, 0.34); o.tilt = 0; }
+      this._place(this.B.cone, px, pz, o);
+    }
+  };
+
   PropsRefinery.prototype._dressRoad = function () {
     var A = this.A, R = this.rng;
     var rx0 = this.road.x0, rx1 = this.road.x1;
@@ -2836,11 +3111,7 @@
     // and taped, with the plate itself leaning against the barrier and the
     // tools still out.  Every real plant has exactly one of these.
     var wxc = rx1 + 2.6, wzc = -30.0;
-    for (i = 0; i < 7; i++) {
-      var a = (i / 7) * M.TAU;
-      this._place(this.B.cone, wxc + Math.cos(a) * 2.3, wzc + Math.sin(a) * 2.9,
-        { r: 0.3, h: 0.7, low: true, road: true });
-    }
+    this._coneRing(wxc, wzc, 2.3, 2.9, 7, { road: true, lay: 4 });
     this._place(this.B.toolbox, wxc + 1.1, wzc - 1.6, { r: 0.7, h: 0.9, yaw: 0.7 });
     this._place(this.B.coil, wxc - 1.2, wzc + 1.4, { r: 0.55, h: 0.2, low: true });
     this._place(this.B.bottlePack, wxc + 1.9, wzc + 2.2, { r: 0.7, h: 1.5, collider: [0.45, 0.78, 0.45] });
@@ -2932,25 +3203,52 @@
     }
     // cone taper narrowing the carriageway on the north approach, which is the
     // one piece of dressing that is allowed to stand ON the road
+    // Spacing jittered +/-35% and two of the twelve knocked flat. Cones set out
+    // by a person are never at identical centres and never all still standing.
+    var ct = 0, cs = 0;
     for (var c = 0; c < 6; c++) {
-      this._place(this.B.cone, -6.4 + c * 0.28, 11.0 - c * 1.6,
-        { r: 0.28, h: 0.7, low: true, road: true, yaw: R.range(0, 6) });
-      this._place(this.B.cone, 6.4 - c * 0.28, 24.0 + c * 1.6,
-        { r: 0.28, h: 0.7, low: true, road: true, yaw: R.range(0, 6) });
+      ct += R.range(0.65, 1.35);
+      cs += R.range(0.65, 1.35);
+      this._place(this.B.cone, -6.4 + ct * 0.28 + R.range(-0.12, 0.12), 11.0 - ct * 1.6,
+        { r: 0.28, h: 0.7, low: true, road: true, yaw: R.range(0, 6),
+          tilt: 0.05, lay: (c === 4) ? 1.32 : 0, sink: (c === 4) ? 0.06 : 0 });
+      this._place(this.B.cone, 6.4 - cs * 0.28 + R.range(-0.12, 0.12), 24.0 + cs * 1.6,
+        { r: 0.28, h: 0.7, low: true, road: true, yaw: R.range(0, 6),
+          tilt: 0.05, lay: (c === 1) ? R.range(0.20, 0.38) : 0 });
     }
   };
 
+  // MEASURED: the runs read as ONE CONTINUOUS EXTRUSION with a repeating notch
+  // along the top - "a zipper, not discrete 3 m units". A jersey barrier run is
+  // a line of separately cast, separately dropped 2.3 m units: there is a
+  // finger's gap at every joint, no two sit at quite the same heading, one in
+  // five has been nudged out of line by a fork truck, and the ends of a run
+  // never land on the theoretical centres. All of that is per-instance jitter
+  // and it costs nothing.
   PropsRefinery.prototype._barrierRun = function (ax, az, bx, bz, yaw) {
     var dx = bx - ax, dz = bz - az;
     var len = Math.sqrt(dx * dx + dz * dz);
-    var n = Math.max(1, Math.round(len / 2.36));
+    if (len < 0.5) return;
+    var ux = dx / len, uz = dz / len;
+    var px2 = -uz, pz2 = ux;                    // lateral, for the nudges
     var R = this.rng;
-    for (var i = 0; i < n; i++) {
-      var t = (i + 0.5) / n;
-      var x = ax + dx * t, z = az + dz * t;
+    // start the run at a random offset so two runs never share a joint rhythm
+    var s = R.range(0.05, 0.55);
+    var guard = 0;
+    while (s + 2.30 <= len + 0.4 && guard++ < 60) {
+      var mid = s + 1.15;
+      var lat = R.bool(0.20) ? R.range(-0.16, 0.16) : R.range(-0.035, 0.035);
+      var x = ax + ux * mid + px2 * lat;
+      var z = az + uz * mid + pz2 * lat;
       this._place(this.B.barrier, x, z,
-        { r: 1.15, h: 0.85, yaw: yaw + R.range(-0.025, 0.025), tilt: 0.012,
-          maxRelief: 0.30, collider: [0.32, 0.42, 1.18] });
+        { r: 1.10, h: 0.85, yaw: yaw + R.range(-0.052, 0.052), tilt: 0.016,
+          // a cast unit is not a machined one: 4% of length and 5% of height
+          sx: R.range(0.985, 1.015), sy: R.range(0.955, 1.045),
+          sz: R.range(0.97, 1.02),
+          maxRelief: 0.34, collider: [0.32, 0.42, 1.18] });
+      // 20-45 mm of daylight at every joint, which is what makes the top line
+      // read as units rather than as one moulding
+      s += 2.30 + R.range(0.020, 0.048);
     }
   };
 
@@ -3268,6 +3566,9 @@
     this._placeAt(this.B.pallet, x0 + 16.2, fy, z1 - 3.15, 1.60, { tilt: 0.004 });
     this._placeAt(this.B.crate, x0 + 1.9, fy, z1 - 2.9, 0.22, { tilt: 0.004 });
     this._placeAt(this.B.crate, x0 + 3.2, fy, z1 - 3.0, -0.16, { tilt: 0.004 });
+    // one wound, one bare and lying on its side where it was rolled off the
+    // pallet - two identical upright drums was the review's own example of
+    // uniformity across the prop set
     this._placeAt(this.B.cableDrum, x0 + 11.4, fy, z1 - 3.1, 1.35, { tilt: 0.004 });
     this._placeAt(this.B.coil, x0 + 6.4, fy, z1 - 3.2, 0.5, { tilt: 0.004 });
     for (i = 0; i < 4; i++) {
@@ -3281,7 +3582,10 @@
     this._placeAt(this.B.drumPale, x1 - 2.15, fy, z1 - 2.9, 2.4, { tilt: 0.006 });
     this._placeAt(this.B.drumPale, x1 - 1.85, fy, z1 - 3.5, 4.1, { tilt: 0.006 });
     this._placeAt(this.B.crate, x1 - 5.4, fy, z1 - 1.45, -0.07, { tilt: 0.004 });
-    this._placeAt(this.B.cableDrum, x1 - 4.2, fy, z1 - 3.4, 0.9, { tilt: 0.004 });
+    // rolled flat onto a flange, which is how a drum ends up once its cable is
+    // pulled and nobody has taken it back to the store
+    this._placeAt(this.B.cableDrumBare, x1 - 4.2, fy + 0.72, z1 - 3.4, 0.9,
+      { lay: Math.PI * 0.5, layDir: 0.35, tilt: 0 });
     this._placeAt(this.B.cone, x1 - 3.4, fy, z1 - 5.0, 0.6, { tilt: 0.02 });
     this._placeAt(this.B.toolbox, x1 - 6.8, fy, z1 - 3.0, 1.55, { tilt: 0.004 });
     this._placeAt(this.B.coil, x1 - 5.9, fy, z1 - 4.6, 0.3, { tilt: 0.004 });
@@ -3320,11 +3624,33 @@
     // ---- the floor itself.  The walking line from the shutter to the pump
     // row and on to the MCC is the most-trodden 30 square metres in the level,
     // and a swept-clean slab is the tell that nobody works here.
-    for (i = 0; i < 5; i++) {
-      var t = i / 4;
-      this._markAt(MARK.tread, M.lerp(x1 - 3.0, x0 + 3.0, t) + R.range(-0.4, 0.4), fy,
-        M.lerp(z1 - 6.4, cz - 0.6, t * t) + R.range(-0.3, 0.3),
-        0.95, 1.7, 1.57 + R.range(-0.55, 0.55));
+    // THE TYRE TRACK. Built as a CHAIN of quads laid nose to tail in world
+    // metres, each 1.7 m long, so the tread pitch is fixed at 190 mm on the
+    // ground and perspective shortens it by itself. It curves gently toward the
+    // shutter (a fork truck coming in through the door does not drive a
+    // straight line) and fades over its last 4 m by narrowing to nothing, so it
+    // dies into the floor instead of stopping at an edge.
+    var TRK = 14, trkX0 = x1 - 1.6, trkX1 = x0 + 3.4;
+    for (i = 0; i < TRK; i++) {
+      var u = (i + 0.5) / TRK;
+      var tx3 = M.lerp(trkX0, trkX1, u);
+      // the curve: hardest near the shutter where the truck is still turning in
+      var bend = Math.pow(1 - u, 1.7) * 2.4;
+      var tz3 = cz - 1.05 + bend + Math.sin(u * 5.1) * 0.10;
+      var fade = M.smoothstep(1.0, 0.72, u);          // last 4 m dies away
+      var wide = 1.55 * (0.55 + 0.45 * fade);
+      var head = Math.atan2(
+        M.lerp(trkX0, trkX1, Math.min(1, u + 0.06)) - tx3,
+        (cz - 1.05 + Math.pow(1 - Math.min(1, u + 0.06), 1.7) * 2.4) - tz3);
+      this._markAt(MARK.tread, tx3, fy, tz3, wide, (trkX0 - trkX1) / TRK * 1.02,
+        head + Math.PI * 0.5);
+    }
+    // a second, older pass at a different heading, half faded
+    for (i = 0; i < 8; i++) {
+      var u2 = (i + 0.5) / 8;
+      this._markAt(MARK.tread, M.lerp(x1 - 2.4, x0 + 9.0, u2), fy,
+        cz + 2.6 - u2 * 1.4, 1.15, (x1 - 11.4 - x0) / 8 * 1.02,
+        Math.PI * 0.5 + 0.10);
     }
     this._markAt(MARK.grime, x0 + 6.0, fy, z1 - 1.9, 4.5, 2.2, 0.0);
     this._markAt(MARK.grime, x0 + 15.0, fy, z1 - 2.0, 4.0, 2.0, 0.0);
