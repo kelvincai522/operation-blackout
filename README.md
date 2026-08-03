@@ -1,7 +1,7 @@
 # OPERATION BLACKOUT
 
-A first-person shooter built in Three.js r180. ~55,000 lines of game code,
-zero external assets, zero build step.
+A first-person shooter built in Three.js r180. **10 levels**, ~157,000 lines of
+game code, zero external assets, zero build step.
 
 **Level 1 — Al-Bakr Market District.** Golden hour, dust, a war-torn market street.
 
@@ -38,17 +38,27 @@ Chrome or Edge recommended. A discrete GPU will hold 60fps at 1080p.
 | Level | id | Conditions |
 |---|---|---|
 | Al-Bakr Market District | `market` (default) | Golden hour, hot, dusty, horizontal street canyon |
-| Cold Harbor Container Terminal | `harbor` | 02:00, heavy rain, storm, lit only by sodium/mercury practicals and lightning |
+| Cold Harbor Container Terminal | `harbor` | 02:00, storm, sodium practicals and lightning, vertical canyons |
+| Kirovsk Pass | `snowbound` | Overcast day, blizzard whiteout, half-buried alpine village |
+| Line 4 — Zarechnaya | `metro` | Underground, no sky, flooded, failing fluorescents |
+| Meridian Tower | `highrise` | Sunset, unfinished skyscraper, extreme verticality |
+| AMARG Boneyard | `boneyard` | High noon, arid, aircraft storage, brutal overhead sun |
+| Facility K-17 | `bunker` | Buried, no sky, failing lights and alarm beacons |
+| Mekong Delta | `jungle` | Midday, humid drizzle, canopy light shafts |
+| Zubair Refinery | `refinery` | Dusk, flare stacks and floods, industrial lattice |
+| Bayon Ruins | `ruins` | Dawn, ground mist, overgrown stone temple |
 
-Select with `index.html?level=harbor`. A level is a `Level`+`Props` pair
+Select with `index.html?level=<id>`. A level is a `Level`+`Props` pair
 registered in the `LEVELS` table in [src/game/main.js](src/game/main.js); no
 other system knows which one is loaded — they branch on `ctx.levelId`. An
 unknown or failed level falls back to `market` rather than blanking the screen.
 
-The two are deliberate opposites — night against day, wet against dry,
-practicals against sun, vertical against horizontal — because a second level
-that re-dresses the first is not a second level. Cold Harbor's look is carried
-by reflection and specular where the market's is carried by haze.
+No two levels share a look: each is pinned to a different point in time-of-day,
+weather, light source, spatial character and dominant material family. See
+[LEVELS_ROSTER.md](LEVELS_ROSTER.md) for the per-level briefs.
+
+Levels 3–10 carry a **declarative environment profile** in the `LEVELS` table, so
+adding one needs no edits to the shared rendering systems.
 
 ## What's unusual about this build
 
@@ -107,8 +117,7 @@ the architecture, the rationale for generating every asset from code, the
 agent-orchestration methodology, the verification tooling, six case-study bugs,
 and where the technique does and does not transfer to other projects.
 
-It includes the measured cost of the project (~39.2M tokens across 147 agent
-runs), an analysis of where this method breaks down, and embedded captures and
+It includes the measured cost of the project (~43.4M tokens across 156 agent runs), an analysis of where this method breaks down, and embedded captures and
 animated demos. Markdown, so it renders directly on GitHub.
 
 ## Contributing

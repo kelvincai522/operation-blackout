@@ -2280,8 +2280,15 @@
       // frame at ctx.params.t; time the last shot to land on it so the flash
       // is actually alight when the shutter opens.
       // main.js publishes the URL query on GAME.params, not on ctx
+      // Levels 3-10 publish the standard pose keys and are captured through the
+      // GENERIC scenario names, which carry an `lv_` prefix. Matching only the
+      // two bespoke market/harbor names meant eight levels fired their single
+      // scripted round 0.75 s before the shutter and photographed a dead
+      // muzzle: lv_muzzleflash and lv_firefight were indistinguishable from
+      // lv_hero1 on every one of them. Accept both spellings; the bare names
+      // still resolve exactly as before, so levels 1-2 cannot move.
       var P = GAME.params || ctx.params || {};
-      var sc = P.scenario;
+      var sc = String(P.scenario || '').replace(/^lv_/, '');
       if ((ctx.capture || GAME.headless) && (sc === 'muzzleflash' || sc === 'firefight')) {
         var end = parseFloat(P.t || '2.5');
         if (isFinite(end)) this._captureFire = { from: Math.max(0.2, end - 0.32), to: end + 0.02 };

@@ -1,0 +1,4946 @@
+// ============================================================================
+// OPERATION BLACKOUT - src/world/level_jungle.js  ->  GAME.LevelJungle
+//
+// "MEKONG DELTA": dense tropical growth around a river and a ruined firebase.
+// Midday, humid drizzle, filtered canopy light, saturated green. The deliberate
+// opposite of every other level in the roster on every axis - it is the only
+// ORGANIC space in the build, the only one whose dominant material is alive,
+// and the only one whose occlusion is soft rather than architectural.
+//
+// THE PLAN, in world coordinates. -Z is upriver/north; the player lands at the
+// southern end of the track and works north to the firebase.
+//
+//   x = -42 .. -14    THE RIVER, a sinuous brown channel 20-26 m wide. It is
+//                     the level's only open sky and therefore its only bright
+//                     floor: a horizontal band of reflected cloud low in every
+//                     framing that looks west.
+//   x = -14 .. -4     the east bank: mangrove roots, mud shelf, elephant grass
+//   x =  -4 ..  +8    THE TRACK, a rutted mud road from z = +60 to the firebase
+//   z = +26           THE CREEK and the collapsed bamboo footbridge, plus the
+//                     French sluice headwall where the creek meets the river
+//   (-14, +10)        THE DOWNED HUEY, nose in the shallows, tail on the bank,
+//                     reclaimed by growth. hero2's subject.
+//   (11, -24)         THE FIREBASE on its knoll: sandbag perimeter, command
+//                     bunker (sunk, shell-holed roof), watchtower on stilts,
+//                     mortar pit, PSP helipad, comms mast.
+//   |x| > 30, |z| > 46  the forest wall and the rising ground that closes it
+//
+// ============================================================================
+// FOLIAGE IS THE MATERIAL, AND IT IS AUTHORED HERE
+// ============================================================================
+// materials.js has one foliage recipe and it is DRY MEDITERRANEAN - small hard
+// leaves, dust tints, a yellow-olive palette. That is the wrong plant and the
+// wrong hemisphere, so this file generates its own two-material set:
+//
+//   BLADE  solid, two-sided, NO alpha cut. Every piece of foliage the player
+//          can walk up to - elephant grass, fern pinnae, banana, taro, palm
+//          leaflets - is real ribbon geometry with a folded midrib, because
+//          DEVELOPMENT.md's third-ranked weak point is "foliage is alpha-tested
+//          cards; it does not hold up close" and the understory of a jungle
+//          level is, by definition, the thing closest to the camera.
+//   CANOPY alpha-cut cards, used ONLY above 8 m where nothing is ever seen at
+//          arm's length: the canopy tiers, hanging lianas, dead fronds.
+//
+// Both carry an emissiveMap keyed to their own albedo at low intensity. That is
+// the cheap honest read of leaf translucency: a leaf in shade never goes black,
+// which is the instant tell, and at 0.09 intensity it is 5% of a lit leaf and
+// invisible where the light already is.
+//
+// "Saturated green must not become a flat green wash." The value range is built
+// in four independent places so no single one has to carry it:
+//   * the CANOPY is cool and dark, the UNDERSTORY warm and light - foliage
+//     vertex colour runs a warm/cool ramp on height, not just a value ramp
+//   * the ground is painted by sky exposure: bright in the clearings, the track
+//     and the water's edge, deep and cold under closed canopy
+//   * four light shafts land as FIXTURES (lux, not solar), so the pools exist
+//     whatever the overcast does to the sun
+//   * the only non-green things in the level - the river, the bleached
+//     sandbags, the aluminium of the wreck, the shrine's candles - are placed
+//     where the framings put them, not scattered
+//
+// ============================================================================
+// THE PLACEMENT CONTRACT  -  `level.anchors`
+// ============================================================================
+// Published by the CONSTRUCTOR, so props_jungle.js can read it the instant the
+// object exists and never has to wait for build().
+//
+//   anchors.delta      { x0,x1,z0,z1, waterY, groundY(x,z), riverC(z),
+//                        riverHalf(z), trackX(z), wind }
+//   anchors.river      { waterY, centre(z), half(z), eastEdge(z), westEdge(z) }
+//   anchors.track      { half, centre(z), pts, gate }
+//   anchors.spawn      { position, yaw }
+//   anchors.firebase   { centre, yaw, radius, topY, gate, breach, mortarPit,
+//                        helipad{centre,r}, mast, drum, perimeter[] }
+//   anchors.bunker     { centre, yaw, w, d, floorY, roofY, door, holeAbove,
+//                        holeFloor, interiorEye, interiorTarget }
+//   anchors.tower      { base, platform, roof, yaw, legR }
+//   anchors.heli       { centre, yaw, nose, tail, rotorHub, doorSill, beacon }
+//   anchors.creek      { half, centreZ(x), floorY, bridge{nearLip,farLip,deckY} }
+//   anchors.sluice     { centre, yaw, topY, mouth }
+//   anchors.shrine     { centre, yaw, topY, candle }
+//   anchors.trees      [ {centre, r, height, canopyY, buttress} ]
+//   anchors.clearings  [ {centre, r} ]        - where sky reaches the floor
+//   anchors.logs       [ {a, b, r} ]          - fallen trunks
+//
+//   DO NOT derive a world position from `level.cameraPoses`. A pose is a
+//   COMPOSITION and moves whenever the composition improves; the harbor build
+//   put fixtures in corridors that had stopped existing exactly that way.
+//
+// Also published, all consumed generically:
+//   level.practicalLights   the shrine candles, the firebase brazier, the
+//                           bunker lantern and worklight, the wreck's beacon.
+//                           A midday jungle has almost no practicals and
+//                           inventing street lighting would be a lie - these
+//                           five are all things that burn regardless of hour,
+//                           and every one of them has visible geometry.
+//   level.lightShafts       four canopy gaps, published with `lux` so they are
+//                           FIXTURES: the sky preset is 'overcast', so a shaft
+//                           gated on the solar disc would simply not exist, and
+//                           "light arrives as shafts filtered through canopy"
+//                           is the first line of the brief.
+//   level.dripEdges         leaf tips and eaves that weather.js hangs its drip
+//                           ropes from. The brief puts the water ON THE LEAVES.
+//   level.foliage           THE FOLIAGE KIT. The two materials, the atlas cell
+//                           table, and the generators that made every leaf in
+//                           the level - so props_jungle grows the SAME plant
+//                           rather than authoring a second, subtly different
+//                           green. See the constructor.
+// ============================================================================
+(function (GAME, THREE) {
+  'use strict';
+
+  var M = GAME.Math;
+  var Geo = GAME.Geo;
+
+  // ---------------------------------------------------------------- layout --
+  var X_MIN = -62, X_MAX = 58;
+  var Z_MIN = -58, Z_MAX = 66;
+
+  var WATER_Y = 0.0;
+  var CH_DEPTH = 2.55;          // river bed below the surface, mid-channel
+  var BANK_H = 3.05;            // bank crest above the water
+  var KNOLL_H = 4.35;           // the firebase sits on this
+
+  var TRACK_HALF = 2.45;        // rutted carriageway half-width
+  var TRACK_SHOULDER = 4.3;     // where the flattening blends out
+
+  var CREEK_Z = 26.0, CREEK_HALF = 3.9, CREEK_DEPTH = 2.15;
+
+  var FB_X = 11.0, FB_Z = -24.0, FB_R = 17.4, FB_YAW = 0.26;
+
+  // Drizzle blows toward (0.70, 0.71) at 1.6 m/s (weather.js PRESETS.drizzle
+  // takes its default wind vector from the library). Nearly still air under a
+  // canopy - what moves is the mist, not the drops - so this only decides which
+  // way the lianas hang and which flank of a trunk carries the wet streak.
+  var WIND_X = 0.70, WIND_Z = 0.71;
+
+  var UP = new THREE.Vector3(0, 1, 0);
+
+  // ---------------------------------------------------------------- surface --
+  // `uv` is world metres -> uv for the planar entries; the triplanar library
+  // materials (dirt, concrete, stone, rubble) project in world space and ignore
+  // it. `own` marks a surface generated in this file. `base` is the library
+  // name to fall back on, `col` the colour forced onto the fallback so an olive
+  // airframe never renders grey.
+  var SURF = {
+    mud:        { uv: 0.50, cast: false, recv: true, own: 'mud' },
+    silt:       { uv: 0.50, cast: false, recv: true, own: 'silt' },
+    water:      { uv: 0.25, cast: false, recv: false, own: 'water' },
+
+    bark:       { uv: 1.00, cast: true,  recv: true, own: 'bark', keepUV: true },
+    blade:      { uv: 1.00, cast: true,  recv: true, own: 'blade', keepUV: true },
+    canopy:     { uv: 1.00, cast: true,  recv: true, own: 'canopy', keepUV: true },
+    lit:        { uv: 1.00, cast: false, recv: false, own: 'lit', keepUV: true },
+    lit2:       { uv: 1.00, cast: false, recv: false, own: 'lit2', keepUV: true },
+    mark:       { uv: 1.00, cast: false, recv: true,  own: 'mark', keepUV: true },
+
+    timber:     { uv: 0.80, cast: true,  recv: true, base: 'wood_plank',
+                  col: 0x6a583f, rough: 0.92, metal: 0.0 },
+    timber_wet: { uv: 0.62, cast: true,  recv: true, base: 'wood_plank',
+                  col: 0x3c3327, rough: 0.94, metal: 0.0 },
+    bamboo:     { uv: 1.30, cast: true,  recv: true, base: 'wood_plank',
+                  col: 0x9a9663, rough: 0.72, metal: 0.0 },
+    sandbag:    { uv: 0.95, cast: true,  recv: true, base: 'sandbag',
+                  col: 0x8b8161, rough: 0.96, metal: 0.0 },
+    concrete:   { uv: 0.40, cast: true,  recv: true, base: 'concrete',
+                  col: 0x7f8076, rough: 0.94, metal: 0.0 },
+    stonework:  { uv: 0.34, cast: true,  recv: true, base: 'stone',
+                  col: 0x6f7168, rough: 0.93, metal: 0.0 },
+    rust:       { uv: 0.85, cast: true,  recv: true, base: 'rusted_metal',
+                  col: 0x6b4229, rough: 0.90, metal: 0.55 },
+    tin:        { uv: 0.72, cast: true,  recv: true, base: 'corrugated_metal',
+                  col: 0x5e5c50, rough: 0.78, metal: 0.60 },
+    olive:      { uv: 0.90, cast: true,  recv: true, base: 'paint_green',
+                  col: 0x3d4634, rough: 0.68, metal: 0.42 },
+    alu:        { uv: 0.90, cast: true,  recv: true, base: 'painted_metal',
+                  col: 0x767a72, rough: 0.52, metal: 0.72 },
+    canvas:     { uv: 1.00, cast: true,  recv: true, base: 'canvas_awning',
+                  col: 0x5c5b44, rough: 0.95, metal: 0.0 },
+    rope:       { uv: 2.00, cast: true,  recv: true, base: 'rope',
+                  col: 0x6a604c, rough: 0.95, metal: 0.0 },
+    rubber:     { uv: 1.30, cast: true,  recv: true, base: 'rubber',
+                  col: 0x1b1d1d, rough: 0.92, metal: 0.0 },
+    glazing:    { uv: 0.60, cast: false, recv: false, base: 'glass',
+                  col: 0x8fa0a2, rough: 0.12, metal: 0.0, env: 1.4 }
+  };
+
+  // If materials.js is unavailable entirely the delta must still read as a
+  // green river valley rather than as magenta error boxes.
+  var FALLBACK = {
+    mud:        [0x3b3a26, 0.95, 0.0],
+    silt:       [0x4a412c, 0.93, 0.0],
+    water:      [0x1d2417, 0.10, 0.0],
+    bark:       [0x4a4438, 0.93, 0.0],
+    blade:      [0x40632c, 0.62, 0.0],
+    canopy:     [0x33501f, 0.70, 0.0],
+    lit:        [0xffb060, 0.30, 0.0],
+    lit2:       [0xff3018, 0.30, 0.0],
+    mark:       [0x6a6046, 0.92, 0.0],
+    timber:     [0x6a583f, 0.92, 0.0],
+    timber_wet: [0x3c3327, 0.94, 0.0],
+    bamboo:     [0x9a9663, 0.72, 0.0],
+    sandbag:    [0x8b8161, 0.96, 0.0],
+    concrete:   [0x7f8076, 0.94, 0.0],
+    stonework:  [0x6f7168, 0.93, 0.0],
+    rust:       [0x6b4229, 0.90, 0.55],
+    tin:        [0x5e5c50, 0.78, 0.60],
+    olive:      [0x3d4634, 0.68, 0.42],
+    alu:        [0x767a72, 0.52, 0.72],
+    canvas:     [0x5c5b44, 0.95, 0.0],
+    rope:       [0x6a604c, 0.95, 0.0],
+    rubber:     [0x1b1d1d, 0.92, 0.0],
+    glazing:    [0x8fa0a2, 0.12, 0.0]
+  };
+
+  // ------------------------------------------------------- geometry helpers --
+  var _e1 = new THREE.Euler();
+
+  function makeM(x, y, z, rx, ry, rz) {
+    var m = new THREE.Matrix4();
+    if (rx || ry || rz) {
+      _e1.set(rx || 0, ry || 0, rz || 0, 'YXZ');
+      m.makeRotationFromEuler(_e1);
+    }
+    m.elements[12] = x || 0; m.elements[13] = y || 0; m.elements[14] = z || 0;
+    return m;
+  }
+
+  function vertCount(g) {
+    return g.index ? g.index.count : g.attributes.position.count;
+  }
+
+  var _boxCache = new Map();
+  function box(w, h, d, bevel) {
+    w = Math.max(w, 0.004); h = Math.max(h, 0.004); d = Math.max(d, 0.004);
+    if (bevel === undefined) bevel = Math.min(0.014, Math.min(w, Math.min(h, d)) * 0.24);
+    var k = w.toFixed(3) + ',' + h.toFixed(3) + ',' + d.toFixed(3) + ',' + bevel.toFixed(3);
+    var g = _boxCache.get(k);
+    if (!g) {
+      var src = Geo.bevelBox(w, h, d, bevel);
+      g = src.toNonIndexed(); src.dispose();
+      _boxCache.set(k, g);
+    }
+    return g;
+  }
+
+  var _cylCache = new Map();
+  function cyl(rTop, rBot, len, seg, open) {
+    seg = seg || 8;
+    var k = rTop.toFixed(4) + ',' + rBot.toFixed(4) + ',' + len.toFixed(3) + ',' + seg +
+      (open ? 'o' : 'c');
+    var g = _cylCache.get(k);
+    if (!g) {
+      var src = new THREE.CylinderGeometry(rTop, rBot, len, seg, 1, !!open);
+      g = src.toNonIndexed(); src.dispose();
+      _cylCache.set(k, g);
+    }
+    return g;
+  }
+
+  var _quadCache = new Map();
+  function quad(w, h, u0, v0, u1, v1) {
+    if (u0 === undefined) { u0 = 0; v0 = 0; u1 = 1; v1 = 1; }
+    var k = w.toFixed(3) + ',' + h.toFixed(3) + ',' + u0.toFixed(4) + ',' +
+      v0.toFixed(4) + ',' + u1.toFixed(4) + ',' + v1.toFixed(4);
+    var g = _quadCache.get(k);
+    if (g) return g;
+    var hw = w * 0.5, hh = h * 0.5;
+    var pos = new Float32Array([
+      -hw, -hh, 0, hw, -hh, 0, hw, hh, 0,
+      -hw, -hh, 0, hw, hh, 0, -hw, hh, 0]);
+    var nor = new Float32Array(18);
+    for (var i = 0; i < 6; i++) nor[i * 3 + 2] = 1;
+    var uv = new Float32Array([u0, v0, u1, v0, u1, v1, u0, v0, u1, v1, u0, v1]);
+    g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    _quadCache.set(k, g);
+    return g;
+  }
+
+  // A tapered, bent tube through a list of [x,y,z,r] stations. This is the atom
+  // of every trunk, buttress-free branch, liana, mangrove prop root and bamboo
+  // culm in the level: a straight cylinder reads as pipework, and pipework in a
+  // forest is the loudest possible tell.
+  function tube(stations, seg, capTop) {
+    seg = seg || 7;
+    var n = stations.length;
+    if (n < 2) return new THREE.BufferGeometry();
+    var pos = [], nor = [], uv = [];
+    var i, j;
+    // per-station frame
+    var frames = [];
+    for (i = 0; i < n; i++) {
+      var a = stations[Math.max(0, i - 1)], b = stations[Math.min(n - 1, i + 1)];
+      var tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2];
+      var tl = Math.sqrt(tx * tx + ty * ty + tz * tz) || 1;
+      tx /= tl; ty /= tl; tz /= tl;
+      // pick a stable up
+      var ux = 0, uy = 1, uz = 0;
+      if (Math.abs(ty) > 0.94) { ux = 1; uy = 0; uz = 0; }
+      var nx = uy * tz - uz * ty, ny = uz * tx - ux * tz, nz = ux * ty - uy * tx;
+      var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      nx /= nl; ny /= nl; nz /= nl;
+      var bx = ty * nz - tz * ny, by = tz * nx - tx * nz, bz = tx * ny - ty * nx;
+      frames.push([nx, ny, nz, bx, by, bz]);
+    }
+    var vlen = 0, vs = [0];
+    for (i = 1; i < n; i++) {
+      var dx = stations[i][0] - stations[i - 1][0];
+      var dy = stations[i][1] - stations[i - 1][1];
+      var dz = stations[i][2] - stations[i - 1][2];
+      vlen += Math.sqrt(dx * dx + dy * dy + dz * dz);
+      vs.push(vlen);
+    }
+    function ring(i, j) {
+      var s = stations[i], f = frames[i];
+      var th = j / seg * Math.PI * 2;
+      var c = Math.cos(th), sn = Math.sin(th);
+      var dx = f[0] * c + f[3] * sn, dy = f[1] * c + f[4] * sn, dz = f[2] * c + f[5] * sn;
+      return [s[0] + dx * s[3], s[1] + dy * s[3], s[2] + dz * s[3], dx, dy, dz];
+    }
+    for (i = 0; i + 1 < n; i++) {
+      for (j = 0; j < seg; j++) {
+        var A = ring(i, j), B = ring(i, j + 1), C = ring(i + 1, j + 1), D = ring(i + 1, j);
+        var u0 = j / seg, u1 = (j + 1) / seg;
+        var v0 = vs[i], v1 = vs[i + 1];
+        pos.push(A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2]);
+        nor.push(A[3], A[4], A[5], B[3], B[4], B[5], C[3], C[4], C[5]);
+        uv.push(u0, v0, u1, v0, u1, v1);
+        pos.push(A[0], A[1], A[2], C[0], C[1], C[2], D[0], D[1], D[2]);
+        nor.push(A[3], A[4], A[5], C[3], C[4], C[5], D[3], D[4], D[5]);
+        uv.push(u0, v0, u1, v1, u0, v1);
+      }
+    }
+    if (capTop) {
+      var t = stations[n - 1];
+      for (j = 0; j < seg; j++) {
+        var P = ring(n - 1, j), Q = ring(n - 1, j + 1);
+        pos.push(t[0], t[1], t[2], P[0], P[1], P[2], Q[0], Q[1], Q[2]);
+        nor.push(0, 1, 0, 0, 1, 0, 0, 1, 0);
+        uv.push(0.5, vlen, 0, vlen, 1, vlen);
+      }
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
+    return g;
+  }
+
+  // A LEAF BLADE, as real geometry. Three columns of vertices - left edge,
+  // raised midrib, right edge - so the blade FOLDS along its spine and catches
+  // two different shading values across its own width. A flat ribbon shades as
+  // one tone and reads as a paper cutout at any distance under 4 m, which is
+  // the whole reason the understory here is not made of cards.
+  //
+  //   len    tip-to-base length
+  //   wid    half-width at the widest point
+  //   arc    how far the tip droops (metres, downward at the tip)
+  //   bend   lateral sweep of the spine
+  //   fold   midrib rise as a fraction of half-width
+  //   segs   subdivisions along the blade
+  //   shape  0 grass (widest near base, long taper) 1 broadleaf (widest mid)
+  function blade(len, wid, arc, bend, fold, segs, shape) {
+    segs = segs || 8;
+    var pos = [], nor = [], uv = [];
+    var rows = [];
+    var i;
+    for (i = 0; i <= segs; i++) {
+      var t = i / segs;
+      // spine: rises, then droops. cubic so the tip falls away instead of
+      // hinging - a straight blade with a bent tip reads as broken.
+      var y = len * t - arc * t * t * t;
+      var x = bend * t * t;
+      var z = 0;
+      var w;
+      if (shape === 1) {
+        // broadleaf / banana: narrow at the petiole, widest at 0.42, drip tip
+        w = wid * Math.sin(Math.pow(M.saturate(t * 1.02), 0.62) * Math.PI);
+        w = Math.max(w, 0.004) * (1 - 0.10 * t);
+      } else {
+        // grass: widest at 0.18, long linear taper to a fine point
+        w = wid * (0.30 + 0.70 * M.smoothstep(0, 0.18, t)) * (1 - Math.pow(t, 1.55));
+        w = Math.max(w, 0.0025);
+      }
+      var mid = w * fold;
+      rows.push([x, y, z, w, mid, t]);
+    }
+    function push(a, b, c) {
+      var ax = a[0], ay = a[1], az = a[2];
+      var bx = b[0], by = b[1], bz = b[2];
+      var cx = c[0], cy = c[1], cz = c[2];
+      var ux = bx - ax, uy = by - ay, uz = bz - az;
+      var vx = cx - ax, vy = cy - ay, vz = cz - az;
+      var nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      nx /= nl; ny /= nl; nz /= nl;
+      pos.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+      nor.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
+      uv.push(a[3], a[4], b[3], b[4], c[3], c[4]);
+    }
+    for (i = 0; i + 1 < rows.length; i++) {
+      var r0 = rows[i], r1 = rows[i + 1];
+      // [x, y, z, u, v]
+      var L0 = [r0[0] - r0[3], r0[1], r0[2] - r0[4] * 0.35, 0.02, r0[5]];
+      var C0 = [r0[0], r0[1] + r0[4] * 0.22, r0[2] + r0[4], 0.5, r0[5]];
+      var R0 = [r0[0] + r0[3], r0[1], r0[2] - r0[4] * 0.35, 0.98, r0[5]];
+      var L1 = [r1[0] - r1[3], r1[1], r1[2] - r1[4] * 0.35, 0.02, r1[5]];
+      var C1 = [r1[0], r1[1] + r1[4] * 0.22, r1[2] + r1[4], 0.5, r1[5]];
+      var R1 = [r1[0] + r1[3], r1[1], r1[2] - r1[4] * 0.35, 0.98, r1[5]];
+      push(L0, C0, C1); push(L0, C1, L1);
+      push(C0, R0, R1); push(C0, R1, C1);
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
+    return g;
+  }
+
+  function applyMatrix(g, m) {
+    g.applyMatrix4(m);
+    return g;
+  }
+
+  // Concatenate a list of geometries that all share the same attribute set.
+  // Cheaper than Geo.mergeAll for the small per-plant assemblies below, which
+  // are built once and then instanced.
+  function weld(list) {
+    var entries = [];
+    for (var i = 0; i < list.length; i++) entries.push({ geometry: list[i] });
+    var g = Geo.mergeAll(entries);
+    for (i = 0; i < list.length; i++) list[i].dispose();
+    return g;
+  }
+
+  function tint(hex, strength) {
+    var c = new THREE.Color().setHex(hex, THREE.SRGBColorSpace);
+    var mx = Math.max(c.r, Math.max(c.g, c.b)) || 1;
+    c.multiplyScalar(1 / mx);
+    var s = strength === undefined ? 1 : strength;
+    c.r = 1 + (c.r - 1) * s; c.g = 1 + (c.g - 1) * s; c.b = 1 + (c.b - 1) * s;
+    return c;
+  }
+
+  function grey(v) { return new THREE.Color(v, v, v); }
+
+  function segDist(px, pz, ax, az, bx, bz) {
+    var vx = bx - ax, vz = bz - az;
+    var wx = px - ax, wz = pz - az;
+    var L = vx * vx + vz * vz;
+    var t = L > 1e-6 ? M.saturate((wx * vx + wz * vz) / L) : 0;
+    var dx = wx - vx * t, dz = wz - vz * t;
+    return Math.sqrt(dx * dx + dz * dz);
+  }
+
+  // GAME.Noise.fbm2 is PERLIN and therefore SIGNED, roughly -0.6..0.6. Every
+  // mask in this file that thresholds it wants 0..1, and the first build
+  // thresholded the raw value: smoothstep(0.42, 0.86, fbm2) is essentially
+  // always zero, so the leaf litter, the moss, the water staining and the bark
+  // growth were all authored, all paid for, and all invisible. Remap once,
+  // here, and never threshold a signed field again.
+  function n01(v) { return v * 0.5 + 0.5; }
+
+  function bump(v, c, w) {
+    var a = Math.abs(v - c);
+    return a >= w ? 0 : 1 - M.smoothstep(0, w, a);
+  }
+
+  // ================================================================ Builder ==
+  // Transform stack plus per-material geometry buckets. Same shape as the
+  // harbor's and the snowbound's builders, deliberately - this file follows
+  // those files' patterns rather than inventing new ones.
+  function Builder() {
+    this.buckets = Object.create(null);
+    this._stack = [new THREE.Matrix4()];
+    this.tint = null;
+    this.dark = 0;
+    this.count = 0;
+  }
+  Builder.prototype.top = function () { return this._stack[this._stack.length - 1]; };
+  Builder.prototype.push = function (m) {
+    this._stack.push(new THREE.Matrix4().multiplyMatrices(this.top(), m));
+    return this;
+  };
+  Builder.prototype.pushXYZ = function (x, y, z, rx, ry, rz) {
+    return this.push(makeM(x, y, z, rx, ry, rz));
+  };
+  Builder.prototype.pop = function () { this._stack.pop(); return this; };
+  Builder.prototype.add = function (key, geo, local) {
+    var b = this.buckets[key] || (this.buckets[key] = []);
+    var wm = new THREE.Matrix4();
+    if (local) wm.multiplyMatrices(this.top(), local); else wm.copy(this.top());
+    var e = { geometry: geo, matrix: wm, tint: this.tint, dark: this.dark };
+    b.push(e); this.count++;
+    return e;
+  };
+  Builder.prototype.box = function (key, w, h, d, x, y, z, bevel) {
+    return this.add(key, box(w, h, d, bevel), makeM(x, y, z));
+  };
+  Builder.prototype.boxR = function (key, w, h, d, x, y, z, rx, ry, rz, bevel) {
+    return this.add(key, box(w, h, d, bevel), makeM(x, y, z, rx, ry, rz));
+  };
+  Builder.prototype.cyl = function (key, r0, r1, len, x, y, z, rx, ry, rz, seg) {
+    return this.add(key, cyl(r0, r1, len, seg), makeM(x, y, z, rx, ry, rz));
+  };
+  Builder.prototype.strut = function (key, ax, ay, az, bx, by, bz, w, d) {
+    var dx = bx - ax, dy = by - ay, dz = bz - az;
+    var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (len < 1e-4) return null;
+    var yaw = Math.atan2(dx, dz);
+    var pitch = Math.acos(M.clamp(dy / len, -1, 1));
+    var m = new THREE.Matrix4();
+    _e1.set(pitch, yaw, 0, 'YXZ');
+    m.makeRotationFromEuler(_e1);
+    m.elements[12] = (ax + bx) * 0.5;
+    m.elements[13] = (ay + by) * 0.5;
+    m.elements[14] = (az + bz) * 0.5;
+    return this.add(key, box(w, len, d || w), m);
+  };
+  Builder.prototype.rod = function (key, ax, ay, az, bx, by, bz, r, seg) {
+    var dx = bx - ax, dy = by - ay, dz = bz - az;
+    var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (len < 1e-4) return null;
+    var yaw = Math.atan2(dx, dz);
+    var pitch = Math.acos(M.clamp(dy / len, -1, 1));
+    var m = new THREE.Matrix4();
+    _e1.set(pitch, yaw, 0, 'YXZ');
+    m.makeRotationFromEuler(_e1);
+    m.elements[12] = (ax + bx) * 0.5;
+    m.elements[13] = (ay + by) * 0.5;
+    m.elements[14] = (az + bz) * 0.5;
+    return this.add(key, cyl(r, r, len, seg || 6), m);
+  };
+  Builder.prototype.worldPoint = function (x, y, z, out) {
+    return (out || new THREE.Vector3()).set(x, y, z).applyMatrix4(this.top());
+  };
+
+  // A sagging line between two points - guy wires, comms cable, the footbridge
+  // handrail, and the hanging lianas that give the canopy a vertical read.
+  function droop(B, key, ax, ay, az, bx, by, bz, sag, r, segs) {
+    segs = segs || 7;
+    var px = ax, py = ay, pz = az;
+    for (var i = 1; i <= segs; i++) {
+      var t = i / segs;
+      var qx = ax + (bx - ax) * t;
+      var qz = az + (bz - az) * t;
+      var qy = ay + (by - ay) * t - sag * 4 * t * (1 - t);
+      B.rod(key, px, py, pz, qx, qy, qz, r, 4);
+      px = qx; py = qy; pz = qz;
+    }
+  }
+
+  // ============================================================ THE TERRAIN ==
+  // The delta is authored as CHANNEL + BANK + FLOOR, and the split is
+  // load-bearing. The channel is the only place the sky reaches the ground
+  // uninterrupted, which makes the river the level's brightest floor and its
+  // one horizontal leading line. Everything else is a soft, undulating,
+  // root-broken forest floor whose shape exists to stop a green frame reading
+  // as a flat green wash.
+
+  function riverC(z) {
+    return -30.0 + 6.0 * Math.sin((z + 22) * 0.0168) + 2.6 * Math.sin(z * 0.0415 + 1.2);
+  }
+  function riverHalf(z) {
+    return 11.0 + 1.8 * Math.sin(z * 0.026 + 0.7);
+  }
+
+  // The track is a POLYLINE, not a sine. A sine cannot arrive anywhere: the
+  // road has to leave the southern landing, hug the bank, cross the creek at a
+  // right angle (which is where a bridge goes) and then climb the knoll into
+  // the firebase gate. Parametrised on z because z is monotonic along it.
+  var TRACK_PTS = [
+    [4.6, 64], [4.2, 56], [3.6, 46], [3.0, 36], [2.9, 30], [2.9, 22],
+    [2.3, 14], [1.2, 6], [1.4, 0], [4.2, -3.5], [8.0, -5.8], [9.3, -7.0],
+    [10.4, -12.0], [11.0, -18.0]
+  ];
+  function trackX(z) {
+    var P = TRACK_PTS;
+    if (z >= P[0][1]) return P[0][0];
+    var last = P.length - 1;
+    if (z <= P[last][1]) return P[last][0];
+    for (var i = 0; i < last; i++) {
+      var a = P[i], b = P[i + 1];
+      if (z <= a[1] && z >= b[1]) {
+        var t = (a[1] - z) / Math.max(1e-4, a[1] - b[1]);
+        return M.lerp(a[0], b[0], t * t * (3 - 2 * t));
+      }
+    }
+    return P[last][0];
+  }
+
+  function creekZ(x) {
+    return CREEK_Z + 2.6 * Math.sin(x * 0.052) + 1.15 * Math.sin(x * 0.115 + 0.8);
+  }
+
+  // Raw ground before pads and the track cut. `P` carries the noise field so
+  // the function stays pure and can be called from the anchors before build().
+  function rawY(x, z, P) {
+    var N = P.noise;
+    var rc = riverC(z), rh = riverHalf(z);
+    var a = Math.abs(x - rc) / rh;
+    var y;
+    if (a < 1) {
+      // The bed is not a bathtub: a scoured outer bend and a silt bar on the
+      // inner one, keyed off which way the channel is turning.
+      var turn = (riverC(z + 6) - riverC(z - 6)) * 0.06;
+      var side = (x - rc) / rh;
+      var scour = 1 + M.clamp(side * turn * 5.0, -0.32, 0.34);
+      y = -CH_DEPTH * scour * (1 - M.smoothstep(0.28, 1.0, a));
+      y += N.fbm2(x * 0.10 + 21.0, z * 0.10 - 5.0, 2) * 0.18;
+    } else {
+      y = BANK_H * M.smoothstep(1.0, 1.42, a);
+    }
+    var damp = M.smoothstep(0.70, 1.28, a);
+    y += N.fbm2(x * 0.0215 + 3.1, z * 0.0215 - 7.4, 3) * 3.10 * damp;
+    y += N.fbm2(x * 0.078 - 1.7, z * 0.078 + 2.2, 2) * 0.82 * damp;
+    y += N.fbm2(x * 0.30 + 9.0, z * 0.30 - 4.0, 2) * 0.17 * damp;
+
+    // The forest wall. Rising ground on three sides closes the space without a
+    // fence: it is the reason the level has a horizon of canopy rather than a
+    // horizon of fog with a visible edge.
+    y += 0.34 * Math.max(0, x - 28) + 0.42 * Math.max(0, x - 42);
+    y += 0.30 * Math.max(0, -38 - z) + 0.30 * Math.max(0, z - 50);
+    var wb = (rc - rh - 5.0) - x;                       // west of the far bank
+    y += 0.26 * Math.max(0, wb) + 0.34 * Math.max(0, wb - 12);
+
+    // the knoll the firebase was cut into
+    var kdx = x - FB_X, kdz = z - FB_Z;
+    var kd = Math.sqrt(kdx * kdx + kdz * kdz);
+    y += KNOLL_H * (1 - M.smoothstep(8.5, 27.0, kd));
+
+    // the creek, east of the river only
+    if (x > rc - rh * 0.2) {
+      var cd = Math.abs(z - creekZ(x)) / CREEK_HALF;
+      if (cd < 1.25) {
+        y -= CREEK_DEPTH * (1 - M.smoothstep(0.30, 1.0, cd)) *
+          M.smoothstep(rc - rh * 0.2, rc - rh * 0.2 + 5.0, x);
+      }
+    }
+    return y;
+  }
+
+  // Building pads, flattened to the structure's own floor. The blend band is
+  // narrow so the undergrowth still banks right up against a sandbag wall.
+  function padBlend(x, z, P) {
+    var best = 0, py = 0;
+    var A = P.pads;
+    for (var i = 0; i < A.length; i++) {
+      var p = A[i];
+      var w;
+      if (p.r) {
+        var dx0 = x - p.x, dz0 = z - p.z;
+        var d0 = Math.sqrt(dx0 * dx0 + dz0 * dz0);
+        w = 1 - M.smoothstep(p.r - p.fade, p.r, d0);
+      } else {
+        var dx = x - p.x, dz = z - p.z;
+        var lx = dx * p.c + dz * p.s, lz = -dx * p.s + dz * p.c;
+        var ox = Math.abs(lx) - p.hx, oz = Math.abs(lz) - p.hz;
+        var dist = Math.sqrt(Math.max(0, ox) * Math.max(0, ox) +
+          Math.max(0, oz) * Math.max(0, oz));
+        w = 1 - M.smoothstep(0.05, p.fade || 0.70, dist);
+      }
+      // >= not >, so a pad pushed LATER wins a tie. The bunker is excavated
+      // into the firebase plateau and both pads read w = 1 inside it; with a
+      // strict > the plateau won, the excavation never happened, and the
+      // interior framing stood on open ground looking out over walls that
+      // were buried to their eaves.
+      if (w >= best) { best = w; py = p.y; }
+    }
+    return { w: best, y: py };
+  }
+
+  function groundY(x, z, P) {
+    var y = rawY(x, z, P);
+    // ---- the track ---------------------------------------------------------
+    // Cut, not painted. A road that is only a texture change photographs as a
+    // stripe; a road worn 25 cm into the mud with a spoil lip either side and
+    // two 8 cm ruts down the middle photographs as a road.
+    var tx = trackX(z);
+    var u = x - tx;
+    var au = Math.abs(u);
+    if (au < TRACK_SHOULDER + 1.6) {
+      var tw = 1 - M.smoothstep(TRACK_HALF, TRACK_SHOULDER, au);
+      if (tw > 0.001) {
+        var ty = rawY(tx, z, P) - 0.24;
+        ty -= 0.085 * (bump(u, 0.95, 0.42) + bump(u, -0.95, 0.42));
+        ty += P.noise.fbm2(x * 1.1, z * 1.1, 2) * 0.035;
+        y = M.lerp(y, ty, tw * 0.92);
+      }
+      // the berm of spoil the traffic pushed aside
+      var bt = (au - TRACK_HALF) / 1.7;
+      if (bt > -0.2 && bt < 1.5) {
+        var sh = Math.max(0, 1 - Math.abs((bt - 0.55) / 0.72));
+        y += 0.20 * sh * sh * (3 - 2 * sh);
+      }
+    }
+    var pb = padBlend(x, z, P);
+    if (pb.w > 0) y = M.lerp(y, pb.y, pb.w);
+    return y;
+  }
+
+  // How much sky a floor point can see, ANALYTICALLY, from the level's own
+  // plan. This is what paints the ground: bright at the water, on the track and
+  // in the clearings; deep and cold under closed canopy. It is not a light -
+  // it is the vertex-colour field that gives a green level its value range.
+  function skyOpen(x, z, P) {
+    var rc = riverC(z), rh = riverHalf(z);
+    var a = Math.abs(x - rc) / rh;
+    var open = 0.14;
+    // the channel and its banks
+    open = Math.max(open, 1.0 - M.smoothstep(0.85, 1.9, a));
+    // the track
+    var au = Math.abs(x - trackX(z));
+    // 0.50, not 0.62. A track cut through primary forest is a slot, not a
+    // clearing: the crowns still meet over it in most places and only break
+    // where a big tree has come down. At 0.62 the canopy thinned enough over
+    // the road that hero1 - which stands IN the road - lost its ceiling and
+    // photographed bright fog across the top of the frame.
+    open = Math.max(open, 0.50 * (1 - M.smoothstep(TRACK_HALF, 8.5, au)));
+    // the creek
+    var cd = Math.abs(z - creekZ(x)) / (CREEK_HALF * 1.9);
+    if (x > rc && cd < 1.2) open = Math.max(open, 0.58 * (1 - M.smoothstep(0.3, 1.2, cd)));
+    // the firebase and the clearings it was cut out of
+    for (var i = 0; i < P.clearings.length; i++) {
+      var cl = P.clearings[i];
+      var dx = x - cl.x, dz = z - cl.z;
+      var d = Math.sqrt(dx * dx + dz * dz);
+      open = Math.max(open, cl.open * (1 - M.smoothstep(cl.r * 0.55, cl.r, d)));
+    }
+    // canopy thickness noise, so the boundary between light and shade is
+    // ragged rather than a set of circles
+    open *= 0.80 + 0.34 * P.noise.fbm2(x * 0.055 + 17.0, z * 0.055 - 9.0, 2);
+    return M.saturate(open);
+  }
+
+  // ==================================================== PROCEDURAL TEXTURES ==
+  // GAME.Noise is perlin on an unbounded lattice and is therefore NOT tileable.
+  // Bark wraps a trunk and repeats up it; a seam every 1.4 m on the biggest
+  // object in the frame is the whole level. The lattice index is taken modulo
+  // the period instead. (Same fix level_snowbound made, same reason.)
+  function hash2i(ix, iy, seed) {
+    var h = Math.imul(ix | 0, 0x27d4eb2d) ^ Math.imul(iy | 0, 0x165667b1) ^
+      Math.imul(seed | 0, 0x9e3779b1);
+    h ^= h >>> 15; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13;
+    return (h >>> 0) / 4294967296;
+  }
+  function tval(x, y, per, seed) {
+    var xi = Math.floor(x), yi = Math.floor(y);
+    var xf = x - xi, yf = y - yi;
+    var u = xf * xf * xf * (xf * (xf * 6 - 15) + 10);
+    var v = yf * yf * yf * (yf * (yf * 6 - 15) + 10);
+    var x0 = ((xi % per) + per) % per, x1 = ((xi + 1) % per + per) % per;
+    var y0 = ((yi % per) + per) % per, y1 = ((yi + 1) % per + per) % per;
+    var a = hash2i(x0, y0, seed), b = hash2i(x1, y0, seed);
+    var c = hash2i(x0, y1, seed), d = hash2i(x1, y1, seed);
+    var ab = a + (b - a) * u, cd = c + (d - c) * u;
+    return ab + (cd - ab) * v;
+  }
+  function tfbm(x, y, per, seed, oct, gain) {
+    var s = 0, amp = 1, f = 1, n = 0;
+    gain = gain || 0.5;
+    for (var i = 0; i < (oct || 4); i++) {
+      s += amp * tval(x * f, y * f, per * f, seed + i * 97);
+      n += amp; amp *= gain; f *= 2;
+    }
+    return s / n;
+  }
+
+  function makeTex(canvas, srgb, aniso, clamp) {
+    var t = new THREE.CanvasTexture(canvas);
+    t.wrapS = t.wrapT = clamp ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
+    t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    if (aniso) t.anisotropy = aniso;
+    t.needsUpdate = true;
+    return t;
+  }
+
+  function canvasOf(n) {
+    var doc = (typeof document !== 'undefined') ? document : null;
+    if (!doc) return null;
+    var c = doc.createElement('canvas');
+    c.width = c.height = n;
+    return c;
+  }
+
+  // Sobel a height buffer into an RGBA normal map, wrapping at the edges.
+  function heightToNormal(H, N, strength, out) {
+    for (var j = 0; j < N; j++) {
+      for (var i = 0; i < N; i++) {
+        var k = j * N + i, o = k * 4;
+        var hx = H[j * N + ((i + 1) % N)] - H[j * N + ((i - 1 + N) % N)];
+        var hy = H[((j + 1) % N) * N + i] - H[((j - 1 + N) % N) * N + i];
+        var nx = -hx * strength, ny = -hy * strength, nz = 1;
+        var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+        out[o] = Math.round((nx / nl * 0.5 + 0.5) * 255);
+        out[o + 1] = Math.round((ny / nl * 0.5 + 0.5) * 255);
+        out[o + 2] = Math.round((nz / nl * 0.5 + 0.5) * 255);
+        out[o + 3] = 255;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // THE CANOPY ATLAS. 4 x 4 alpha-cut cells at 1024, used ONLY above eight
+  // metres. Everything the player can reach is real geometry (see blade()).
+  //
+  //   0 canopy cluster A   1 canopy cluster B    2 canopy cluster C (dark)
+  //   3 palm frond         4 fern frond          5 banana leaf
+  //   6 bamboo sprig       7 hanging liana       8 creeper leaves
+  //   9 dead frond        10 leaf litter        11 grass fan (distant)
+  // ---------------------------------------------------------------------------
+  var ATL_N = 4, ATL_PX = 1024, ATL_CELL = ATL_PX / ATL_N;
+  var CELL = {
+    canopyA: 0, canopyB: 1, canopyC: 2, palm: 3,
+    fern: 4, banana: 5, bamboo: 6, liana: 7,
+    creeper: 8, dead: 9, litter: 10, grass: 11
+  };
+
+  // CANVAS Y RUNS DOWN AND TEXTURE V RUNS UP.
+  //
+  // THREE.CanvasTexture leaves flipY at its default true, so canvas row 0 is
+  // sampled at v = 1, not v = 0. Computing the cell's v range straight from the
+  // row index therefore reads the atlas UPSIDE DOWN BY ROWS: the three canopy
+  // cells (row 0) were sampling row 3, which this atlas never draws into, so
+  // every canopy card in the level was fully transparent and the canopy simply
+  // did not exist - while the bamboo cards, asking for row 1, were rendering
+  // the LEAF LITTER cell and printing the swarm of dark specks that two rounds
+  // of capture blamed on the alpha threshold. Invert the row, keep the image
+  // the right way up (v0 = bottom of the cell = bottom of the card).
+  function atlasUV(cell, inset) {
+    var s = 1 / ATL_N;
+    var row = Math.floor(cell / ATL_N);
+    var cx = (cell % ATL_N) * s, cy = (ATL_N - 1 - row) * s;
+    // 6% of the cell, not 0.6%. An atlas sampled through a mip chain bleeds
+    // from its neighbours: at mip 2 the whole sheet is 256 px, a cell is 64,
+    // and a one-pixel gutter is gone - which is how brown dead-frond and
+    // liana texels ended up scattered through the green canopy in the first
+    // capture. 15 base pixels survives the two mip levels a canopy card
+    // actually reaches at 30-120 m.
+    var pad = (inset === undefined ? 0.060 : inset) * s;
+    return [cx + pad, cy + pad, cx + s - pad, cy + s - pad];
+  }
+
+  function buildCanopyAtlas(rng) {
+    var cA = canvasOf(ATL_PX);
+    if (!cA) return null;
+    var gA = cA.getContext('2d');
+    var cH = canvasOf(ATL_PX);
+    var gH = cH && cH.getContext('2d');
+    if (!gA || !gH) return null;
+    gA.clearRect(0, 0, ATL_PX, ATL_PX);
+    gH.fillStyle = '#000000';
+    gH.fillRect(0, 0, ATL_PX, ATL_PX);
+    var S = ATL_CELL;
+
+    function origin(n) { return [(n % ATL_N) * S, Math.floor(n / ATL_N) * S]; }
+
+    // One leaf outline, built under a transform so it lands in device space and
+    // can be filled after the restore. `tip` is the drip tip every wet-tropical
+    // leaf has and no dry-mediterranean one does.
+    function leafPath(g, cx, cy, len, wid, ang, tip, curl) {
+      g.save();
+      g.translate(cx, cy);
+      g.rotate(ang);
+      g.beginPath();
+      g.moveTo(0, 0);
+      g.quadraticCurveTo(wid + curl, len * 0.34, wid * 0.30 + curl * 0.6, len * 0.80);
+      g.quadraticCurveTo(wid * 0.16, len * (0.90 + tip * 0.08), 0, len * (1 + tip));
+      g.quadraticCurveTo(-wid * 0.16, len * (0.90 + tip * 0.08), -wid * 0.30 + curl * 0.6, len * 0.80);
+      g.quadraticCurveTo(-wid + curl, len * 0.34, 0, 0);
+      g.closePath();
+      g.restore();
+    }
+
+    // Draw one leaf into BOTH buffers. The height buffer gets a gradient that
+    // peaks on the midrib, so the derived normal has a real leaf cross-section
+    // rather than a flat card with an outline.
+    function leaf(cx, cy, len, wid, ang, hue, val, tip, curl) {
+      var g = gA;
+      leafPath(g, cx, cy, len, wid, ang, tip, curl || 0);
+      var ex = cx + Math.sin(-ang) * 0, ey = cy;
+      var grd = g.createLinearGradient(
+        cx - Math.cos(ang) * wid, cy - Math.sin(ang) * wid,
+        cx + Math.cos(ang) * wid, cy + Math.sin(ang) * wid);
+      var r0 = Math.round(hue[0] * val), g0 = Math.round(hue[1] * val), b0 = Math.round(hue[2] * val);
+      grd.addColorStop(0.0, 'rgb(' + Math.round(r0 * 0.68) + ',' + Math.round(g0 * 0.70) + ',' + Math.round(b0 * 0.72) + ')');
+      grd.addColorStop(0.46, 'rgb(' + r0 + ',' + g0 + ',' + b0 + ')');
+      grd.addColorStop(0.54, 'rgb(' + Math.round(r0 * 1.18) + ',' + Math.round(g0 * 1.16) + ',' + Math.round(b0 * 1.10) + ')');
+      grd.addColorStop(1.0, 'rgb(' + Math.round(r0 * 0.62) + ',' + Math.round(g0 * 0.66) + ',' + Math.round(b0 * 0.70) + ')');
+      g.fillStyle = grd;
+      g.fill();
+      void ex; void ey;
+      // venation: a midrib plus a few laterals, drawn dark then a highlight
+      g.save();
+      g.translate(cx, cy); g.rotate(ang);
+      g.strokeStyle = 'rgba(20,32,14,0.36)';
+      g.lineWidth = Math.max(0.7, wid * 0.075);
+      g.beginPath(); g.moveTo(0, len * 0.03); g.lineTo(0, len * (0.94 + tip)); g.stroke();
+      g.lineWidth = Math.max(0.5, wid * 0.040);
+      g.strokeStyle = 'rgba(28,44,18,0.24)';
+      for (var v = 1; v <= 5; v++) {
+        var t = v / 6;
+        g.beginPath();
+        g.moveTo(0, len * t);
+        g.quadraticCurveTo(wid * 0.42, len * (t + 0.06), wid * 0.80 * (1 - t * 0.5), len * (t + 0.12));
+        g.stroke();
+        g.beginPath();
+        g.moveTo(0, len * t);
+        g.quadraticCurveTo(-wid * 0.42, len * (t + 0.06), -wid * 0.80 * (1 - t * 0.5), len * (t + 0.12));
+        g.stroke();
+      }
+      g.restore();
+
+      // height
+      var h = gH;
+      leafPath(h, cx, cy, len, wid, ang, tip, curl || 0);
+      var hg = h.createLinearGradient(
+        cx - Math.cos(ang) * wid, cy - Math.sin(ang) * wid,
+        cx + Math.cos(ang) * wid, cy + Math.sin(ang) * wid);
+      hg.addColorStop(0.0, 'rgb(70,70,70)');
+      hg.addColorStop(0.5, 'rgb(220,220,220)');
+      hg.addColorStop(1.0, 'rgb(70,70,70)');
+      h.fillStyle = hg;
+      h.fill();
+    }
+
+    // A CANOPY CARD IS A SOLID MASS WITH A LEAFY EDGE. IT IS NOT A STIPPLE.
+    //
+    // This cell was authored twice and both attempts failed the same way. The
+    // first drew 46 separate leaves; alpha coverage per card came out around a
+    // quarter, so eight cards in a cluster still let three quarters of the sky
+    // through and the canopy was decoration rather than roof. The second drew
+    // 165 small leaves, which raised coverage on the BASE mip and then lost it
+    // all again: a canopy card is 40-110 px on screen against a 256 px cell, so
+    // it is sampled at mip 1-2, and averaging a stipple of separate leaves down
+    // two levels turns a leaf into a grey speck below the alpha threshold. The
+    // capture came back as a swarm of dark specks over blown white sky.
+    //
+    // The fix is the one every shipped foliage atlas uses: the INTERIOR is a
+    // continuous opaque blob so its alpha survives any mip level, and only the
+    // RIM is individual leaves, where a broken silhouette is what the eye
+    // actually reads. All the interior variation is in COLOUR - overlapping
+    // light and dark leaf masses, a dark under-crown, a lit upper surface -
+    // which mips down gracefully because it never has to survive a threshold.
+    function clusterCell(n, hue, count, big, dark) {
+      var o = origin(n);
+      var cx = o[0] + S * 0.5, cy = o[1] + S * 0.5;
+      var i, ang, rad;
+      var val = dark ? 0.78 : 1.0;
+
+      function rgb(h, v) {
+        return 'rgb(' + Math.round(M.clamp(h[0] * v, 0, 255)) + ',' +
+          Math.round(M.clamp(h[1] * v, 0, 255)) + ',' +
+          Math.round(M.clamp(h[2] * v, 0, 255)) + ')';
+      }
+      function blob(g, x, y, rx, ry, rot, fill) {
+        g.save();
+        g.translate(x, y); g.rotate(rot);
+        g.beginPath();
+        g.ellipse ? g.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2)
+          : g.arc(0, 0, rx, 0, Math.PI * 2);
+        g.restore();
+        g.fillStyle = fill;
+        g.fill();
+      }
+
+      // ---- 1. the opaque core, built from overlapping lobes ----------------
+      for (i = 0; i < 26; i++) {
+        ang = rng.range(0, Math.PI * 2);
+        rad = Math.sqrt(rng.next()) * S * 0.235;
+        var rx = S * rng.range(0.105, 0.185), ry = rx * rng.range(0.60, 1.0);
+        var lv = val * rng.range(0.60, 0.84);
+        blob(gA, cx + Math.cos(ang) * rad, cy + Math.sin(ang) * rad, rx, ry,
+          rng.range(0, Math.PI), rgb(hue, lv));
+        blob(gH, cx + Math.cos(ang) * rad, cy + Math.sin(ang) * rad, rx, ry,
+          rng.range(0, Math.PI), 'rgb(150,150,150)');
+      }
+      // ---- 2. tonal structure ON the core ----------------------------------
+      // A crown is not one value. Sunlit lobes on the upper left, deep shade
+      // pockets underneath, and a scatter of individual leaf shapes catching
+      // light - this is the whole read at 20 m and it costs no alpha at all.
+      for (i = 0; i < Math.round(count * 0.55); i++) {
+        ang = rng.range(0, Math.PI * 2);
+        rad = Math.sqrt(rng.next()) * S * 0.255;
+        var lx = cx + Math.cos(ang) * rad, ly = cy + Math.sin(ang) * rad;
+        // upper-left lobes are lit, lower-right are in the crown's own shade
+        var sun = M.saturate(0.5 - (lx - cx) / (S * 0.6) - (ly - cy) / (S * 0.6));
+        var len = S * rng.range(big * 0.55, big * 1.15);
+        leaf(lx, ly, len, len * rng.range(0.28, 0.44),
+          ang + Math.PI * 0.5 + rng.range(-0.8, 0.8), hue,
+          val * M.lerp(0.42, 1.28, sun) * rng.range(0.85, 1.15),
+          rng.range(0.10, 0.24), 0);
+      }
+      // ---- 3. the rim: individual leaves, and only here ---------------------
+      // The silhouette is the only place a leaf SHAPE has to survive, and the
+      // only place alpha is doing work.
+      for (i = 0; i < count; i++) {
+        ang = rng.range(0, Math.PI * 2);
+        rad = S * (0.185 + Math.pow(rng.next(), 0.55) * 0.235);
+        var edge = M.saturate((rad / S - 0.185) / 0.235);
+        var el = S * rng.range(big * 0.55, big) * (1 - edge * 0.32);
+        leaf(cx + Math.cos(ang) * rad, cy + Math.sin(ang) * rad,
+          el, el * rng.range(0.26, 0.42),
+          ang + Math.PI * 0.5 + rng.range(-0.7, 0.7), hue,
+          val * (1.05 - edge * 0.42) * rng.range(0.80, 1.15),
+          rng.range(0.10, 0.24), rng.range(-0.10, 0.10) * el);
+      }
+    }
+
+    // ---- 0,1,2 : the three canopy tiers ------------------------------------
+    // Three separate cells rather than one reused three times: an instanced
+    // canopy built from ONE card is a repeating stamp and the eye finds it in
+    // about a second. A is the sunlit crown, B the mid tier, C the shaded
+    // underside of the canopy, which is what the player actually looks up into.
+    clusterCell(CELL.canopyA, [126, 170, 76], 62, 0.20, false);
+    clusterCell(CELL.canopyB, [98, 146, 64], 68, 0.18, false);
+    clusterCell(CELL.canopyC, [66, 108, 50], 74, 0.16, true);
+
+    // ---- 3 : palm / nipa frond ---------------------------------------------
+    (function () {
+      var o = origin(CELL.palm);
+      var bx = o[0] + S * 0.5, by = o[1] + S * 0.96;
+      var tipx = o[0] + S * 0.5, tipy = o[1] + S * 0.06;
+      var i, t, px, py;
+      for (i = 0; i < 26; i++) {
+        t = i / 25;
+        px = M.lerp(bx, tipx, t) + Math.sin(t * 2.1) * S * 0.03;
+        py = M.lerp(by, tipy, t);
+        var ll = S * (0.30 - t * 0.20) * rng.range(0.85, 1.10);
+        var lw = ll * rng.range(0.085, 0.135);
+        var back = 0.78 + t * 0.42;
+        leaf(px, py, ll, lw, back, [104, 148, 66], rng.range(0.80, 1.06), 0.06, 0);
+        leaf(px, py, ll, lw, Math.PI - back, [104, 148, 66], rng.range(0.76, 1.02), 0.06, 0);
+      }
+      // rachis
+      gA.strokeStyle = 'rgb(96,104,54)';
+      gA.lineWidth = S * 0.020;
+      gA.beginPath(); gA.moveTo(bx, by); gA.lineTo(tipx, tipy); gA.stroke();
+      gH.strokeStyle = 'rgb(235,235,235)';
+      gH.lineWidth = S * 0.020;
+      gH.beginPath(); gH.moveTo(bx, by); gH.lineTo(tipx, tipy); gH.stroke();
+    })();
+
+    // ---- 4 : fern frond -----------------------------------------------------
+    (function () {
+      var o = origin(CELL.fern);
+      var bx = o[0] + S * 0.5, by = o[1] + S * 0.97;
+      var i, t;
+      for (i = 0; i < 20; i++) {
+        t = i / 19;
+        var px = bx + Math.sin(t * 1.4) * S * 0.05;
+        var py = M.lerp(by, o[1] + S * 0.05, t);
+        var ll = S * (0.24 - t * 0.19) * rng.range(0.9, 1.1);
+        leaf(px, py, ll, ll * 0.30, 1.05 + t * 0.35, [86, 130, 56], rng.range(0.82, 1.08), 0.05, 0);
+        leaf(px, py, ll, ll * 0.30, Math.PI - 1.05 - t * 0.35, [86, 130, 56], rng.range(0.80, 1.04), 0.05, 0);
+      }
+      gA.strokeStyle = 'rgb(84,96,48)';
+      gA.lineWidth = S * 0.014;
+      gA.beginPath(); gA.moveTo(bx, by); gA.lineTo(o[0] + S * 0.5, o[1] + S * 0.05); gA.stroke();
+    })();
+
+    // ---- 5 : one big banana leaf -------------------------------------------
+    (function () {
+      var o = origin(CELL.banana);
+      leaf(o[0] + S * 0.5, o[1] + S * 0.96, S * 0.90, S * 0.30, Math.PI,
+        [110, 158, 66], 1.0, 0.02, 0);
+      // wind tears: a mature banana leaf is split to the midrib, and the splits
+      // are what make it read as a banana rather than as a giant generic leaf
+      gA.save();
+      gA.globalCompositeOperation = 'destination-out';
+      gA.fillStyle = 'rgba(0,0,0,1)';
+      for (var i = 0; i < 9; i++) {
+        var t = 0.16 + i * 0.085;
+        var side = (i & 1) ? 1 : -1;
+        var y = o[1] + S * (0.96 - t * 0.88);
+        gA.beginPath();
+        gA.moveTo(o[0] + S * 0.5 + side * S * 0.012, y);
+        gA.lineTo(o[0] + S * 0.5 + side * S * rng.range(0.20, 0.31), y - S * rng.range(0.01, 0.04));
+        gA.lineTo(o[0] + S * 0.5 + side * S * rng.range(0.20, 0.31), y + S * rng.range(0.012, 0.030));
+        gA.closePath();
+        gA.fill();
+      }
+      gA.restore();
+    })();
+
+    // ---- 6 : bamboo sprig ---------------------------------------------------
+    (function () {
+      var o = origin(CELL.bamboo);
+      var bx = o[0] + S * 0.5, by = o[1] + S * 0.97;
+      gA.strokeStyle = 'rgb(132,136,80)';
+      gA.lineWidth = S * 0.018;
+      gA.beginPath(); gA.moveTo(bx, by); gA.lineTo(bx + S * 0.05, o[1] + S * 0.08); gA.stroke();
+      for (var i = 0; i < 16; i++) {
+        var t = 0.10 + rng.next() * 0.85;
+        var px = M.lerp(bx, bx + S * 0.05, t), py = M.lerp(by, o[1] + S * 0.08, t);
+        var ll = S * rng.range(0.16, 0.30);
+        leaf(px, py, ll, ll * rng.range(0.075, 0.115),
+          rng.range(0.6, 2.6), [118, 152, 72], rng.range(0.80, 1.10), 0.14, 0);
+      }
+    })();
+
+    // ---- 7 : hanging liana --------------------------------------------------
+    (function () {
+      var o = origin(CELL.liana);
+      var x0 = o[0] + S * 0.50;
+      gA.strokeStyle = 'rgb(74,66,44)';
+      gA.lineWidth = S * 0.022;
+      gA.beginPath();
+      gA.moveTo(x0, o[1] + S * 0.02);
+      gA.quadraticCurveTo(x0 + S * 0.13, o[1] + S * 0.5, x0 - S * 0.05, o[1] + S * 0.99);
+      gA.stroke();
+      gH.strokeStyle = 'rgb(210,210,210)';
+      gH.lineWidth = S * 0.022;
+      gH.beginPath();
+      gH.moveTo(x0, o[1] + S * 0.02);
+      gH.quadraticCurveTo(x0 + S * 0.13, o[1] + S * 0.5, x0 - S * 0.05, o[1] + S * 0.99);
+      gH.stroke();
+      for (var i = 0; i < 24; i++) {
+        var t = i / 23;
+        var mt = 1 - t;
+        var px = mt * mt * x0 + 2 * mt * t * (x0 + S * 0.13) + t * t * (x0 - S * 0.05);
+        var py = o[1] + S * (mt * mt * 0.02 + 2 * mt * t * 0.5 + t * t * 0.99);
+        var ll = S * rng.range(0.10, 0.18);
+        leaf(px, py, ll, ll * rng.range(0.34, 0.50),
+          (i & 1 ? 1 : -1) * rng.range(1.0, 2.0) + 1.6,
+          [92, 138, 58], rng.range(0.78, 1.10), 0.22, 0);
+      }
+    })();
+
+    // ---- 8 : creeper, small heart leaves on stems ---------------------------
+    (function () {
+      var o = origin(CELL.creeper);
+      for (var s = 0; s < 4; s++) {
+        var sx = o[0] + S * rng.range(0.12, 0.88);
+        gA.strokeStyle = 'rgba(78,74,44,0.9)';
+        gA.lineWidth = S * 0.010;
+        gA.beginPath();
+        gA.moveTo(sx, o[1]);
+        gA.quadraticCurveTo(sx + S * rng.range(-0.2, 0.2), o[1] + S * 0.5,
+          sx + S * rng.range(-0.25, 0.25), o[1] + S);
+        gA.stroke();
+        for (var i = 0; i < 11; i++) {
+          var t = i / 10;
+          var px = sx + Math.sin(t * 4.0 + s) * S * 0.10;
+          var py = o[1] + S * t;
+          var ll = S * rng.range(0.07, 0.13);
+          leaf(px, py, ll, ll * 0.62, rng.range(0, 6.28), [104, 150, 62],
+            rng.range(0.78, 1.12), 0.26, 0);
+        }
+      }
+    })();
+
+    // ---- 9 : dead frond -----------------------------------------------------
+    (function () {
+      var o = origin(CELL.dead);
+      var bx = o[0] + S * 0.5, by = o[1] + S * 0.95;
+      for (var i = 0; i < 22; i++) {
+        var t = i / 21;
+        var px = M.lerp(bx, o[0] + S * 0.46, t) + Math.sin(t * 3.0) * S * 0.04;
+        var py = M.lerp(by, o[1] + S * 0.08, t);
+        var ll = S * (0.28 - t * 0.19) * rng.range(0.7, 1.05);
+        var hue = [148, 118, 62];
+        leaf(px, py, ll, ll * 0.10, 0.95 + t * 0.5, hue, rng.range(0.62, 0.96), 0.04, 0);
+        leaf(px, py, ll, ll * 0.10, Math.PI - 0.95 - t * 0.5, hue, rng.range(0.60, 0.92), 0.04, 0);
+      }
+    })();
+
+    // ---- 10 : fallen leaf litter -------------------------------------------
+    (function () {
+      var o = origin(CELL.litter);
+      for (var i = 0; i < 34; i++) {
+        var ll = S * rng.range(0.10, 0.22);
+        var hue = rng.bool(0.45) ? [150, 118, 60] : (rng.bool(0.5) ? [104, 96, 52] : [82, 104, 48]);
+        leaf(o[0] + S * rng.range(0.06, 0.94), o[1] + S * rng.range(0.06, 0.94),
+          ll, ll * rng.range(0.26, 0.42), rng.range(0, 6.28), hue,
+          rng.range(0.55, 1.00), 0.16, rng.range(-0.2, 0.2) * ll);
+      }
+    })();
+
+    // ---- 11 : a distant grass fan ------------------------------------------
+    (function () {
+      var o = origin(CELL.grass);
+      var bx = o[0] + S * 0.5, by = o[1] + S * 0.99;
+      for (var i = 0; i < 30; i++) {
+        var ang = rng.range(-0.62, 0.62);
+        var ll = S * rng.range(0.55, 0.95);
+        leaf(bx + rng.range(-0.10, 0.10) * S, by, ll, ll * rng.range(0.030, 0.055),
+          Math.PI + ang, [110, 146, 62], rng.range(0.70, 1.10), 0.02,
+          rng.range(-0.25, 0.25) * ll * 0.06);
+      }
+    })();
+
+    // ---- derive normal + roughness from the drawn buffers -------------------
+    var N = ATL_PX;
+    var imgA = gA.getImageData(0, 0, N, N);
+    var A = imgA.data;
+    var imgH = gH.getImageData(0, 0, N, N);
+    var Hd = imgH.data;
+    var H = new Float32Array(N * N);
+    var k, i2;
+    for (k = 0; k < N * N; k++) H[k] = Hd[k * 4] / 255;
+    var cN = canvasOf(N), cR = canvasOf(N);
+    var gN = cN.getContext('2d'), gR = cR.getContext('2d');
+    var iN = gN.createImageData(N, N), iR = gR.createImageData(N, N);
+    heightToNormal(H, N, 1.9, iN.data);
+    var R = iR.data;
+    for (k = 0; k < N * N; k++) {
+      i2 = k * 4;
+      var lum = (A[i2] * 0.30 + A[i2 + 1] * 0.59 + A[i2 + 2] * 0.11) / 255;
+      // A wet tropical leaf is WAXY: low roughness on the lamina, higher on the
+      // veins and much higher on anything dead. Drives the specular sheen that
+      // separates a lit canopy from a flat green wash.
+      var ro = 0.62 - 0.26 * M.saturate(lum * 1.5) + (1 - H[k]) * 0.16;
+      var q = Math.round(M.saturate(ro) * 255);
+      R[i2] = q; R[i2 + 1] = q; R[i2 + 2] = q; R[i2 + 3] = 255;
+      // Widen the alpha slightly so the mip chain does not eat the leaf tips:
+      // an alpha-tested card whose coverage shrinks with distance dissolves,
+      // and a canopy that dissolves at 30 m is a canopy with holes in the sky.
+      if (A[i2 + 3] > 8 && A[i2 + 3] < 250) A[i2 + 3] = 255;
+    }
+
+    // ---- DILATE THE COLOUR INTO THE HOLES -----------------------------------
+    // clearRect leaves the transparent texels at RGB 0, and a mip chain does
+    // not know they are transparent - it averages that black straight into the
+    // leaf colour. The result is a dark halo round every leaf that gets worse
+    // with distance, which is exactly what a "dirty grey canopy" looks like.
+    // Four passes of nearest-opaque flood is enough to cover the two mip levels
+    // a canopy card ever reaches.
+    var mask = new Uint8Array(N * N);
+    for (k = 0; k < N * N; k++) mask[k] = A[k * 4 + 3] > 8 ? 1 : 0;
+    var next = new Uint8Array(N * N);
+    for (var pass = 0; pass < 4; pass++) {
+      next.set(mask);
+      for (var jj = 0; jj < N; jj++) {
+        for (var ii = 0; ii < N; ii++) {
+          k = jj * N + ii;
+          if (mask[k]) continue;
+          var sr = 0, sg = 0, sb = 0, sn = 0;
+          for (var oy = -1; oy <= 1; oy++) {
+            for (var ox = -1; ox <= 1; ox++) {
+              if (!ox && !oy) continue;
+              var qx = ii + ox, qy = jj + oy;
+              if (qx < 0 || qy < 0 || qx >= N || qy >= N) continue;
+              var q = qy * N + qx;
+              if (!mask[q]) continue;
+              sr += A[q * 4]; sg += A[q * 4 + 1]; sb += A[q * 4 + 2]; sn++;
+            }
+          }
+          if (!sn) continue;
+          A[k * 4] = (sr / sn) | 0;
+          A[k * 4 + 1] = (sg / sn) | 0;
+          A[k * 4 + 2] = (sb / sn) | 0;
+          next[k] = 1;
+        }
+      }
+      mask.set(next);
+    }
+    gN.putImageData(iN, 0, 0);
+    gR.putImageData(iR, 0, 0);
+    gA.putImageData(imgA, 0, 0);
+    return { albedo: cA, normal: cN, rough: cR };
+  }
+
+  // ---------------------------------------------------------------------------
+  // THE BLADE SURFACE. One tiling map used by every piece of solid understory
+  // geometry: u runs ACROSS the blade (0 = left edge, 0.5 = midrib, 1 = right
+  // edge) and v ALONG it (0 = petiole, 1 = tip). Every plant in the understory
+  // is a blade with a midrib, so one map serves grass, fern pinnae, banana,
+  // taro and palm leaflets and they all agree about where the light runs.
+  // ---------------------------------------------------------------------------
+  function buildBladeMaps(seed) {
+    var N = 512;
+    var cA = canvasOf(N);
+    if (!cA) return null;
+    var gA = cA.getContext('2d');
+    var cN = canvasOf(N), cR = canvasOf(N);
+    var gN = cN.getContext('2d'), gR = cR.getContext('2d');
+    if (!gA || !gN || !gR) return null;
+    var iA = gA.createImageData(N, N), iN = gN.createImageData(N, N);
+    var iR = gR.createImageData(N, N);
+    var A = iA.data, R = iR.data;
+    var H = new Float32Array(N * N);
+    var i, j, k;
+
+    for (j = 0; j < N; j++) {
+      var v = j / N;
+      for (i = 0; i < N; i++) {
+        var u = i / N;
+        k = j * N + i;
+        // distance from the midrib, 0 at the spine, 1 at the edges
+        var e = Math.abs(u - 0.5) * 2;
+        // lateral venation: a herringbone running out from the spine, warped so
+        // it is not a ruled comb
+        var warp = tfbm(u * 6, v * 6, 6, seed + 3, 2) - 0.5;
+        var vein = Math.abs(Math.sin((v * 34.0 + e * 7.5 + warp * 5.0) * Math.PI));
+        vein = Math.pow(1 - vein, 7.0);
+        var midrib = Math.pow(M.saturate(1 - e * 7.0), 1.6);
+        var mottle = tfbm(u * 5, v * 9, 5, seed, 4);
+        var fine = tfbm(u * 40, v * 70, 40, seed + 17, 2);
+        var blotch = M.smoothstep(0.70, 0.93, tfbm(u * 3 + 5, v * 7 - 2, 3, seed + 31, 3));
+
+        var h = 0.5 + midrib * 0.42 + vein * 0.12 - e * e * 0.14 +
+          (fine - 0.5) * 0.05;
+        H[k] = h;
+
+        // Colour. A tropical understory leaf is a deep blue-green with a
+        // yellow-green translucent lamina between the veins; the edge is
+        // darker and slightly redder where it has dried.
+        var lum = 0.80 + mottle * 0.34 + (fine - 0.5) * 0.14;
+        lum *= 1 - e * e * 0.22;
+        var r = 0.235 * lum, g = 0.415 * lum, b = 0.150 * lum;
+        // veins are paler and less saturated
+        r += (vein * 0.5 + midrib * 0.9) * 0.10;
+        g += (vein * 0.5 + midrib * 0.9) * 0.11;
+        b += (vein * 0.5 + midrib * 0.9) * 0.06;
+        // a scatter of brown leaf-spot, which is what stops a jungle looking
+        // like a nursery
+        r = M.lerp(r, 0.30, blotch * 0.55);
+        g = M.lerp(g, 0.22, blotch * 0.55);
+        b = M.lerp(b, 0.09, blotch * 0.55);
+        // the outermost 4% dries out
+        var dry = M.smoothstep(0.90, 1.0, e);
+        r = M.lerp(r, 0.32, dry * 0.6);
+        g = M.lerp(g, 0.26, dry * 0.6);
+        b = M.lerp(b, 0.11, dry * 0.6);
+
+        var o = k * 4;
+        A[o] = Math.round(Math.sqrt(M.saturate(r)) * 255);
+        A[o + 1] = Math.round(Math.sqrt(M.saturate(g)) * 255);
+        A[o + 2] = Math.round(Math.sqrt(M.saturate(b)) * 255);
+        A[o + 3] = 255;
+
+        // Waxy cuticle: genuinely glossy between the veins, matte on them and
+        // on the blotches. This is where a wet leaf gets its highlight, and the
+        // highlight is the only thing that separates two overlapping leaves of
+        // the same value.
+        var ro = 0.30 + vein * 0.30 + blotch * 0.34 + dry * 0.30 +
+          (1 - M.saturate(mottle)) * 0.10;
+        var q = Math.round(M.saturate(ro) * 255);
+        R[o] = q; R[o + 1] = q; R[o + 2] = q; R[o + 3] = 255;
+      }
+    }
+    heightToNormal(H, N, 2.6, iN.data);
+    gA.putImageData(iA, 0, 0);
+    gN.putImageData(iN, 0, 0);
+    gR.putImageData(iR, 0, 0);
+    return { albedo: cA, normal: cN, rough: cR };
+  }
+
+  // ---------------------------------------------------------------------------
+  // BARK. Tileable, and it carries the level's biological growth: a rainforest
+  // trunk is never bare wood - it is bark under moss under lichen under algae,
+  // wettest and greenest at the base and cleaner higher up. materials.js has
+  // wood_plank (sawn timber) and stone, and neither is a living trunk.
+  //
+  // v runs UP the trunk, so the moss gradient is applied by the consumer's uv,
+  // not baked in: one map serves a buttress at 0.4 m and a limb at 22 m.
+  // ---------------------------------------------------------------------------
+  function buildBarkMaps(seed) {
+    var N = 512;
+    var cA = canvasOf(N);
+    if (!cA) return null;
+    var gA = cA.getContext('2d');
+    var cN = canvasOf(N), cR = canvasOf(N);
+    var gN = cN.getContext('2d'), gR = cR.getContext('2d');
+    if (!gA || !gN || !gR) return null;
+    var iA = gA.createImageData(N, N), iN = gN.createImageData(N, N);
+    var iR = gR.createImageData(N, N);
+    var A = iA.data, R = iR.data;
+    var H = new Float32Array(N * N);
+    var i, j, k;
+
+    for (j = 0; j < N; j++) {
+      var v = j / N;
+      for (i = 0; i < N; i++) {
+        var u = i / N;
+        k = j * N + i;
+        // Vertical fibrous strands: high frequency across, very low along.
+        var strand = tfbm(u * 46, v * 5, 46, seed, 3);
+        var fissure = tfbm(u * 15, v * 3, 15, seed + 11, 3);
+        var deep = M.smoothstep(0.34, 0.06, fissure);           // dark clefts
+        var plate = tfbm(u * 7, v * 4, 7, seed + 23, 2);
+        var fine = tfbm(u * 120, v * 40, 120, seed + 37, 2);
+
+        var h = 0.42 + strand * 0.30 + plate * 0.22 - deep * 0.55 + (fine - 0.5) * 0.10;
+        H[k] = h;
+
+        // base bark: cool grey-brown, darker in the clefts
+        var lum = 0.30 + strand * 0.26 + plate * 0.18 - deep * 0.24;
+        var r = 0.072 * (lum * 2.4), g = 0.062 * (lum * 2.4), b = 0.046 * (lum * 2.4);
+
+        // ---- moss and algae -------------------------------------------------
+        // Two separate growths, because they colonise differently: a soft moss
+        // that fills the clefts (so it follows the fissure field) and a flat
+        // crustose lichen that sits on the raised plates (so it follows the
+        // inverse).
+        var moss = M.smoothstep(0.52, 0.86, tfbm(u * 9 + 3, v * 6 - 4, 9, seed + 53, 3)) *
+          (0.35 + deep * 0.90);
+        var lich = M.smoothstep(0.78, 0.97, tfbm(u * 17 - 6, v * 11 + 2, 17, seed + 71, 3)) *
+          M.saturate(1 - deep * 1.6);
+        r = M.lerp(r, 0.052, moss * 0.92);
+        g = M.lerp(g, 0.145, moss * 0.92);
+        b = M.lerp(b, 0.036, moss * 0.92);
+        r = M.lerp(r, 0.190, lich * 0.55);
+        g = M.lerp(g, 0.208, lich * 0.55);
+        b = M.lerp(b, 0.158, lich * 0.55);
+
+        var o = k * 4;
+        A[o] = Math.round(Math.sqrt(M.saturate(r)) * 255);
+        A[o + 1] = Math.round(Math.sqrt(M.saturate(g)) * 255);
+        A[o + 2] = Math.round(Math.sqrt(M.saturate(b)) * 255);
+        A[o + 3] = 255;
+
+        // Wet bark is dark and only slightly glossy; moss is completely matte.
+        var ro = 0.90 - strand * 0.14 + deep * 0.06 - lich * 0.10 + moss * 0.06;
+        var q = Math.round(M.saturate(ro) * 255);
+        R[o] = q; R[o + 1] = q; R[o + 2] = q; R[o + 3] = 255;
+      }
+    }
+    heightToNormal(H, N, 3.4, iN.data);
+    gA.putImageData(iA, 0, 0);
+    gN.putImageData(iN, 0, 0);
+    gR.putImageData(iR, 0, 0);
+    return { albedo: cA, normal: cN, rough: cR };
+  }
+
+  // ---------------------------------------------------------------------------
+  // GROUND MARK ATLAS. 2 x 2 alpha cells laid as flat cards where the terrain
+  // lattice cannot resolve the thing: boot prints filling with water, a tyre
+  // rut, a spill of leaf litter, and the algal scum at the water's edge.
+  // ---------------------------------------------------------------------------
+  var MARK_N = 2, MARK_PX = 512, MARK_CELL = MARK_PX / MARK_N;
+  var MARK = { boot: 0, tread: 1, litter: 2, scum: 3 };
+
+  // Same row inversion as atlasUV, same reason - without it the boot prints
+  // draw as leaf litter and the litter draws as boot prints.
+  function markUV(cell) {
+    var s = 1 / MARK_N;
+    var cx = (cell % MARK_N) * s, cy = (MARK_N - 1 - Math.floor(cell / MARK_N)) * s;
+    var pad = 0.005 * s;
+    return [cx + pad, cy + pad, cx + s - pad, cy + s - pad];
+  }
+
+  function buildMarkAtlas(rng) {
+    var c = canvasOf(MARK_PX);
+    if (!c) return null;
+    var g = c.getContext('2d');
+    if (!g) return null;
+    g.clearRect(0, 0, MARK_PX, MARK_PX);
+    var S = MARK_CELL;
+    function origin(n) { return [(n % MARK_N) * S, Math.floor(n / MARK_N) * S]; }
+    var o, i, j;
+
+    // ---- 0 : a jungle boot print, holding water ---------------------------
+    o = origin(MARK.boot);
+    g.save(); g.translate(o[0], o[1]);
+    g.fillStyle = 'rgba(24,26,18,0.80)';
+    function pad(x, y, w, h, r) {
+      g.beginPath();
+      if (g.roundRect) g.roundRect(x, y, w, h, r); else g.rect(x, y, w, h);
+      g.fill();
+    }
+    pad(S * 0.31, S * 0.09, S * 0.38, S * 0.54, S * 0.15);
+    pad(S * 0.33, S * 0.67, S * 0.34, S * 0.25, S * 0.09);
+    // the panama sole's chevrons, cut back out
+    g.globalCompositeOperation = 'destination-out';
+    g.fillStyle = 'rgba(0,0,0,0.62)';
+    for (j = 0; j < 8; j++) {
+      var cy = S * (0.135 + j * 0.058);
+      g.beginPath();
+      g.moveTo(S * 0.345, cy);
+      g.lineTo(S * 0.50, cy + S * 0.022);
+      g.lineTo(S * 0.655, cy);
+      g.lineTo(S * 0.655, cy + S * 0.020);
+      g.lineTo(S * 0.50, cy + S * 0.042);
+      g.lineTo(S * 0.345, cy + S * 0.020);
+      g.closePath(); g.fill();
+    }
+    g.globalCompositeOperation = 'source-over';
+    // standing water inside the print catches the sky - the print reads as a
+    // depression rather than as a dark sticker
+    g.strokeStyle = 'rgba(150,168,150,0.34)';
+    g.lineWidth = S * 0.016;
+    if (g.roundRect) {
+      g.beginPath();
+      g.roundRect(S * 0.30, S * 0.08, S * 0.40, S * 0.56, S * 0.16);
+      g.stroke();
+    }
+    g.restore();
+
+    // ---- 1 : a tyre rut, tiling top to bottom ------------------------------
+    o = origin(MARK.tread);
+    g.save(); g.translate(o[0], o[1]);
+    g.fillStyle = 'rgba(30,30,20,0.52)';
+    g.fillRect(S * 0.16, 0, S * 0.68, S);
+    g.fillStyle = 'rgba(14,15,10,0.72)';
+    for (j = 0; j < 14; j++) {
+      var ty = j * S / 14;
+      g.beginPath();
+      g.moveTo(S * 0.18, ty + S * 0.008);
+      g.lineTo(S * 0.50, ty + S * 0.030);
+      g.lineTo(S * 0.82, ty + S * 0.008);
+      g.lineTo(S * 0.82, ty + S * 0.038);
+      g.lineTo(S * 0.50, ty + S * 0.060);
+      g.lineTo(S * 0.18, ty + S * 0.038);
+      g.closePath(); g.fill();
+    }
+    g.strokeStyle = 'rgba(158,172,150,0.30)';
+    g.lineWidth = S * 0.020;
+    g.beginPath(); g.moveTo(S * 0.165, 0); g.lineTo(S * 0.165, S); g.stroke();
+    g.beginPath(); g.moveTo(S * 0.835, 0); g.lineTo(S * 0.835, S); g.stroke();
+    g.restore();
+
+    // ---- 2 : a drift of fallen leaves --------------------------------------
+    o = origin(MARK.litter);
+    g.save(); g.translate(o[0], o[1]);
+    for (i = 0; i < 90; i++) {
+      var lx = rng.range(0, S), ly = rng.range(0, S);
+      var ll = rng.range(S * 0.035, S * 0.10);
+      var la = rng.range(0, Math.PI * 2);
+      var warm = rng.next();
+      g.save(); g.translate(lx, ly); g.rotate(la);
+      g.fillStyle = warm > 0.62
+        ? 'rgba(' + Math.round(rng.range(96, 140)) + ',' + Math.round(rng.range(74, 100)) + ',36,0.86)'
+        : (warm > 0.30
+          ? 'rgba(' + Math.round(rng.range(58, 88)) + ',' + Math.round(rng.range(62, 92)) + ',32,0.84)'
+          : 'rgba(' + Math.round(rng.range(38, 60)) + ',' + Math.round(rng.range(48, 70)) + ',26,0.82)');
+      g.beginPath();
+      g.moveTo(0, -ll);
+      g.quadraticCurveTo(ll * 0.42, 0, 0, ll);
+      g.quadraticCurveTo(-ll * 0.42, 0, 0, -ll);
+      g.fill();
+      g.restore();
+    }
+    g.restore();
+
+    // ---- 3 : algal scum and silt at the water line -------------------------
+    o = origin(MARK.scum);
+    g.save(); g.translate(o[0], o[1]);
+    for (i = 0; i < 6; i++) {
+      g.fillStyle = 'rgba(' + Math.round(rng.range(52, 84)) + ',' +
+        Math.round(rng.range(70, 104)) + ',' + Math.round(rng.range(30, 52)) + ',' +
+        (0.10 + i * 0.055).toFixed(3) + ')';
+      g.beginPath();
+      var y0 = S * (0.20 + i * 0.035);
+      g.moveTo(0, y0);
+      for (var t = 0; t <= 14; t++) {
+        g.lineTo(S * t / 14, y0 + Math.sin(t * 1.4 + i * 1.7) * S * 0.045);
+      }
+      g.lineTo(S, S); g.lineTo(0, S); g.closePath(); g.fill();
+    }
+    for (i = 0; i < 240; i++) {
+      g.fillStyle = 'rgba(120,140,70,' + rng.range(0.10, 0.45).toFixed(2) + ')';
+      g.fillRect(rng.range(0, S), rng.range(S * 0.2, S), rng.range(1, 4), rng.range(1, 3));
+    }
+    g.restore();
+
+    var tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  // A ground mark lying flat in atlas cell `cell`.
+  function markCard(B, cell, x, y, z, w, h, yaw, tintC) {
+    var uv = markUV(cell);
+    var g = quad(w, h, uv[0], uv[1], uv[2], uv[3]);
+    var old = B.tint;
+    if (tintC) B.tint = tintC;
+    B.add('mark', g, makeM(x, y, z, -Math.PI * 0.5, yaw || 0, 0));
+    B.tint = old;
+  }
+
+  // ============================================================== THE PLANTS ==
+  // Every generator below returns geometry in LOCAL space with its origin at
+  // the base of the plant, so the wind sway (which scales with local y) and the
+  // instance transform both behave.
+
+  function whiteColor(g) {
+    var n = g.attributes.position.count;
+    var a = new Float32Array(n * 3);
+    for (var i = 0; i < n * 3; i++) a[i] = 1;
+    g.setAttribute('color', new THREE.BufferAttribute(a, 3));
+    return g;
+  }
+
+  // Elephant grass. The signature understory of the delta and the thing the
+  // camera stands in, so it is real folded ribbon geometry, never a card.
+  function grassClump(rng, scale, blades) {
+    var list = [];
+    var n = blades || rng.int(9, 13);
+    for (var i = 0; i < n; i++) {
+      var yaw = rng.range(0, Math.PI * 2);
+      var tilt = rng.range(0.10, 0.62) * (rng.bool(0.25) ? 1.7 : 1.0);
+      var len = rng.range(0.80, 2.05) * scale;
+      var wid = rng.range(0.026, 0.052) * (0.7 + scale * 0.4);
+      var g = blade(len, wid, len * rng.range(0.30, 0.58), len * rng.range(-0.10, 0.10),
+        0.62, 5, 0);
+      var off = rng.range(0, 0.13) * scale;
+      applyMatrix(g, makeM(Math.sin(yaw) * off, 0, Math.cos(yaw) * off, tilt, yaw, 0));
+      list.push(g);
+    }
+    return whiteColor(weld(list));
+  }
+
+  // Fern. A crown of pinnate fronds; each frond is a rachis with alternating
+  // leaflets that shorten toward the tip.
+  function fernPlant(rng, scale) {
+    var list = [];
+    var nf = rng.int(4, 5);
+    for (var f = 0; f < nf; f++) {
+      var yaw = rng.range(0, Math.PI * 2);
+      var tilt = rng.range(0.45, 1.02);
+      var len = rng.range(0.62, 1.10) * scale;
+      var st = [];
+      var seg = 4, i;
+      for (i = 0; i <= seg; i++) {
+        var t = i / seg;
+        st.push([0, len * t - len * 0.34 * t * t * t, 0, 0.016 * (1 - t * 0.72) * scale]);
+      }
+      var rach = tube(st, 4, false);
+      var sub = [rach];
+      var np = rng.int(6, 8);
+      for (i = 1; i <= np; i++) {
+        var t2 = i / (np + 1);
+        var py = len * t2 - len * 0.34 * t2 * t2 * t2;
+        var pl = len * (0.30 - t2 * 0.22) * rng.range(0.85, 1.15);
+        var pw = pl * 0.30;
+        for (var s = -1; s <= 1; s += 2) {
+          var lg = blade(pl, pw, pl * 0.22, 0, 0.5, 3, 1);
+          applyMatrix(lg, makeM(0, py, 0, 0, s > 0 ? Math.PI * 0.5 : -Math.PI * 0.5, 0));
+          applyMatrix(lg, makeM(0, 0, 0, -1.15 + t2 * 0.30, 0, 0));
+          sub.push(lg);
+        }
+      }
+      var frond = weld(sub);
+      applyMatrix(frond, makeM(0, 0, 0, tilt, yaw, 0));
+      list.push(frond);
+    }
+    return whiteColor(weld(list));
+  }
+
+  // Taro / philodendron. Big soft heart-shaped leaves held out nearly flat on
+  // long petioles. These are the level's largest single leaves at eye height
+  // and the surface the shafts actually land on.
+  function taroPlant(rng, scale) {
+    var list = [];
+    var n = rng.int(3, 5);
+    for (var i = 0; i < n; i++) {
+      var yaw = rng.range(0, Math.PI * 2);
+      var ph = rng.range(0.45, 0.95) * scale;
+      var lean = rng.range(0.30, 0.72);
+      var st = [];
+      for (var k = 0; k <= 3; k++) {
+        var t = k / 3;
+        st.push([0, ph * t, 0, 0.022 * (1 - t * 0.35) * scale]);
+      }
+      var pet = tube(st, 4, false);
+      var ll = rng.range(0.34, 0.58) * scale;
+      var lf = blade(ll, ll * 0.44, ll * 0.34, ll * rng.range(-0.10, 0.10), 0.58, 5, 1);
+      applyMatrix(lf, makeM(0, ph, 0, rng.range(1.05, 1.55), rng.range(-0.5, 0.5), 0));
+      var whole = weld([pet, lf]);
+      applyMatrix(whole, makeM(0, 0, 0, lean, yaw, 0));
+      list.push(whole);
+    }
+    return whiteColor(weld(list));
+  }
+
+  // Banana. A pseudostem and six to nine enormous split leaves. Placed at the
+  // water's edge and around the firebase, where they break a straight sandbag
+  // line with something soft and very large.
+  function bananaPlant(rng, scale) {
+    var list = [];
+    var h = rng.range(1.15, 1.90) * scale;
+    var st = [];
+    for (var k = 0; k <= 4; k++) {
+      var t = k / 4;
+      st.push([0, h * t, 0, (0.135 - t * 0.055) * scale]);
+    }
+    list.push(tube(st, 6, false));
+    var n = rng.int(5, 7);
+    for (var i = 0; i < n; i++) {
+      var yaw = i * (Math.PI * 2 / n) + rng.range(-0.35, 0.35);
+      var ll = rng.range(1.05, 1.75) * scale;
+      var lf = blade(ll, ll * 0.20, ll * rng.range(0.42, 0.72), ll * rng.range(-0.12, 0.12),
+        0.66, 6, 1);
+      applyMatrix(lf, makeM(0, h * rng.range(0.72, 1.0), 0, rng.range(0.55, 1.35), yaw, 0));
+      list.push(lf);
+    }
+    return whiteColor(weld(list));
+  }
+
+  // Palm. Trunk plus a crown of pinnate fronds - the mid-storey silhouette,
+  // and the one plant whose shape reads at 40 m through mist.
+  function palmTree(rng, scale) {
+    var h = rng.range(4.2, 7.4) * scale;
+    var lean = rng.range(-0.30, 0.30);
+    var st = [], k;
+    for (k = 0; k <= 6; k++) {
+      var t = k / 6;
+      st.push([lean * t * t * h * 0.30, h * t, lean * 0.4 * t * t * h * 0.30,
+        (0.185 - t * 0.062) * scale]);
+    }
+    return { trunk: whiteColor(tube(st, 8, false)), top: h, lean: lean };
+  }
+
+  function palmCrown(rng, scale) {
+    var list = [];
+    var n = rng.int(8, 11);
+    for (var f = 0; f < n; f++) {
+      var yaw = f * (Math.PI * 2 / n) + rng.range(-0.22, 0.22);
+      var len = rng.range(1.8, 3.1) * scale;
+      var st = [], i;
+      for (i = 0; i <= 6; i++) {
+        var t = i / 6;
+        st.push([0, len * t * 0.55 - len * 0.42 * t * t * t, len * t * 0.82, 0.030 * (1 - t * 0.7) * scale]);
+      }
+      var sub = [tube(st, 4, false)];
+      var np = 10;
+      for (i = 1; i <= np; i++) {
+        var t2 = i / (np + 1);
+        var py = len * t2 * 0.55 - len * 0.42 * t2 * t2 * t2;
+        var pz = len * t2 * 0.82;
+        var pl = len * (0.34 - t2 * 0.20) * rng.range(0.85, 1.15);
+        for (var s = -1; s <= 1; s += 2) {
+          var lg = blade(pl, pl * 0.085, pl * 0.30, 0, 0.7, 3, 0);
+          applyMatrix(lg, makeM(0, py, pz, -0.55, s > 0 ? 1.15 : -1.15, 0));
+          sub.push(lg);
+        }
+      }
+      var frond = weld(sub);
+      applyMatrix(frond, makeM(0, 0, 0, rng.range(-0.45, 0.25), yaw, 0));
+      list.push(frond);
+    }
+    return whiteColor(weld(list));
+  }
+
+  // Bamboo. Splayed segmented culms; the leaves ride as separate cards on the
+  // same instance transform so the clump costs two draw calls, not two hundred.
+  function bambooCulms(rng, scale) {
+    var list = [];
+    var n = rng.int(6, 10);
+    for (var i = 0; i < n; i++) {
+      var yaw = rng.range(0, Math.PI * 2);
+      var splay = rng.range(0.04, 0.24);
+      var h = rng.range(5.0, 10.5) * scale;
+      var r = rng.range(0.035, 0.062) * scale;
+      var st = [], k;
+      var segs = 7;
+      for (k = 0; k <= segs; k++) {
+        var t = k / segs;
+        var bendv = Math.pow(t, 2.2) * h * splay;
+        st.push([Math.sin(yaw) * bendv, h * t, Math.cos(yaw) * bendv,
+          r * (1 - t * 0.42) * (1 + 0.16 * Math.sin(t * segs * Math.PI))]);
+      }
+      var off = rng.range(0, 0.55) * scale;
+      var oy = rng.range(0, Math.PI * 2);
+      var g = tube(st, 5, false);
+      applyMatrix(g, makeM(Math.sin(oy) * off, 0, Math.cos(oy) * off, 0, 0, 0));
+      list.push(g);
+    }
+    return whiteColor(weld(list));
+  }
+
+  // The alpha-cut half of the level, used only above eight metres.
+  function cardGeo(w, h, cell) {
+    var uv = atlasUV(cell);
+    return quad(w, h, uv[0], uv[1], uv[2], uv[3]);
+  }
+
+  // A canopy blob: crossed cards on a squashed sphere. Six to ten cards each,
+  // three atlas cells, so no two clusters in the level are the same stamp.
+  function canopyCluster(rng, radius, cell) {
+    var list = [];
+    // Fourteen to eighteen cards, and they cost two triangles each. A canopy is
+    // the cheapest geometry in the level and the one thing the level cannot do
+    // without, so it gets the density; the understory pays for it.
+    var n = rng.int(14, 18);
+    for (var i = 0; i < n; i++) {
+      var yaw = rng.range(0, Math.PI * 2);
+      var pit = rng.range(-0.75, 0.55);
+      var rr = radius * Math.sqrt(rng.next()) * 0.95;
+      var s = radius * rng.range(1.20, 1.85);
+      var g = cardGeo(s, s * rng.range(0.74, 1.0), cell).clone();
+      applyMatrix(g, makeM(0, 0, 0, 0, 0, rng.range(0, Math.PI * 2)));
+      applyMatrix(g, makeM(Math.sin(yaw) * rr, Math.sin(pit) * radius * 0.60,
+        Math.cos(yaw) * rr, pit, yaw + Math.PI * 0.5, 0));
+      list.push(g);
+    }
+    return whiteColor(weld(list));
+  }
+
+  function bambooLeafCards(rng, scale) {
+    var list = [];
+    var n = rng.int(10, 16);
+    for (var i = 0; i < n; i++) {
+      var yaw = rng.range(0, Math.PI * 2);
+      var h = rng.range(4.4, 9.5) * scale;
+      var s = rng.range(0.9, 1.7) * scale;
+      var g = cardGeo(s, s * 1.3, CELL.bamboo).clone();
+      applyMatrix(g, makeM(Math.sin(yaw) * rng.range(0.2, 1.5) * scale, h,
+        Math.cos(yaw) * rng.range(0.2, 1.5) * scale,
+        rng.range(-0.3, 0.3), yaw, rng.range(-0.4, 0.4)));
+      list.push(g);
+    }
+    return whiteColor(weld(list));
+  }
+
+  // ================================================================ THE PLAN ==
+  // Everything with a world position is decided here, once, before build().
+  // props_jungle.js reads it through level.anchors the instant the level object
+  // exists - it never has to wait for geometry and never reads a camera pose.
+  function plan(P) {
+    var rng = P.rng;
+    var i;
+
+    // ---- the clearings ------------------------------------------------------
+    // Where sky reaches the floor. These are the level's value range: without
+    // them a canopy level is one flat shade of green from edge to edge. Each
+    // one is somewhere a framing looks, and three of the four carry a shaft.
+    P.clearings = [
+      { x: 3.0, z: 36.0, r: 10.5, open: 0.92 },     // the track, south of the creek
+      { x: 1.4, z: 8.0, r: 8.6, open: 0.86 },       // the track, mid
+      { x: -13.0, z: 10.5, r: 14.5, open: 1.00 },   // the wreck, at the water
+      // 30 m, not 21. A firebase clears a field of fire, and the OVERVIEW
+      // framing stands on the tower inside it: with a 21 m clearing the canopy
+      // closed to within twelve metres of the platform and the establishing
+      // shot was a close-up of leaves.
+      { x: FB_X, z: FB_Z, r: 30.0, open: 1.00 },    // the firebase, cut flat
+      { x: 3.2, z: 26.5, r: 8.0, open: 0.80 }       // the creek crossing
+    ];
+
+    // ---- the firebase -------------------------------------------------------
+    P.pads = [];
+    var fbTop = rawY(FB_X, FB_Z, P);
+    var fb = P.firebase = {
+      x: FB_X, z: FB_Z, y: fbTop, yaw: FB_YAW, r: FB_R,
+      wallH: 1.38, wallT: 1.15,
+      gateB: -0.10,          // bearing of the gate, 0 = toward +Z
+      breachB: 2.05
+    };
+    P.pads.push({ x: FB_X, z: FB_Z, r: 15.8, fade: 5.4, y: fbTop });
+
+    var c = Math.cos(FB_YAW), s = Math.sin(FB_YAW);
+    function fbW(lx, lz) { return [FB_X + lx * c + lz * s, FB_Z - lx * s + lz * c]; }
+    P.fbW = fbW;
+
+    var bunkerP = fbW(-5.2, -3.2);
+    P.bunker = {
+      x: bunkerP[0], z: bunkerP[1], yaw: FB_YAW + 0.14,
+      w: 9.8, d: 6.6, y: fbTop,
+      sink: 1.38, wall: 2.55, roof: 0.55
+    };
+    // Pushed AFTER the plateau pad so padBlend's tie-break picks it: this is
+    // the hole the command post sits in, and without it the level has a
+    // sandbag box standing on a flat field instead of a dug-in bunker.
+    P.pads.push({ x: P.bunker.x, z: P.bunker.z,
+      hx: P.bunker.w * 0.5 - 0.15, hz: P.bunker.d * 0.5 - 0.15,
+      c: Math.cos(P.bunker.yaw), s: Math.sin(P.bunker.yaw),
+      fade: 0.75, y: fbTop - P.bunker.sink });
+
+    var towerP = fbW(7.4, 4.6);
+    P.tower = {
+      // The tower's yaw is not decorative. The OVERVIEW framing stands on its
+      // platform, and a platform has a rail, a sandbag parapet and four roof
+      // posts round it - so the tower is turned until one clear parapet edge
+      // faces the shot. Looking out over an EDGE puts the rail 77 degrees
+      // below the eye and the two corner posts 86 degrees off axis, i.e. all
+      // three out of frame; looking out over a CORNER, which is what the first
+      // build did, put a post and a handrail straight through the middle of
+      // the establishing shot.
+      // -1.87 rad points the clear parapet edge straight across the firebase
+      // and out over the forest to the river beyond, which is the only bearing
+      // from up here that has the base, the treeline and the water in one
+      // frame. Facing any other way photographs canopy.
+      x: towerP[0], z: towerP[1], yaw: -1.87,
+      legR: 1.72, platY: 8.15, roofY: 10.75, y: fbTop, lean: 0.045
+    };
+    var mortarP = fbW(-8.2, 7.0);
+    P.mortar = { x: mortarP[0], z: mortarP[1], r: 2.75, y: fbTop, sink: 0.85 };
+    var padP = fbW(3.0, -9.2);
+    P.helipad = { x: padP[0], z: padP[1], r: 6.4, y: fbTop, yaw: FB_YAW + 0.5 };
+    var mastP = fbW(10.2, -7.4);
+    P.mast = { x: mastP[0], z: mastP[1], y: fbTop, h: 9.4 };
+    var drumP = fbW(-1.6, 2.6);
+    P.drum = { x: drumP[0], z: drumP[1], y: fbTop, yaw: 0.4 };
+    var shelP = fbW(-10.8, -6.8);
+    P.shelter = { x: shelP[0], z: shelP[1], y: fbTop, yaw: FB_YAW + 1.1 };
+    var gateP = [FB_X + Math.sin(fb.gateB) * FB_R, FB_Z + Math.cos(fb.gateB) * FB_R];
+    P.gate = { x: gateP[0], z: gateP[1], y: fbTop };
+
+    // ---- the wreck ----------------------------------------------------------
+    // Nose in the shallows, tail up the bank, rolled onto its left side. Solved
+    // against the channel rather than guessed so it never floats or sinks: the
+    // nose sits on the bed under 30-40 cm of water, the tail on dry mud.
+    var hz = 10.5;
+    var heliYaw = -1.02;                        // fuselage axis, world
+    var hx = riverC(hz) + riverHalf(hz) * 0.86;
+    P.heli = {
+      x: hx, z: hz, yaw: heliYaw, roll: 0.44, pitch: -0.16,
+      y: rawY(hx, hz, P) + 0.30
+    };
+    P.pads.push({ x: hx, z: hz, hx: 5.2, hz: 4.4, c: Math.cos(heliYaw),
+      s: Math.sin(heliYaw), fade: 3.0, y: P.heli.y - 0.30 });
+
+    // ---- the creek crossing -------------------------------------------------
+    var bx = trackX(CREEK_Z), bz = creekZ(bx);
+    P.bridge = {
+      x: bx, z: bz, w: 2.6,
+      nearZ: bz + CREEK_HALF + 0.9,
+      farZ: bz - CREEK_HALF - 0.9,
+      y: rawY(bx, bz + CREEK_HALF + 2.4, P) - 0.10
+    };
+    P.pads.push({ x: bx, z: P.bridge.nearZ, hx: 3.4, hz: 1.5, c: 1, s: 0,
+      fade: 1.4, y: P.bridge.y });
+    P.pads.push({ x: bx, z: P.bridge.farZ, hx: 3.4, hz: 1.5, c: 1, s: 0,
+      fade: 1.4, y: P.bridge.y });
+
+    // ---- the French sluice, where the creek meets the river -----------------
+    var sx = riverC(CREEK_Z) + riverHalf(CREEK_Z) - 1.4;
+    var sz = creekZ(sx);
+    P.sluice = { x: sx, z: sz, yaw: 0.12, y: WATER_Y + 0.10, h: 3.4, w: 6.6 };
+    P.pads.push({ x: sx, z: sz, hx: 3.6, hz: 2.4, c: 1, s: 0, fade: 1.8,
+      y: WATER_Y + 0.10 });
+
+    // ---- the spirit house ---------------------------------------------------
+    // A san phra phum on a post beside the track. It is the only warm thing in
+    // the southern half of the level and the only human mark that is not
+    // military, and it is deliberately in hero1's frame: the candles inside it
+    // are what keeps grade_split positive in a picture that is otherwise green.
+    var shz = 38.5;
+    var shx = trackX(shz) + 3.9;
+    P.shrine = { x: shx, z: shz, yaw: -0.62, y: rawY(shx, shz, P), h: 1.28 };
+    P.pads.push({ x: shx, z: shz, hx: 1.1, hz: 1.1, c: 1, s: 0, fade: 1.0,
+      y: P.shrine.y });
+
+    // ---- where the camera stands --------------------------------------------
+    // A published framing is useless if a 1.4 m taro leaf is growing 40 cm in
+    // front of the lens, and the scatter has no way to know that on its own -
+    // hero2 came back as a wall of flat green paper with the wreck somewhere
+    // behind it. The standpoints are decided HERE, in the plan, from the same
+    // anchors the framings use, so the planting can be told to leave them
+    // alone. This is the one thing in the file that the camera and the world
+    // are allowed to share, and it goes in this direction only: the plan tells
+    // the camera where it may stand, never the other way round.
+    P.camMarks = [
+      { x: trackX(48) - 1.45, z: 48.0, r: 2.6 },      // hero1
+      // Perpendicular to the fuselage axis (yaw -1.02), so the framing gets the
+      // machine in PROFILE - nose, cabin, mast, torn boom, drooping blade, all
+      // reading as separate shapes. The tail quarter, which is where the first
+      // search put it, is a box seen end-on.
+      { x: P.heli.x + 5.49, z: P.heli.z + 8.95, r: 3.2 }
+    ];
+    // ...and the whole CORRIDOR between the standpoint and the wreck, because
+    // clearing the two ends still left a taro clump at six metres sitting
+    // exactly across the subject.
+    for (var cq = 1; cq <= 5; cq++) {
+      var ct = cq / 6;
+      P.camMarks.push({ x: P.heli.x + 5.49 * ct + 0.6, z: P.heli.z + 8.95 * ct,
+        r: 2.5 });
+    }
+    var h3c = fbW(-4.0, -11.0);
+    P.camMarks.push({ x: h3c[0], z: h3c[1], r: 2.6 });  // hero3
+
+    // ---- the trees ----------------------------------------------------------
+    // A jittered lattice with rejection, not a uniform random scatter: uniform
+    // scatter is on the instant-fail list and, more usefully, a lattice with
+    // jitter actually produces the clumping and the gaps a forest has.
+    var trees = P.trees = [];
+    var step = 9.4;
+    for (var gz = Z_MIN + 3; gz < Z_MAX - 3; gz += step) {
+      for (var gx = X_MIN + 3; gx < X_MAX - 3; gx += step) {
+        var tx = gx + rng.range(-3.4, 3.4);
+        var tz = gz + rng.range(-3.4, 3.4);
+        if (tx < X_MIN + 2 || tx > X_MAX - 2 || tz < Z_MIN + 2 || tz > Z_MAX - 2) continue;
+        var rc = riverC(tz), rh = riverHalf(tz);
+        var a = Math.abs(tx - rc) / rh;
+        if (a < 1.06) continue;                                   // in the water
+        // 6.2 m, not 4.4. A cart track through forest has cleared verges, and
+        // more to the point hero1 STANDS in the road: at 4.4 the nearest
+        // buttressed giant could be three metres off the lens and the
+        // signature framing was two trunks with a slot between them.
+        if (Math.abs(tx - trackX(tz)) < 6.2) continue;            // on the road
+        var dfx = tx - FB_X, dfz = tz - FB_Z;
+        if (Math.sqrt(dfx * dfx + dfz * dfz) < FB_R + 4.5) continue;
+        var cdd = Math.abs(tz - creekZ(tx));
+        if (cdd < CREEK_HALF + 1.6 && tx > rc) continue;          // in the creek
+        var keep = true;
+        for (i = 0; i < P.clearings.length; i++) {
+          var cl = P.clearings[i];
+          var ddx = tx - cl.x, ddz = tz - cl.z;
+          var dd = Math.sqrt(ddx * ddx + ddz * ddz);
+          if (dd < cl.r && rng.next() < (1 - dd / cl.r) * cl.open) { keep = false; break; }
+        }
+        if (!keep) continue;
+        var big = rng.next();
+        var hgt = M.lerp(15.5, 27.5, Math.pow(big, 0.85));
+        trees.push({
+          x: tx, z: tz, y: rawY(tx, tz, P),
+          h: hgt,
+          r: M.lerp(0.58, 1.55, Math.pow(big, 0.85)),
+          lean: rng.range(-0.045, 0.045),
+          leanY: rng.range(0, Math.PI * 2),
+          buttress: rng.int(4, 7),
+          bh: M.lerp(0.9, 3.2, big) * rng.range(0.8, 1.2),
+          variant: rng.int(0, 2),
+          liana: rng.bool(0.34),
+          seed: rng.int(0, 65535)
+        });
+      }
+    }
+    // three shell-shattered survivors inside the wire - a firebase was cut out
+    // of the forest, it did not arrive in a field
+    var stumps = [[-9.5, 10.0], [12.5, 6.0], [-13.0, -10.0]];
+    for (i = 0; i < stumps.length; i++) {
+      var sp = fbW(stumps[i][0], stumps[i][1]);
+      trees.push({
+        x: sp[0], z: sp[1], y: fbTop, h: rng.range(6.5, 10.5),
+        r: rng.range(0.55, 0.85), lean: rng.range(-0.10, 0.10),
+        leanY: rng.range(0, 6.28), buttress: rng.int(3, 5), bh: rng.range(1.2, 2.2),
+        variant: 2, liana: false, shattered: true, seed: rng.int(0, 65535)
+      });
+    }
+
+    // ---- fallen trunks ------------------------------------------------------
+    // Three, and every one of them is doing compositional work: one across the
+    // track as an obstacle and a foreground bar, one half in the river as a
+    // sightline into the water, one on the firebase slope.
+    P.logs = [];
+    function log(ax, az, bxx, bzz, r, sink) {
+      var ay = rawY(ax, az, P) + r * (1 - (sink || 0.35));
+      var by = rawY(bxx, bzz, P) + r * (1 - (sink || 0.35));
+      P.logs.push({ ax: ax, ay: ay, az: az, bx: bxx, by: by, bz: bzz, r: r,
+        seed: rng.int(0, 65535) });
+    }
+    log(trackX(43) - 6.0, 44.5, trackX(41) + 4.4, 40.0, 0.62, 0.42);
+    log(riverC(-2) + riverHalf(-2) - 3.0, -3.0, riverC(-2) + riverHalf(-2) + 8.5, 1.5, 0.52, 0.30);
+    log(FB_X - 21.0, FB_Z + 9.0, FB_X - 13.5, FB_Z + 14.0, 0.46, 0.40);
+
+    // ---- mangrove stands ----------------------------------------------------
+    // Prop-rooted clumps standing in the shallows down both banks. They are why
+    // the water's edge is a tangle rather than a drawn line, and their arches
+    // are the only place in the level you can see through a solid object.
+    P.mangroves = [];
+    for (var mz = Z_MIN + 6; mz < Z_MAX - 6; mz += 5.4) {
+      for (var side = 0; side < 2; side++) {
+        if (rng.next() > 0.62) continue;
+        var mrc = riverC(mz), mrh = riverHalf(mz);
+        var edge = side ? mrc + mrh : mrc - mrh;
+        var mx = edge + (side ? -1 : 1) * rng.range(-1.6, 2.6);
+        var mzz = mz + rng.range(-1.8, 1.8);
+        if (mx < X_MIN + 2 || mx > X_MAX - 2) continue;
+        var mclr = false;
+        for (var mc = 0; mc < P.camMarks.length; mc++) {
+          var MC = P.camMarks[mc];
+          var mdx = mx - MC.x, mdz = mzz - MC.z;
+          if (mdx * mdx + mdz * mdz < (MC.r + 1.6) * (MC.r + 1.6)) { mclr = true; break; }
+        }
+        if (mclr) continue;
+        P.mangroves.push({
+          x: mx, z: mzz, y: rawY(mx, mzz, P),
+          r: rng.range(0.13, 0.24), h: rng.range(3.2, 6.4),
+          roots: rng.int(5, 9), seed: rng.int(0, 65535)
+        });
+      }
+    }
+
+    // ---- rock outcrop -------------------------------------------------------
+    // The overview standpoint, and the only hard mineral silhouette in a level
+    // made of soft things.
+    var ox = 30.0, oz = 12.0;
+    P.outcrop = { x: ox, z: oz, y: rawY(ox, oz, P), r: 9.5, h: 6.2 };
+    P.pads.push({ x: ox - 1.5, z: oz + 1.0, hx: 3.0, hz: 3.0, c: 1, s: 0, fade: 2.2,
+      y: rawY(ox, oz, P) + 5.6 });
+
+    return P;
+  }
+
+  // ============================================================== THE GROUND ==
+  // One indexed heightfield for the floor and one channel-shaped ribbon for the
+  // water. The floor's VERTEX COLOURS are where a green level gets its value
+  // range: they are painted from the analytic sky-exposure field, so the track,
+  // the clearings and the water's edge are two stops up on the closed canopy
+  // and the boundary between them is ragged rather than circular.
+  var GROUND_CELL = 0.80;
+
+  function buildGround(L, rng) {
+    var P = L.plan;
+    var N = L.noise;
+    var x0 = X_MIN, z0 = Z_MIN;
+    var w = Math.ceil((X_MAX - X_MIN) / GROUND_CELL) + 1;
+    var h = Math.ceil((Z_MAX - Z_MIN) / GROUND_CELL) + 1;
+
+    var pos = new Float32Array(w * h * 3);
+    var col = new Float32Array(w * h * 3);
+    var uv = new Float32Array(w * h * 2);
+    var field = new Float32Array(w * h);
+    var i, j, k;
+
+    for (j = 0; j < h; j++) {
+      for (i = 0; i < w; i++) {
+        k = j * w + i;
+        var x = x0 + i * GROUND_CELL, z = z0 + j * GROUND_CELL;
+        var y = groundY(x, z, P);
+        field[k] = y;
+        pos[k * 3] = x; pos[k * 3 + 1] = y; pos[k * 3 + 2] = z;
+        uv[k * 2] = x * 0.5; uv[k * 2 + 1] = z * 0.5;
+      }
+    }
+    L.field = { x0: x0, z0: z0, cell: GROUND_CELL, w: w, h: h, a: field };
+
+    // ---- colour -------------------------------------------------------------
+    for (j = 0; j < h; j++) {
+      for (i = 0; i < w; i++) {
+        k = j * w + i;
+        var px = x0 + i * GROUND_CELL, pz = z0 + j * GROUND_CELL;
+        var py = field[k];
+        var open = skyOpen(px, pz, P);
+
+        // slope, from the baked field
+        var hxp = field[j * w + Math.min(w - 1, i + 1)];
+        var hxm = field[j * w + Math.max(0, i - 1)];
+        var hzp = field[Math.min(h - 1, j + 1) * w + i];
+        var hzm = field[Math.max(0, j - 1) * w + i];
+        var slope = Math.min(1, Math.sqrt(
+          Math.pow((hxp - hxm) / (2 * GROUND_CELL), 2) +
+          Math.pow((hzp - hzm) / (2 * GROUND_CELL), 2)) * 0.75);
+
+        // Base value. 0.34 -> 1.42 is a 4:1 ground range: enough that a shaft
+        // pool reads as a pool, shallow enough that the closed canopy still has
+        // material detail in it rather than crushing to a silhouette.
+        // The floor floor. 0.34 measured a vertical imbalance of 2.77 on the
+        // 40-degree portrait lens, which crops out the canopy's dark half and
+        // leaves a bright leaf ceiling over a near-black road. 0.44 lifts the
+        // deep shade by a third of a stop without touching the lit end, so the
+        // 4:1 ground range the shafts need is intact and the tight crop lands
+        // under 2.5.
+        var lit = 0.44 + 1.02 * open;
+        var r = lit, g = lit, b = lit;
+        // Light here has come through leaves, so it is GREEN, and the shade is
+        // greener still - a jungle's shadow is not blue. The warm/cool split
+        // the brief asks for is carried by the LITTER and the SILT below, which
+        // are the two things in a forest that are not chlorophyll.
+        r *= 0.90 + 0.16 * open;
+        g *= 1.02;
+        b *= 0.70 + 0.10 * open;
+
+        // leaf litter: warm ochre drifts, thickest under closed canopy where
+        // nothing washes them away
+        var lt = M.smoothstep(0.44, 0.80, n01(N.fbm2(px * 0.14 + 11.0, pz * 0.14 - 6.0, 3))) *
+          (0.35 + 0.65 * (1 - open));
+        r = M.lerp(r, r * 1.62, lt * 0.66);
+        g = M.lerp(g, g * 1.26, lt * 0.66);
+        b = M.lerp(b, b * 0.74, lt * 0.66);
+
+        // moss, on flat shaded ground and never on a slope
+        var mo = M.smoothstep(0.50, 0.82, n01(N.fbm2(px * 0.22 - 4.0, pz * 0.22 + 8.0, 2))) *
+          (1 - slope) * (1 - open * 0.55);
+        r = M.lerp(r, r * 0.62, mo * 0.55);
+        g = M.lerp(g, g * 1.24, mo * 0.55);
+        b = M.lerp(b, b * 0.58, mo * 0.55);
+
+        // laterite: the red subsoil, exposed wherever the surface is steep or
+        // has been cut - the bank scarps, the knoll, the road spoil
+        var lat = M.saturate(slope * 1.35 - 0.10);
+        r = M.lerp(r, r * 1.55 + 0.10, lat * 0.62);
+        g = M.lerp(g, g * 1.02, lat * 0.62);
+        b = M.lerp(b, b * 0.58, lat * 0.62);
+
+        // silt and algal scum at the water line, and the wet dark bed below it
+        var rc = riverC(pz), rh = riverHalf(pz);
+        var aa = Math.abs(px - rc) / rh;
+        var shore = (1 - M.smoothstep(0.0, 0.30, Math.abs(aa - 1.0)));
+        r = M.lerp(r, 1.22, shore * 0.55);
+        g = M.lerp(g, 1.18, shore * 0.55);
+        b = M.lerp(b, 0.92, shore * 0.55);
+        if (aa < 1.0) {
+          var sub = 1 - M.smoothstep(0.72, 1.0, aa);
+          r *= 1 - sub * 0.52; g *= 1 - sub * 0.44; b *= 1 - sub * 0.40;
+        }
+
+        // the churned track: wetter, darker, more saturated than its verges
+        var tr = 1 - M.smoothstep(TRACK_HALF * 0.7, TRACK_SHOULDER, Math.abs(px - trackX(pz)));
+        r = M.lerp(r, r * 0.86, tr * 0.7);
+        g = M.lerp(g, g * 0.88, tr * 0.7);
+        b = M.lerp(b, b * 0.80, tr * 0.7);
+
+        // and never perfectly uniform
+        var v = N.fbm2(px * 0.9 + 3.0, pz * 0.9 - 2.0, 2);
+        var vv = 1 + (v - 0.0) * 0.10;
+        col[k * 3] = M.clamp(r * vv, 0.05, 2.0);
+        col[k * 3 + 1] = M.clamp(g * vv, 0.05, 2.0);
+        col[k * 3 + 2] = M.clamp(b * vv, 0.05, 2.0);
+        void py;
+      }
+    }
+
+    var idx = [];
+    for (j = 0; j + 1 < h; j++) {
+      for (i = 0; i + 1 < w; i++) {
+        var a0 = j * w + i, b0 = j * w + i + 1;
+        var c0 = (j + 1) * w + i, d0 = (j + 1) * w + i + 1;
+        idx.push(a0, c0, b0, b0, c0, d0);
+      }
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setIndex(idx.length > 65535
+      ? new THREE.BufferAttribute(new Uint32Array(idx), 1)
+      : new THREE.BufferAttribute(new Uint16Array(idx), 1));
+    geo.computeVertexNormals();
+    Geo.copyUV1(geo);
+    var mesh = new THREE.Mesh(geo, L.material('mud'));
+    mesh.name = 'jungle_ground';
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
+    L.root.add(mesh);
+    L.meshes.push(mesh);
+    void rng;
+  }
+
+  function buildWater(L) {
+    var nz = 74, nt = 22;
+    var pos = new Float32Array((nz + 1) * (nt + 1) * 3);
+    var uv = new Float32Array((nz + 1) * (nt + 1) * 2);
+    var i, j, k;
+    for (j = 0; j <= nz; j++) {
+      var z = Z_MIN - 4 + (Z_MAX - Z_MIN + 8) * (j / nz);
+      var rc = riverC(z), rh = riverHalf(z);
+      for (i = 0; i <= nt; i++) {
+        k = j * (nt + 1) + i;
+        var t = (i / nt) * 2 - 1;
+        var x = rc + t * rh * 1.015;
+        pos[k * 3] = x; pos[k * 3 + 1] = WATER_Y; pos[k * 3 + 2] = z;
+        uv[k * 2] = x * 0.25; uv[k * 2 + 1] = z * 0.25;
+      }
+    }
+    var idx = [];
+    for (j = 0; j < nz; j++) {
+      for (i = 0; i < nt; i++) {
+        var a = j * (nt + 1) + i, b = a + 1;
+        var c = (j + 1) * (nt + 1) + i, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geo.setIndex(new THREE.BufferAttribute(new Uint16Array(idx), 1));
+    geo.computeVertexNormals();
+    var mesh = new THREE.Mesh(geo, L.material('water'));
+    mesh.name = 'jungle_river';
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
+    mesh.renderOrder = 1;
+    L.root.add(mesh);
+    L.meshes.push(mesh);
+  }
+
+  // ================================================================ THE TREES ==
+  function pushQuad(pos, nor, uvv, a, b, c, d, ua, ub, uc, ud) {
+    var ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+    var vx = d[0] - a[0], vy = d[1] - a[1], vz = d[2] - a[2];
+    var nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+    nx /= nl; ny /= nl; nz /= nl;
+    pos.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+    pos.push(a[0], a[1], a[2], c[0], c[1], c[2], d[0], d[1], d[2]);
+    for (var q = 0; q < 6; q++) nor.push(nx, ny, nz);
+    uvv.push(ua[0], ua[1], ub[0], ub[1], uc[0], uc[1]);
+    uvv.push(ua[0], ua[1], uc[0], uc[1], ud[0], ud[1]);
+  }
+
+  // A buttress root: the flying fin a rainforest giant stands on. Concave
+  // hypotenuse, thinning outward, and it is what turns a cylinder into a tree.
+  function buttressFin(r0, reach, hgt, thick, uvS) {
+    var n = 7, i;
+    var pos = [], nor = [], uvv = [];
+    var pts = [];
+    for (i = 0; i <= n; i++) {
+      var t = i / n;
+      var x = r0 * 0.55 + (reach - r0 * 0.55) * t;
+      var y = hgt * Math.pow(1 - t, 1.75);
+      var th = thick * (1 - t * 0.62) * 0.5;
+      pts.push([x, y, th]);
+    }
+    for (i = 0; i < n; i++) {
+      var A = pts[i], Bp = pts[i + 1];
+      var u0 = A[0] * uvS, u1 = Bp[0] * uvS;
+      pushQuad(pos, nor, uvv,
+        [A[0], A[1], A[2]], [A[0], 0, A[2]], [Bp[0], 0, Bp[2]], [Bp[0], Bp[1], Bp[2]],
+        [u0, A[1] * uvS], [u0, 0], [u1, 0], [u1, Bp[1] * uvS]);
+      pushQuad(pos, nor, uvv,
+        [A[0], A[1], -A[2]], [Bp[0], Bp[1], -Bp[2]], [Bp[0], 0, -Bp[2]], [A[0], 0, -A[2]],
+        [u0, A[1] * uvS], [u1, Bp[1] * uvS], [u1, 0], [u0, 0]);
+      pushQuad(pos, nor, uvv,
+        [A[0], A[1], A[2]], [Bp[0], Bp[1], Bp[2]], [Bp[0], Bp[1], -Bp[2]], [A[0], A[1], -A[2]],
+        [u0, 0], [u1, 0], [u1, A[2] * 2 * uvS], [u0, A[2] * 2 * uvS]);
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvv), 2));
+    return g;
+  }
+
+  var BARK_UV = 1.9;      // tiles per metre on bark
+
+  function barkTube(stations, seg) {
+    var g = tube(stations, seg, false);
+    var uv = g.attributes.uv;
+    var rAvg = 0;
+    for (var i = 0; i < stations.length; i++) rAvg += stations[i][3];
+    rAvg = (rAvg / stations.length) || 0.2;
+    var circ = Math.PI * 2 * rAvg;
+    for (i = 0; i < uv.count; i++) {
+      uv.setXY(i, uv.getX(i) * circ * BARK_UV, uv.getY(i) * BARK_UV);
+    }
+    return g;
+  }
+
+  function buildTree(L, B, rng, T) {
+    var i;
+    var st = [];
+    var segs = 8;
+    var lx = Math.sin(T.leanY) * T.lean, lz = Math.cos(T.leanY) * T.lean;
+    var sway = L.noise;
+    for (i = 0; i <= segs; i++) {
+      var t = i / segs;
+      var r = T.r * M.lerp(1.75, 0.26, Math.pow(t, 0.50));
+      // a sinuous axis, not a plumb line
+      var wob = sway.fbm2(T.seed * 0.013 + t * 2.2, T.seed * 0.007, 2) * 0.9;
+      st.push([
+        lx * T.h * t * t + wob * 0.30 * t,
+        T.h * t,
+        lz * T.h * t * t + wob * 0.24 * t,
+        r
+      ]);
+    }
+    if (T.shattered) {
+      // a splintered crown: the top station collapses to a ragged point
+      st[segs][3] = T.r * 0.42;
+      st[segs][1] = T.h;
+    }
+    B.tint = grey(rng.range(0.86, 1.10));
+    B.add('bark', barkTube(st, T.r > 0.8 ? 10 : 8), makeM(T.x, T.y, T.z));
+
+    // buttresses
+    for (i = 0; i < T.buttress; i++) {
+      var ang = i * (Math.PI * 2 / T.buttress) + rng.range(-0.28, 0.28);
+      var reach = T.r * rng.range(2.0, 3.6);
+      var hg = T.bh * rng.range(0.75, 1.25);
+      var fin = buttressFin(T.r * 1.55, reach, hg, T.r * rng.range(0.30, 0.52), BARK_UV);
+      B.add('bark', fin, makeM(T.x, T.y, T.z, 0, ang, 0));
+    }
+
+    // branches, and the canopy that hangs off them
+    var nb = T.shattered ? rng.int(1, 3) : rng.int(3, 6);
+    var canopyLow = 1e9;
+    for (i = 0; i < nb; i++) {
+      var by = T.h * rng.range(T.shattered ? 0.70 : 0.60, 0.96);
+      var bang = rng.range(0, Math.PI * 2);
+      var blen = T.h * rng.range(0.12, 0.30);
+      var brs = [];
+      for (var s = 0; s <= 3; s++) {
+        var bt = s / 3;
+        brs.push([
+          Math.sin(bang) * blen * bt,
+          by + blen * bt * rng.range(0.20, 0.55) - blen * bt * bt * 0.10,
+          Math.cos(bang) * blen * bt,
+          T.r * (0.30 - bt * 0.20)
+        ]);
+      }
+      B.add('bark', barkTube(brs, 5), makeM(T.x, T.y, T.z, 0, 0, 0));
+      if (!T.shattered) {
+        var tipx = T.x + Math.sin(bang) * blen;
+        var tipz = T.z + Math.cos(bang) * blen;
+        var tipy = T.y + by + blen * 0.42;
+        var cr = T.r * rng.range(3.6, 6.0) + 1.4;
+        L.addInst('canopy' + rng.int(0, 2),
+          makeM(tipx, tipy, tipz, rng.range(-0.2, 0.2), rng.range(0, 6.28), 0),
+          cr / 3.0, T.y + by);
+        if (tipy < canopyLow) canopyLow = tipy;
+        L.dripEdges.push({ position: new THREE.Vector3(tipx, tipy - cr * 0.5, tipz),
+          fall: Math.min(3.0, (tipy - T.y) * 0.35) });
+      }
+    }
+    // a top cluster so the crown closes
+    if (!T.shattered) {
+      L.addInst('canopy' + rng.int(0, 2),
+        makeM(T.x + lx * T.h, T.y + T.h * 1.01, T.z + lz * T.h,
+          0, rng.range(0, 6.28), 0), (T.r * 5.0 + 2.0) / 3.0, T.y + T.h);
+    }
+    B.tint = null;
+
+    // hanging lianas: the level's only vertical line above eye height, and the
+    // thing that tells you how high the canopy is
+    if (T.liana) {
+      var nl = rng.int(2, 4);
+      for (i = 0; i < nl; i++) {
+        var la = rng.range(0, Math.PI * 2);
+        var lr = T.r * rng.range(2.5, 5.5);
+        var lyTop = T.y + T.h * rng.range(0.62, 0.86);
+        var lyBot = T.y + rng.range(0.6, 4.0);
+        var lxx = T.x + Math.sin(la) * lr, lzz = T.z + Math.cos(la) * lr;
+        var cardH = lyTop - lyBot;
+        if (cardH < 2.0) continue;
+        var uvv = atlasUV(CELL.liana);
+        var cg = quad(cardH * 0.30, cardH, uvv[0], uvv[1], uvv[2], uvv[3]);
+        B.add('canopy', cg, makeM(lxx, (lyTop + lyBot) * 0.5, lzz, 0, rng.range(0, 6.28), 0));
+        B.add('canopy', cg, makeM(lxx, (lyTop + lyBot) * 0.5, lzz, 0,
+          rng.range(0, 6.28) + 1.57, 0));
+        L.dripEdges.push({ position: new THREE.Vector3(lxx, lyBot + 0.1, lzz), fall: 1.6 });
+      }
+    }
+    void canopyLow;
+
+    L.addCollider(T.x + lx * 0.6, T.y + T.h * 0.5, T.z + lz * 0.6,
+      T.r * 1.20, T.h * 0.5, T.r * 1.20, 'wood');
+  }
+
+  // Mangrove: a low crown on a cage of arching prop roots. The one place in the
+  // level you can see THROUGH a solid object, which is what a tangle means.
+  function buildMangrove(L, B, rng, Mg) {
+    var i;
+    B.tint = grey(rng.range(0.78, 1.00));
+    var st = [];
+    for (i = 0; i <= 4; i++) {
+      var t = i / 4;
+      st.push([0, Mg.h * t, 0, Mg.r * (1.15 - t * 0.55)]);
+    }
+    var trunk = barkTube(st, 7);
+    B.add('bark', trunk, makeM(Mg.x, Mg.y + 0.9, Mg.z, 0, 0, 0));
+    for (i = 0; i < Mg.roots; i++) {
+      var ang = i * (Math.PI * 2 / Mg.roots) + rng.range(-0.3, 0.3);
+      var reach = rng.range(0.9, 2.3);
+      var top = 0.9 + rng.range(0.2, 1.1);
+      var rs = [];
+      for (var s = 0; s <= 4; s++) {
+        var t2 = s / 4;
+        rs.push([
+          Math.sin(ang) * reach * Math.sin(t2 * Math.PI * 0.5),
+          top * (1 - t2 * t2) - 0.35 * t2,
+          Math.cos(ang) * reach * Math.sin(t2 * Math.PI * 0.5),
+          Mg.r * (0.42 - t2 * 0.20)
+        ]);
+      }
+      B.add('bark', barkTube(rs, 5), makeM(Mg.x, Mg.y, Mg.z, 0, 0, 0));
+    }
+    B.tint = null;
+    L.addInst('canopy' + rng.int(0, 2),
+      makeM(Mg.x, Mg.y + Mg.h + 0.6, Mg.z, 0, rng.range(0, 6.28), 0),
+      rng.range(0.55, 0.95), Mg.y + Mg.h);
+    L.dripEdges.push({ position: new THREE.Vector3(Mg.x + 1.0, Mg.y + Mg.h + 0.2, Mg.z),
+      fall: Math.max(0.6, Mg.h * 0.6) });
+  }
+
+  function buildLog(L, B, rng, lg) {
+    var i;
+    var dx = lg.bx - lg.ax, dy = lg.by - lg.ay, dz = lg.bz - lg.az;
+    var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (len < 0.5) return;
+    var st = [];
+    var segs = 6;
+    for (i = 0; i <= segs; i++) {
+      var t = i / segs;
+      st.push([lg.ax + dx * t, lg.ay + dy * t + Math.sin(t * 3.0) * 0.06,
+        lg.az + dz * t, lg.r * (1.12 - t * 0.36) * (1 + 0.10 * Math.sin(t * 9))]);
+    }
+    B.tint = grey(0.82);
+    B.add('bark', barkTube(st, 8));
+    B.tint = null;
+    // a shattered stump end and a spray of broken limbs
+    for (i = 0; i < 4; i++) {
+      var t3 = rng.range(0.15, 0.9);
+      var px = lg.ax + dx * t3, py = lg.ay + dy * t3, pz = lg.az + dz * t3;
+      var a2 = rng.range(0, 6.28), l2 = rng.range(0.5, 1.5);
+      B.rod('bark', px, py, pz,
+        px + Math.sin(a2) * l2, py + rng.range(0.2, 0.9), pz + Math.cos(a2) * l2,
+        lg.r * 0.16, 5);
+    }
+    // moss and fern colonising the top
+    var nb = Math.max(2, Math.round(len / 1.4));
+    for (i = 0; i < nb; i++) {
+      var t4 = (i + 0.5) / nb;
+      L.addInst('fern' + rng.int(0, 1),
+        makeM(lg.ax + dx * t4 + rng.range(-0.3, 0.3), lg.ay + dy * t4 + lg.r * 0.72,
+          lg.az + dz * t4 + rng.range(-0.3, 0.3), 0, rng.range(0, 6.28), 0),
+        rng.range(0.35, 0.62), lg.ay);
+    }
+    L.addCollider((lg.ax + lg.bx) * 0.5, (lg.ay + lg.by) * 0.5 - lg.r * 0.15,
+      (lg.az + lg.bz) * 0.5, Math.abs(dx) * 0.5 + lg.r, lg.r * 0.9,
+      Math.abs(dz) * 0.5 + lg.r, 'wood');
+  }
+
+  // =========================================================== THE FIREBASE ==
+  // Individual bags, not a wall with a bag texture. A revetment is the one
+  // structure in the level whose whole read is its silhouette - the lumpy top
+  // course, the bags that have burst and slumped, the ones that have gone green
+  // - and none of that survives being painted onto a box.
+  function sandbagRun(B, rng, ax, ay, az, bx, by, bz, courses, bagH, seg) {
+    var dx = bx - ax, dz = bz - az;
+    var len = Math.sqrt(dx * dx + dz * dz);
+    if (len < 0.2) return;
+    var ux = dx / len, uz = dz / len;
+    var yaw = Math.atan2(ux, uz);
+    var bw = 0.52, bd = 0.26;
+    var n = Math.max(1, Math.round(len / bw));
+    bw = len / n;
+    for (var c = 0; c < courses; c++) {
+      var yy = c * bagH * 0.78;
+      var off = (c & 1) ? bw * 0.5 : 0;
+      var cn = (c & 1) ? n - 1 : n;
+      // the top course is ragged: bags missing, bags knocked off
+      var frac = c === courses - 1 ? 0.72 : 1.0;
+      for (var i = 0; i < cn; i++) {
+        if (rng.next() > frac) continue;
+        var t = (i + 0.5) * bw + off;
+        var px = ax + ux * t, pz = az + uz * t;
+        var py = ay + (by - ay) * (t / len) + yy + bagH * 0.5;
+        var jx = rng.range(-0.035, 0.035), jz = rng.range(-0.045, 0.045);
+        var sag = rng.range(0.86, 1.06);
+        B.tint = new THREE.Color(
+          rng.range(0.80, 1.06), rng.range(0.84, 1.04), rng.range(0.66, 0.92));
+        // bags rot green from the bottom up
+        if (c === 0 || rng.bool(0.22)) {
+          B.tint.multiply(new THREE.Color(0.72, 0.98, 0.60));
+        }
+        // Courses nest at 0.78 of a bag height and the bag is shallower than it
+        // is wide. At 0.92 and 1.9 deep each course threw a hard ledge shadow
+        // on the one below it and a revetment inside the bunker photographed as
+        // a venetian blind.
+        // THE BAG MUST NEVER BE NARROWER THAN THE COURSE PITCH. At 1.06 * sag
+        // a slumped bag is 0.91 of the pitch, so ~43% of the run left a literal
+        // hole and the revetment photographed as a perforated lattice with
+        // daylight through it in the interior, hero3 and overview framings.
+        // The width now only ever GROWS; the slump still varies the HEIGHT,
+        // which is what makes the top course ragged.
+        //
+        // The chamfer is the other half of the hole. Geo.bevelBox INSETS: at
+        // 0.40 of the short side the flat face is only 0.55 of the nominal
+        // width and the rest tapers away, so a "0.52 wide" bag covered barely
+        // 0.30 of its own 0.52 pitch and three quarters of the run was sky.
+        // 0.24 keeps a soft pillow edge and lets the bags actually touch.
+        // Same arithmetic vertically: courses nest at 0.78 * bagH = 0.265, and
+        // a 1.18 * bagH bag loses 2 * 0.082 to the same inset, leaving 0.18 of
+        // solid against a 0.265 pitch - which is why the wall banded even once
+        // the columns closed. 1.52 puts 0.29-0.36 of solid on a 0.265 pitch.
+        // The courses themselves do NOT move, so the colliders still fit.
+        B.add('sandbag',
+          box(bw * (1.30 + 0.15 * (sag - 0.86)), bagH * sag * 1.52,
+            bd * 1.9, Math.min(bw, bagH) * 0.24),
+          makeM(px + jx * uz, py, pz - jx * ux,
+            rng.range(-0.06, 0.06), yaw + rng.range(-0.09, 0.09), rng.range(-0.10, 0.10)));
+        void jz; void seg;
+      }
+    }
+    B.tint = null;
+  }
+
+  function buildFirebase(L, B, rng) {
+    var P = L.plan, F = P.firebase, i;
+    var out = { perimeter: [] };
+    var NSEG = 26;
+
+    // ---- the revetment ring -------------------------------------------------
+    for (i = 0; i < NSEG; i++) {
+      var b0 = (i / NSEG) * Math.PI * 2 - Math.PI;
+      var b1 = ((i + 1) / NSEG) * Math.PI * 2 - Math.PI;
+      var bm = (b0 + b1) * 0.5;
+      var dg = Math.abs(M.wrapAngle(bm - F.gateB));
+      var db = Math.abs(M.wrapAngle(bm - F.breachB));
+      if (dg < 0.19) continue;                       // the gate
+      var courses = 4;
+      if (db < 0.30) courses = rng.int(0, 2);        // the breach: blown flat
+      else if (db < 0.52) courses = rng.int(2, 3);
+      if (courses <= 0) continue;
+      var r0 = F.r + rng.range(-0.35, 0.35);
+      var ax = F.x + Math.sin(b0) * r0, az = F.z + Math.cos(b0) * r0;
+      var bx = F.x + Math.sin(b1) * r0, bz = F.z + Math.cos(b1) * r0;
+      var ay = L.sampleGround(ax, az), by = L.sampleGround(bx, bz);
+      sandbagRun(B, rng, ax, ay, az, bx, by, bz, courses, 0.34, 1);
+      out.perimeter.push({ x: (ax + bx) * 0.5, z: (az + bz) * 0.5,
+        y: (ay + by) * 0.5, yaw: bm });
+      // ORIENTED, not axis-aligned. A 4 m chord of a 17 m circle taken as an
+      // AABB is a 4 x 4 block, so an axis-aligned perimeter would be a solid
+      // ring four metres thick - it would eat the walkable floor inside the
+      // wire and, worse, shadow the whole firebase in the sky-visibility bake.
+      var segLen = Math.sqrt((bx - ax) * (bx - ax) + (bz - az) * (bz - az));
+      L.addCollider((ax + bx) * 0.5, (ay + by) * 0.5 + courses * 0.16,
+        (az + bz) * 0.5, segLen * 0.5 + 0.15, courses * 0.16, 0.62, 'sandbag',
+        false, _e1.set(0, Math.atan2(-(bz - az), bx - ax), 0, 'YXZ'));
+    }
+
+    // ---- gate posts and a fallen barrier ------------------------------------
+    var gy = L.sampleGround(P.gate.x, P.gate.z);
+    for (i = -1; i <= 1; i += 2) {
+      var gx = P.gate.x + Math.cos(F.gateB) * i * 2.4;
+      var gz = P.gate.z - Math.sin(F.gateB) * i * 2.4;
+      B.tint = grey(0.86);
+      B.cyl('timber', 0.13, 0.16, 2.5, gx, L.sampleGround(gx, gz) + 1.25, gz,
+        rng.range(-0.05, 0.05), 0, rng.range(-0.07, 0.07), 7);
+      B.tint = null;
+      L.addCollider(gx, L.sampleGround(gx, gz) + 1.2, gz, 0.18, 1.2, 0.18, 'wood');
+    }
+    // the barrier pole, dropped and half buried
+    B.tint = tint(0xd8d2c0, 0.6);
+    B.boxR('timber', 4.6, 0.13, 0.13,
+      P.gate.x + 1.2, gy + 0.16, P.gate.z + 0.7, 0.04, F.gateB + 0.9, 0.02);
+    B.tint = null;
+
+    // ---- concertina wire, outside the wall ----------------------------------
+    var wr = F.r + 3.0;
+    var coils = 132;
+    for (i = 0; i < coils; i++) {
+      var ang = (i / coils) * Math.PI * 2;
+      var dgc = Math.abs(M.wrapAngle(ang - F.gateB));
+      if (dgc < 0.24) continue;
+      var jx2 = rng.range(-0.35, 0.35);
+      var cx = F.x + Math.sin(ang) * (wr + jx2);
+      var cz = F.z + Math.cos(ang) * (wr + jx2);
+      var cy = L.sampleGround(cx, cz);
+      var rr = rng.range(0.44, 0.62);
+      var tang = ang + Math.PI * 0.5;
+      B.tint = grey(rng.range(0.7, 1.0));
+      for (var k = 0; k < 7; k++) {
+        var a0 = (k / 7) * Math.PI * 2, a1 = ((k + 1) / 7) * Math.PI * 2;
+        var p0x = Math.cos(a0) * rr, p0y = Math.sin(a0) * rr + rr;
+        var p1x = Math.cos(a1) * rr, p1y = Math.sin(a1) * rr + rr;
+        B.rod('rust',
+          cx + Math.sin(tang) * p0x, cy + p0y, cz + Math.cos(tang) * p0x,
+          cx + Math.sin(tang) * p1x, cy + p1y, cz + Math.cos(tang) * p1x,
+          0.018, 4);
+        void p0y; void p1y;
+      }
+      B.tint = null;
+      if ((i % 9) === 0) {
+        B.cyl('rust', 0.035, 0.035, 1.3, cx, cy + 0.65, cz, 0, 0, 0, 5);
+      }
+    }
+
+    // ---- the mortar pit -----------------------------------------------------
+    var Mp = P.mortar;
+    var mpY = L.sampleGround(Mp.x, Mp.z);
+    for (i = 0; i < 14; i++) {
+      var ma0 = (i / 14) * Math.PI * 2, ma1 = ((i + 1) / 14) * Math.PI * 2;
+      sandbagRun(B, rng,
+        Mp.x + Math.sin(ma0) * Mp.r, mpY, Mp.z + Math.cos(ma0) * Mp.r,
+        Mp.x + Math.sin(ma1) * Mp.r, mpY, Mp.z + Math.cos(ma1) * Mp.r,
+        3, 0.34, 2);
+    }
+    // the pit floor, sunk
+    B.tint = grey(0.72);
+    B.cyl('mud', Mp.r - 0.4, Mp.r - 0.4, 0.5, Mp.x, mpY - Mp.sink - 0.25, Mp.z, 0, 0, 0, 14);
+    B.tint = null;
+    L.addCollider(Mp.x, mpY + 0.5, Mp.z, Mp.r + 0.5, 0.5, Mp.r + 0.5, 'sandbag');
+
+    // ---- the PSP helipad ----------------------------------------------------
+    // Pierced steel planking, laid in interlocking runs and now buckling as the
+    // ground beneath it settles. The only large flat man-made plane in the
+    // level, and its brightness is what keeps the firebase floor off the deck.
+    var Hp = P.helipad;
+    var hpY = L.sampleGround(Hp.x, Hp.z);
+    var planks = Math.ceil(Hp.r * 2 / 0.42);
+    for (i = 0; i < planks; i++) {
+      var pu = -Hp.r + (i + 0.5) * 0.42;
+      var halfw = Math.sqrt(Math.max(0, Hp.r * Hp.r - pu * pu));
+      if (halfw < 0.6) continue;
+      var segsN = Math.max(1, Math.round(halfw * 2 / 3.0));
+      for (var sN = 0; sN < segsN; sN++) {
+        var v0 = -halfw + (sN / segsN) * halfw * 2;
+        var v1 = -halfw + ((sN + 1) / segsN) * halfw * 2;
+        if (rng.next() < 0.06) continue;             // a plank lifted out
+        var vm = (v0 + v1) * 0.5;
+        var wx = Hp.x + pu * Math.cos(Hp.yaw) + vm * Math.sin(Hp.yaw);
+        var wz = Hp.z - pu * Math.sin(Hp.yaw) + vm * Math.cos(Hp.yaw);
+        B.tint = grey(rng.range(0.72, 1.05));
+        B.boxR('tin', 0.40, 0.045, (v1 - v0) * 0.96,
+          wx, hpY + 0.04 + rng.range(-0.02, 0.06), wz,
+          rng.range(-0.035, 0.035), Hp.yaw, rng.range(-0.04, 0.04));
+        B.tint = null;
+      }
+    }
+    // the faded H, in a paler tint on the same material
+    B.tint = tint(0xe8e4d2, 0.85);
+    B.boxR('tin', 0.34, 0.05, 3.1, Hp.x - 1.05 * Math.cos(Hp.yaw), hpY + 0.09,
+      Hp.z + 1.05 * Math.sin(Hp.yaw), 0, Hp.yaw, 0);
+    B.boxR('tin', 0.34, 0.05, 3.1, Hp.x + 1.05 * Math.cos(Hp.yaw), hpY + 0.09,
+      Hp.z - 1.05 * Math.sin(Hp.yaw), 0, Hp.yaw, 0);
+    B.boxR('tin', 2.2, 0.05, 0.34, Hp.x, hpY + 0.09, Hp.z, 0, Hp.yaw, 0);
+    B.tint = null;
+    // weeds coming up through it
+    for (i = 0; i < 46; i++) {
+      var wa = rng.range(0, 6.28), wrr = Math.sqrt(rng.next()) * Hp.r;
+      L.addInst('grass' + rng.int(0, 2),
+        makeM(Hp.x + Math.sin(wa) * wrr, hpY + 0.06, Hp.z + Math.cos(wa) * wrr,
+          0, rng.range(0, 6.28), 0), rng.range(0.30, 0.62), hpY);
+    }
+
+    // ---- the comms mast -----------------------------------------------------
+    var Ms = P.mast;
+    var msY = L.sampleGround(Ms.x, Ms.z);
+    B.tint = grey(0.9);
+    B.cyl('rust', 0.045, 0.075, Ms.h, Ms.x, msY + Ms.h * 0.5, Ms.z, 0.03, 0, 0.02, 6);
+    for (i = 0; i < 3; i++) {
+      var ga = i * 2.09 + 0.4;
+      droop(B, 'rust', Ms.x, msY + Ms.h * 0.88, Ms.z,
+        Ms.x + Math.sin(ga) * 5.2, msY + 0.1, Ms.z + Math.cos(ga) * 5.2, 0.30, 0.012, 5);
+      B.cyl('rust', 0.03, 0.03, 0.7, Ms.x + Math.sin(ga) * 5.2, msY + 0.35,
+        Ms.z + Math.cos(ga) * 5.2, 0, 0, 0, 5);
+    }
+    // a bent dipole at the top
+    B.rod('rust', Ms.x, msY + Ms.h, Ms.z, Ms.x + 1.5, msY + Ms.h + 0.9, Ms.z + 0.3, 0.020, 4);
+    B.rod('rust', Ms.x, msY + Ms.h, Ms.z, Ms.x - 1.2, msY + Ms.h + 1.2, Ms.z - 0.5, 0.020, 4);
+    B.tint = null;
+    L.addCollider(Ms.x, msY + Ms.h * 0.5, Ms.z, 0.16, Ms.h * 0.5, 0.16, 'metal');
+
+    // ---- the collapsed A-frame shelter --------------------------------------
+    var Sh = P.shelter;
+    var shY = L.sampleGround(Sh.x, Sh.z);
+    B.pushXYZ(Sh.x, shY, Sh.z, 0, Sh.yaw, 0);
+    for (i = 0; i < 5; i++) {
+      var zz = -2.4 + i * 1.2;
+      var fall = i > 2 ? (i - 2) * 0.42 : 0;
+      B.tint = grey(rng.range(0.7, 0.95));
+      B.boxR('timber_wet', 0.10, 3.0, 0.10, -1.05 + fall * 0.5, 1.30 - fall, zz,
+        0, 0, 0.62 + fall * 0.25);
+      B.boxR('timber_wet', 0.10, 3.0, 0.10, 1.05 - fall * 0.5, 1.30 - fall, zz,
+        0, 0, -0.62 - fall * 0.25);
+      B.tint = null;
+    }
+    B.tint = grey(0.62);
+    B.boxR('canvas', 3.0, 0.03, 5.4, 0, 1.05, -0.4, 0.10, 0, 0.28);
+    B.boxR('canvas', 2.2, 0.03, 3.0, 0.9, 0.24, 2.0, 0.06, 0.3, -0.10);
+    B.tint = null;
+    B.pop();
+    L.addCollider(Sh.x, shY + 0.7, Sh.z, 2.2, 0.7, 3.0, 'wood');
+
+    // ---- the fire drum ------------------------------------------------------
+    var Dr = P.drum;
+    var drY = L.sampleGround(Dr.x, Dr.z);
+    B.tint = tint(0x8a4a26, 0.9);
+    B.cyl('rust', 0.30, 0.30, 0.88, Dr.x, drY + 0.44, Dr.z, 0.03, Dr.yaw, 0.02, 12);
+    B.tint = null;
+    for (i = 0; i < 3; i++) {
+      B.cyl('rust', 0.315, 0.315, 0.05, Dr.x, drY + 0.16 + i * 0.30, Dr.z, 0, 0, 0, 12);
+    }
+    // the fire itself, so the practical has a visible source
+    B.add('lit', cyl(0.24, 0.20, 0.42, 9), makeM(Dr.x, drY + 0.95, Dr.z));
+    out.drum = new THREE.Vector3(Dr.x, drY + 0.90, Dr.z);
+    L.addCollider(Dr.x, drY + 0.44, Dr.z, 0.32, 0.44, 0.32, 'metal');
+
+    // ---- ammunition revetment, a low horseshoe by the gate ------------------
+    var arP = P.fbW(9.6, -0.5);
+    var arY = L.sampleGround(arP[0], arP[1]);
+    for (i = 0; i < 9; i++) {
+      var aa0 = -1.2 + (i / 9) * 4.2, aa1 = -1.2 + ((i + 1) / 9) * 4.2;
+      sandbagRun(B, rng,
+        arP[0] + Math.sin(aa0) * 2.4, arY, arP[1] + Math.cos(aa0) * 2.4,
+        arP[0] + Math.sin(aa1) * 2.4, arY, arP[1] + Math.cos(aa1) * 2.4,
+        3, 0.34, 1);
+    }
+    out.ammo = new THREE.Vector3(arP[0], arY, arP[1]);
+    return out;
+  }
+
+  // ---- the command bunker ---------------------------------------------------
+  // Sunk a metre into the knoll, sandbag revetted, roofed with beams, tin and
+  // two courses of bags, and shell-holed. The hole is the whole point: it is
+  // the level's INTERIOR framing, and without a hole an interior lit by one
+  // doorway is a black rectangle.
+  function buildBunker(L, B, rng) {
+    var P = L.plan, K = P.bunker;
+    var out = {};
+    var hw = K.w * 0.5, hd = K.d * 0.5;
+    var floorY = K.y - K.sink;
+    var topY = K.y + K.wall - K.sink;          // top of the wall above ground
+    var c = Math.cos(K.yaw), s = Math.sin(K.yaw);
+    function W(lx, lz) { return [K.x + lx * c + lz * s, K.z - lx * s + lz * c]; }
+
+    // the cut floor
+    B.tint = new THREE.Color(0.50, 0.62, 0.42);
+    B.boxR('mud', K.w + 1.4, 0.6, K.d + 1.4, K.x, floorY - 0.30, K.z, 0, K.yaw, 0);
+    B.tint = null;
+    L.addCollider(K.x, floorY - 0.30, K.z, (K.w + 1.4) * 0.5, 0.30, (K.d + 1.4) * 0.5,
+      'dirt', true, _e1.set(0, K.yaw, 0, 'YXZ'));
+
+    // the four revetted walls, with a door gap in the +Z face
+    var corners = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]];
+    var doorW = 1.35, doorAt = -1.6;
+    for (var e = 0; e < 4; e++) {
+      var A = corners[e], Bc = corners[(e + 1) % 4];
+      if (e === 2) {
+        // +Z wall: two runs either side of the doorway
+        var wA = W(A[0], A[1]), wD0 = W(doorAt - doorW * 0.5, hd);
+        var wD1 = W(doorAt + doorW * 0.5, hd), wB = W(Bc[0], Bc[1]);
+        sandbagRun(B, rng, wA[0], floorY, wA[1], wD0[0], floorY, wD0[1], 11, 0.34, 2);
+        sandbagRun(B, rng, wD1[0], floorY, wD1[1], wB[0], floorY, wB[1], 11, 0.34, 2);
+        // a lintel over the door
+        var wDm = W(doorAt, hd);
+        B.tint = grey(0.8);
+        B.boxR('timber', doorW + 0.7, 0.20, 0.30, wDm[0], floorY + 1.95, wDm[1],
+          0, K.yaw, 0);
+        B.tint = null;
+        out.door = new THREE.Vector3(wDm[0], floorY, wDm[1]);
+      } else {
+        var w0 = W(A[0], A[1]), w1 = W(Bc[0], Bc[1]);
+        sandbagRun(B, rng, w0[0], floorY, w0[1], w1[0], floorY, w1[1], 11, 0.34, 2);
+      }
+      var mA = W((A[0] + Bc[0]) * 0.5, (A[1] + Bc[1]) * 0.5);
+      L.addCollider(mA[0], floorY + 1.1, mA[1],
+        Math.abs(Bc[0] - A[0]) * 0.5 + 0.45, 1.15,
+        Math.abs(Bc[1] - A[1]) * 0.5 + 0.45, 'sandbag', false,
+        _e1.set(0, K.yaw, 0, 'YXZ'));
+    }
+
+    // ---- the roof -----------------------------------------------------------
+    var roofY = floorY + 2.62;
+    var holeX = 2.35, holeZ = 0.55, holeR = 1.30;
+    function inHole(lx, lz) {
+      var dx = lx - holeX, dz = lz - holeZ;
+      return dx * dx + dz * dz < holeR * holeR;
+    }
+    B.pushXYZ(K.x, 0, K.z, 0, K.yaw, 0);
+    // beams
+    for (var bI = 0; bI < 8; bI++) {
+      var bx = -hw + 0.55 + bI * ((K.w - 1.1) / 7);
+      B.tint = grey(rng.range(0.72, 0.98));
+      if (Math.abs(bx - holeX) < holeR * 0.9) {
+        // blown through: two stubs and a splintered gap
+        B.boxR('timber_wet', 0.18, 0.20, (hd + holeZ - holeR) * 0.98,
+          bx, roofY, (-hd + (holeZ - holeR)) * 0.5, 0, 0, 0);
+        B.boxR('timber_wet', 0.18, 0.20, (hd - holeZ - holeR) * 0.98,
+          bx, roofY + rng.range(0, 0.10), (hd + holeZ + holeR) * 0.5,
+          rng.range(-0.10, 0.10), 0, 0);
+      } else {
+        B.boxR('timber_wet', 0.18, 0.20, K.d + 0.9, bx, roofY, 0, 0, 0, 0);
+      }
+      B.tint = null;
+    }
+    // corrugated sheets
+    for (var sI = 0; sI < 5; sI++) {
+      var sz = -hd + 0.6 + sI * ((K.d - 1.2) / 4);
+      B.tint = grey(rng.range(0.68, 1.0));
+      if (Math.abs(sz - holeZ) < holeR) {
+        var cut = Math.sqrt(Math.max(0.01, holeR * holeR - (sz - holeZ) * (sz - holeZ)));
+        B.boxR('tin', (hw + holeX - cut) * 0.98, 0.02, 1.05,
+          (-hw + (holeX - cut)) * 0.5, roofY + 0.13, sz, 0, 0, 0);
+        B.boxR('tin', (hw - holeX - cut) * 0.98, 0.02, 1.05,
+          (hw + holeX + cut) * 0.5, roofY + 0.13, sz, 0, 0, rng.range(-0.14, 0.14));
+      } else {
+        B.boxR('tin', K.w + 0.6, 0.02, 1.05, 0, roofY + 0.13, sz, 0, 0, 0);
+      }
+      B.tint = null;
+    }
+    // two courses of bags on top, minus the hole
+    var bagN = Math.round((K.w + 0.6) / 0.52);
+    var bagM = Math.round((K.d + 0.6) / 0.40);
+    for (var q = 0; q < 2; q++) {
+      for (var ii = 0; ii < bagN; ii++) {
+        for (var jj = 0; jj < bagM; jj++) {
+          var lx = -hw - 0.3 + (ii + 0.5) * 0.52 + (q ? 0.20 : 0);
+          var lz = -hd - 0.3 + (jj + 0.5) * 0.40;
+          if (inHole(lx, lz)) continue;
+          var edge = Math.sqrt((lx - holeX) * (lx - holeX) + (lz - holeZ) * (lz - holeZ));
+          if (edge < holeR + 0.55 && rng.bool(0.55)) continue;
+          if (rng.next() > (q ? 0.72 : 0.94)) continue;
+          B.tint = new THREE.Color(rng.range(0.78, 1.02), rng.range(0.86, 1.06),
+            rng.range(0.60, 0.86));
+          if (rng.bool(0.30)) B.tint.multiply(new THREE.Color(0.70, 1.00, 0.58));
+          B.add('sandbag', box(0.50, 0.28, 0.38, 0.11),
+            makeM(lx, roofY + 0.30 + q * 0.26, lz,
+              rng.range(-0.07, 0.07), rng.range(-0.12, 0.12), rng.range(-0.09, 0.09)));
+          B.tint = null;
+        }
+      }
+    }
+    // an interior post that survived, and the two that did not
+    B.tint = grey(0.7);
+    B.boxR('timber_wet', 0.16, 2.25, 0.16, -2.6, floorY + 1.12, -1.2, 0, 0, 0);
+    B.boxR('timber_wet', 0.16, 2.25, 0.16, -0.4, floorY + 1.12, 1.4, 0.03, 0, -0.02);
+    B.boxR('timber_wet', 0.16, 1.9, 0.16, 2.9, floorY + 0.55, -1.9, 1.15, 0.4, 0);
+    B.tint = null;
+    // spoil and splinters under the hole
+    B.tint = grey(0.62);
+    B.add('mud', cyl(1.35, 0.7, 0.42, 10), makeM(holeX, floorY + 0.16, holeZ));
+    B.tint = null;
+    B.pop();
+
+    // ---- roof OCCLUDERS -----------------------------------------------------
+    // Geometry alone does not darken an interior. lighting.js bakes its sky
+    // visibility volume from level.colliders, so a roof with no collider is a
+    // roof the skylight walks straight through - which is exactly why the first
+    // interior capture came back as a sunlit field with beams floating over it.
+    // Four slabs, shaped around the shell hole so the shaft still has something
+    // to come through and the hole is the only light in the room.
+    // hz 2.85, not 3.6: the occluders stop 75 cm short of both eaves. A roof of
+    // beams, tin and bags is not a slab, and the grazing daylight that gets in
+    // along the wall head is the only thing that keeps the revetment's vertical
+    // faces off pure black - without it the sky-visibility floor of 0.055 put
+    // the room 250:1 under the shaft pool and the bags photographed as a row of
+    // floating lids.
+    var roofSlabs = [
+      [-2.075, 0, 3.125, 2.85],
+      [4.425, 0, 0.775, 2.85],
+      [2.35, -1.90, 1.30, 1.15],
+      [2.35, 2.45, 1.30, 0.60]
+    ];
+    for (var rs = 0; rs < roofSlabs.length; rs++) {
+      var R4 = roofSlabs[rs];
+      var wp4 = W(R4[0], R4[1]);
+      L.addCollider(wp4[0], roofY + 0.30, wp4[1], R4[2], 0.28, R4[3],
+        'wood', false, _e1.set(0, K.yaw, 0, 'YXZ'));
+    }
+
+    var hw2 = W(holeX, holeZ);
+    out.holeAbove = new THREE.Vector3(hw2[0], roofY + 1.30, hw2[1]);
+    out.holeFloor = new THREE.Vector3(hw2[0], floorY + 0.20, hw2[1]);
+    out.floorY = floorY;
+    out.roofY = roofY;
+    // The interior framing: standing just inside the door, looking across the
+    // shaft at the far wall. Solved from the bunker's own geometry so it can
+    // never drift off the hole it exists to photograph.
+    var eyeP = W(doorAt - 0.2, hd - 1.15);
+    out.interiorEye = new THREE.Vector3(eyeP[0], floorY, eyeP[1]);
+    var tgtP = W(holeX + 0.7, holeZ - 1.5);
+    out.interiorTarget = new THREE.Vector3(tgtP[0], floorY + 0.55, tgtP[1]);
+    // BOTH FIXTURES ARE PLACED IN THE INTERIOR FRAMING, not tidily by the door.
+    // A light with no visible source is not a light, and a light behind the
+    // camera is not a source. The lantern hangs off the centre beam on the
+    // view axis; the worklight is clamped to the beam over the left-hand wall
+    // so it throws a warm pool across the revetment the shaft does not reach.
+    var lanP = W(0.85, 0.45);
+    out.lantern = new THREE.Vector3(lanP[0], floorY + 1.86, lanP[1]);
+    var wlP = W(-2.4, -1.1);
+    out.worklight = new THREE.Vector3(wlP[0], floorY + 2.05, wlP[1]);
+    // the lantern's own body, hung off the lintel
+    B.tint = grey(0.8);
+    B.cyl('rust', 0.055, 0.075, 0.19, out.lantern.x, out.lantern.y + 0.10,
+      out.lantern.z, 0, 0, 0, 8);
+    B.rod('rust', out.lantern.x, out.lantern.y + 0.19, out.lantern.z,
+      out.lantern.x, roofY - 0.10, out.lantern.z, 0.010, 4);
+    B.tint = null;
+    B.add('lit', cyl(0.048, 0.048, 0.11, 8),
+      makeM(out.lantern.x, out.lantern.y, out.lantern.z));
+    B.add('lit', quad(0.16, 0.10),
+      makeM(out.worklight.x, out.worklight.y, out.worklight.z, 0.9, K.yaw + 0.4, 0));
+    B.tint = grey(0.75);
+    B.cyl('rust', 0.10, 0.12, 0.10, out.worklight.x, out.worklight.y + 0.07,
+      out.worklight.z, 1.1, K.yaw + 0.4, 0, 8);
+    B.tint = null;
+
+    // vines coming in over the roof edge - the growth is reclaiming it
+    for (var v = 0; v < 7; v++) {
+      var vx = -hw + rng.range(0.4, K.w - 0.4);
+      var wp = W(vx, hd + 0.25);
+      var uvv = atlasUV(CELL.liana);
+      var vh = rng.range(1.4, 2.6);
+      B.add('canopy', quad(vh * 0.34, vh, uvv[0], uvv[1], uvv[2], uvv[3]),
+        makeM(wp[0], roofY + 0.55 - vh * 0.42, wp[1], 0, K.yaw + rng.range(-0.4, 0.4), 0));
+      L.dripEdges.push({ position: new THREE.Vector3(wp[0], roofY + 0.2, wp[1]), fall: 1.6 });
+    }
+    return out;
+  }
+
+  // ---- the watchtower -------------------------------------------------------
+  function buildTower(L, B, rng) {
+    var P = L.plan, T = P.tower, i;
+    var gy = L.sampleGround(T.x, T.z);
+    var lean = T.lean, leanY = T.yaw + 0.8;
+    var out = {};
+    B.pushXYZ(T.x, gy, T.z, 0, T.yaw, 0);
+    var R = T.legR;
+    var legs = [[-R, -R], [R, -R], [R, R], [-R, R]];
+    var plat = T.platY, roof = T.roofY;
+    var top = [];
+    for (i = 0; i < 4; i++) {
+      var lx = legs[i][0], lz = legs[i][1];
+      // legs splay out at the base and lean with the tower
+      var bx = lx * 1.42 + Math.sin(leanY) * -lean * plat;
+      var bz = lz * 1.42 + Math.cos(leanY) * -lean * plat;
+      var tx = lx + Math.sin(leanY) * lean * plat * 0.5;
+      var tz = lz + Math.cos(leanY) * lean * plat * 0.5;
+      B.tint = grey(rng.range(0.74, 0.98));
+      B.strut('timber_wet', bx, 0, bz, tx, plat, tz, 0.20, 0.20);
+      B.tint = null;
+      top.push([tx, tz]);
+      L.addCollider(T.x + (bx + tx) * 0.5 * Math.cos(T.yaw) + (bz + tz) * 0.5 * Math.sin(T.yaw),
+        gy + plat * 0.5,
+        T.z - (bx + tx) * 0.5 * Math.sin(T.yaw) + (bz + tz) * 0.5 * Math.cos(T.yaw),
+        0.22, plat * 0.5, 0.22, 'wood');
+    }
+    // cross bracing, three levels, alternating diagonals
+    for (var lvl = 0; lvl < 3; lvl++) {
+      var y0 = 1.5 + lvl * 2.2, y1 = y0 + 2.2;
+      for (i = 0; i < 4; i++) {
+        var a = legs[i], b = legs[(i + 1) % 4];
+        var f0 = 1 + 0.42 * (1 - y0 / plat), f1 = 1 + 0.42 * (1 - y1 / plat);
+        B.tint = grey(rng.range(0.7, 0.95));
+        if ((lvl + i) & 1) {
+          B.strut('timber_wet', a[0] * f0, y0, a[1] * f0, b[0] * f1, y1, b[1] * f1, 0.09, 0.09);
+        } else {
+          B.strut('timber_wet', b[0] * f0, y0, b[1] * f0, a[0] * f1, y1, a[1] * f1, 0.09, 0.09);
+        }
+        B.strut('timber_wet', a[0] * f1, y1, a[1] * f1, b[0] * f1, y1, b[1] * f1, 0.08, 0.08);
+        B.tint = null;
+      }
+    }
+    // the platform
+    var px = Math.sin(leanY) * lean * plat * 0.5, pz = Math.cos(leanY) * lean * plat * 0.5;
+    B.tint = grey(0.82);
+    for (i = 0; i < 9; i++) {
+      if (rng.next() < 0.10) continue;                 // a rotted-out plank
+      B.boxR('timber_wet', 0.30, 0.055, R * 2.6, px + (-R * 1.2 + i * (R * 2.4 / 8)),
+        plat + 0.05, pz, 0, 0, 0);
+    }
+    B.boxR('timber_wet', R * 2.7, 0.14, 0.14, px, plat - 0.05, pz - R * 1.3, 0, 0, 0);
+    B.boxR('timber_wet', R * 2.7, 0.14, 0.14, px, plat - 0.05, pz + R * 1.3, 0, 0, 0);
+    B.tint = null;
+    // a sandbag parapet on two sides and a rail on the others
+    var wp0 = [px - R * 1.3, pz - R * 1.3], wp1 = [px + R * 1.3, pz - R * 1.3];
+    var wp2 = [px + R * 1.3, pz + R * 1.3], wp3 = [px - R * 1.3, pz + R * 1.3];
+    B.pop();
+    B.pushXYZ(T.x, gy + plat + 0.08, T.z, 0, T.yaw, 0);
+    sandbagRun(B, rng, wp0[0], 0, wp0[1], wp1[0], 0, wp1[1], 3, 0.30, 2);
+    sandbagRun(B, rng, wp1[0], 0, wp1[1], wp2[0], 0, wp2[1], 3, 0.30, 2);
+    B.tint = grey(0.8);
+    B.strut('timber_wet', wp2[0], 0.95, wp2[1], wp3[0], 0.95, wp3[1], 0.07, 0.07);
+    B.strut('timber_wet', wp3[0], 0.95, wp3[1], wp0[0], 0.95, wp0[1], 0.07, 0.07);
+    // corner posts and the roof
+    var rh = roof - plat;
+    for (i = 0; i < 4; i++) {
+      var cp = [wp0, wp1, wp2, wp3][i];
+      B.boxR('timber_wet', 0.11, rh, 0.11, cp[0], rh * 0.5, cp[1], 0, 0, 0);
+    }
+    B.tint = null;
+    B.tint = grey(rng.range(0.7, 0.95));
+    for (i = 0; i < 4; i++) {
+      // 1.62 wide on a 1.548 pitch, i.e. the sheets OVERLAP the way roofing
+      // sheets do. At 0.95 they left 0.6 m gaps and the roof photographed as
+      // four dark slats floating over the platform.
+      B.boxR('tin', R * 3.0, 0.02, 1.62, 0, rh + 0.18 - Math.abs(i - 1.5) * 0.06,
+        -R * 1.35 + i * (R * 2.7 / 3), 0.06 * (i < 2 ? 1 : -1), 0, 0);
+    }
+    B.tint = null;
+    B.pop();
+
+    // the ladder, up the south leg
+    B.pushXYZ(T.x, gy, T.z, 0, T.yaw, 0);
+    B.tint = grey(0.78);
+    var lx0 = -R * 0.9, lz0 = R * 1.9;
+    B.strut('timber_wet', lx0 - 0.28, 0, lz0 + 0.4, lx0 - 0.28, plat, lz0 - 0.3, 0.07, 0.07);
+    B.strut('timber_wet', lx0 + 0.28, 0, lz0 + 0.4, lx0 + 0.28, plat, lz0 - 0.3, 0.07, 0.07);
+    for (i = 1; i < 20; i++) {
+      var t = i / 20;
+      if (rng.next() < 0.08) continue;
+      B.boxR('timber_wet', 0.62, 0.045, 0.045, lx0, plat * t,
+        lz0 + 0.4 - 0.7 * t, 0, 0, 0);
+    }
+    B.tint = null;
+    B.pop();
+
+    out.base = new THREE.Vector3(T.x, gy, T.z);
+    out.platform = new THREE.Vector3(T.x + px, gy + plat, T.z + pz);
+    out.roof = new THREE.Vector3(T.x + px, gy + roof, T.z + pz);
+    L.addCollider(T.x + px, gy + plat + 0.2, T.z + pz, R * 1.5, 0.35, R * 1.5, 'wood');
+    L.dripEdges.push({ position: new THREE.Vector3(T.x + px + R * 1.4, gy + roof, T.z + pz),
+      fall: 2.6 });
+    L.dripEdges.push({ position: new THREE.Vector3(T.x + px - R * 1.4, gy + roof, T.z + pz - 0.6),
+      fall: 2.6 });
+    return out;
+  }
+
+  // ============================================================== THE WRECK ==
+  // A slick down at the water's edge, rolled onto its left side with the boom
+  // snapped aft of the cabin. Everything is built in a local frame where y = 0
+  // is the skid line and +z is the nose, then the whole assembly is rolled,
+  // pitched and yawed onto the bank - so the geometry never has to know which
+  // way up it ended.
+  function buildHeli(L, B, rng) {
+    var P = L.plan, H = P.heli, i;
+    var out = {};
+    B.pushXYZ(H.x, H.y, H.z, H.pitch, H.yaw, H.roll);
+
+    // ---- cabin --------------------------------------------------------------
+    B.tint = tint(0xbcc9ac, 0.75);
+    B.boxR('olive', 2.50, 1.95, 4.00, 0, 1.78, 1.30, 0, 0, 0, 0.10);
+    // roof, slightly domed
+    B.boxR('olive', 2.34, 0.16, 3.90, 0, 2.80, 1.30, 0, 0, 0, 0.06);
+    // belly, tapering in
+    B.boxR('olive', 2.10, 0.42, 3.90, 0, 0.72, 1.30, 0, 0, 0, 0.10);
+    // nose: three stacked slabs that shrink and drop, giving the Huey's chin
+    B.boxR('olive', 2.20, 1.55, 0.75, 0, 1.72, 3.62, -0.10, 0, 0, 0.08);
+    B.boxR('olive', 1.72, 1.20, 0.62, 0, 1.55, 4.16, -0.24, 0, 0, 0.08);
+    B.boxR('olive', 1.15, 0.72, 0.42, 0, 1.34, 4.52, -0.42, 0, 0, 0.06);
+    // engine deck and the transmission hump
+    B.boxR('olive', 1.85, 0.95, 1.55, 0, 2.95, -0.85, 0.06, 0, 0, 0.07);
+    B.boxR('alu', 1.30, 0.62, 1.10, 0, 3.42, -0.55, 0, 0, 0, 0.06);
+    B.tint = null;
+    // exhaust stack, burnt
+    B.tint = tint(0x6a4a34, 0.9);
+    B.cyl('rust', 0.24, 0.28, 0.95, 0.30, 3.30, -1.55, 1.25, 0.2, 0, 9);
+    B.tint = null;
+
+    // ---- glazing ------------------------------------------------------------
+    // Most of it is gone; what is left is crazed. Two panes only, because a
+    // wreck with a full set of windows is a parked aircraft.
+    B.tint = grey(0.9);
+    B.boxR('glazing', 0.04, 1.00, 1.25, 1.27, 2.05, 3.10, 0, 0, 0.06);
+    B.boxR('glazing', 1.55, 0.05, 0.85, 0, 1.02, 4.05, -0.95, 0, 0);
+    B.tint = null;
+
+    // ---- doors: one hanging open, one torn off entirely ---------------------
+    B.tint = tint(0xbcc9ac, 0.75);
+    B.boxR('olive', 0.06, 1.55, 1.60, -1.28, 1.85, 1.30, 0, -0.62, 0.10);
+    B.tint = null;
+    // THE CARGO BAY, OPEN AND BLACK. A slick with two flat flanks is a crate;
+    // the void where the doors used to be is most of what says helicopter, and
+    // it is also the only strong dark in a framing full of mid greens.
+    B.tint = grey(0.10);
+    B.boxR('olive', 0.30, 1.42, 1.72, 1.16, 1.82, 1.24, 0, 0, 0, 0.04);
+    B.tint = null;
+    B.tint = tint(0xbcc9ac, 0.75);
+    B.boxR('olive', 0.16, 0.10, 1.90, 1.27, 2.60, 1.24, 0, 0, 0);   // door rail
+    B.boxR('olive', 0.22, 0.12, 1.90, 1.24, 1.02, 1.24, 0, 0, 0);   // sill
+    // the windscreen frame and the chin bubble surround
+    B.boxR('olive', 2.16, 0.09, 1.30, 0, 2.28, 3.35, -0.62, 0, 0, 0.03);
+    B.boxR('olive', 0.11, 1.15, 1.30, 1.02, 1.86, 3.42, -0.62, 0, 0, 0.03);
+    B.boxR('olive', 0.11, 1.15, 1.30, -1.02, 1.86, 3.42, -0.62, 0, 0, 0.03);
+    B.tint = null;
+
+    // ---- skids --------------------------------------------------------------
+    B.tint = grey(0.8);
+    for (i = -1; i <= 1; i += 2) {
+      var st = [];
+      for (var k = 0; k <= 5; k++) {
+        var t = k / 5;
+        var z = -0.95 + t * 4.75;
+        var yy = 0.02 + Math.pow(M.saturate((t - 0.72) / 0.28), 2) * 0.55;
+        st.push([1.22 * i + (i < 0 ? Math.pow(t, 2) * 0.35 : 0), yy, z, 0.055]);
+      }
+      B.add('alu', tube(st, 6, false));
+      // cross struts
+      B.strut('alu', 1.22 * i, 0.05, 0.15, 0.62 * i, 0.72, 0.15, 0.09, 0.09);
+      B.strut('alu', 1.22 * i, 0.05, 2.55, 0.62 * i, 0.72, 2.55, 0.09, 0.09);
+    }
+    B.tint = null;
+
+    // ---- the boom, snapped --------------------------------------------------
+    var boom = [];
+    for (i = 0; i <= 5; i++) {
+      var tb = i / 5;
+      boom.push([0, 2.62 - tb * 0.28, -1.35 - tb * 3.35, 0.44 - tb * 0.13]);
+    }
+    B.tint = tint(0x9fb08e, 0.55);
+    B.add('olive', tube(boom, 9, false));
+    B.tint = null;
+    // torn edge: a ring of bent skin
+    B.tint = grey(0.95);
+    for (i = 0; i < 9; i++) {
+      var ta = (i / 9) * Math.PI * 2;
+      B.boxR('alu', 0.10, 0.34, 0.03,
+        Math.sin(ta) * 0.30, 2.35 + Math.cos(ta) * 0.30, -4.72,
+        rng.range(-0.5, 0.5), ta, rng.range(-0.4, 0.4));
+    }
+    B.tint = null;
+    B.pop();
+
+    // The aft section came to rest separately: same yaw, different everything.
+    var ax = H.x - Math.sin(H.yaw) * 7.4 + Math.cos(H.yaw) * 2.6;
+    var az = H.z - Math.cos(H.yaw) * 7.4 - Math.sin(H.yaw) * 2.6;
+    var ay = L.sampleGround(ax, az);
+    B.pushXYZ(ax, ay + 0.35, az, 0.24, H.yaw + 1.15, 1.35);
+    var boom2 = [];
+    for (i = 0; i <= 4; i++) {
+      var t2 = i / 4;
+      boom2.push([0, 0, -1.6 + t2 * 3.2, 0.31 - t2 * 0.11]);
+    }
+    B.tint = tint(0x9fb08e, 0.55);
+    B.add('olive', tube(boom2, 9, false));
+    // the fin and the horizontal stabiliser
+    B.boxR('olive', 0.07, 1.45, 1.05, 0, 0.72, -1.35, 0.22, 0, 0, 0.05);
+    B.boxR('olive', 2.20, 0.06, 0.42, 0, 0.05, -0.55, 0, 0, 0.04);
+    B.tint = null;
+    // tail rotor, one blade bent
+    B.tint = grey(0.85);
+    B.cyl('alu', 0.10, 0.10, 0.22, 0.14, 1.15, -1.45, 0, 0, 1.57, 8);
+    B.boxR('alu', 0.05, 1.30, 0.16, 0.26, 1.15, -1.45, 0, 0, 0.15);
+    B.boxR('alu', 0.05, 1.05, 0.16, 0.26, 1.15, -1.45, 0, 0, 1.75);
+    B.tint = null;
+    B.pop();
+    out.tail = new THREE.Vector3(ax, ay, az);
+    L.addCollider(ax, ay + 0.6, az, 1.6, 0.7, 1.6, 'metal');
+
+    // ---- the main rotor -----------------------------------------------------
+    B.pushXYZ(H.x, H.y, H.z, H.pitch, H.yaw, H.roll);
+    B.tint = grey(0.86);
+    B.cyl('alu', 0.13, 0.16, 1.15, 0, 3.62, 0.55, 0, 0, 0, 9);
+    B.cyl('alu', 0.34, 0.30, 0.30, 0, 4.20, 0.55, 0, 0, 0, 10);
+    B.tint = null;
+    B.pop();
+    // Blades are placed in WORLD space: one folded down into the mud, one
+    // still out over the water. Bolting them to the rolled frame put both
+    // through the ground.
+    var hubX = H.x + Math.sin(H.yaw) * 0.55 * Math.cos(H.roll);
+    var hubZ = H.z + Math.cos(H.yaw) * 0.55;
+    var hubY = H.y + 4.20 * Math.cos(H.roll) - 0.35;
+    out.rotorHub = new THREE.Vector3(hubX, hubY, hubZ);
+    B.tint = grey(0.80);
+    for (i = 0; i < 2; i++) {
+      var ba = H.yaw + 0.75 + i * Math.PI;
+      var blen = 6.4;
+      var bst = [];
+      for (var s2 = 0; s2 <= 5; s2++) {
+        var tb2 = s2 / 5;
+        var bxx = hubX + Math.sin(ba) * blen * tb2;
+        var bzz = hubZ + Math.cos(ba) * blen * tb2;
+        var gnd = L.sampleGround(bxx, bzz);
+        // the blade droops until it finds the ground, then stops
+        var byy = Math.max(gnd + 0.12, hubY - (i ? 2.9 : 0.8) * tb2 * tb2);
+        bst.push([bxx, byy, bzz, 0.05]);
+      }
+      for (s2 = 0; s2 + 1 < bst.length; s2++) {
+        var q0 = bst[s2], q1 = bst[s2 + 1];
+        B.strut('alu', q0[0], q0[1], q0[2], q1[0], q1[1], q1[2], 0.42, 0.055);
+      }
+    }
+    B.tint = null;
+
+    // ---- the growth reclaiming it -------------------------------------------
+    for (i = 0; i < 14; i++) {
+      var ga = rng.range(0, 6.28), gr = rng.range(0.5, 4.2);
+      var gx = H.x + Math.sin(ga) * gr, gz = H.z + Math.cos(ga) * gr;
+      L.addInst('grass' + rng.int(0, 2),
+        makeM(gx, L.sampleGround(gx, gz), gz, 0, rng.range(0, 6.28), 0),
+        rng.range(0.7, 1.25), L.sampleGround(gx, gz));
+    }
+    for (i = 0; i < 5; i++) {
+      var vv = atlasUV(CELL.creeper);
+      var vh = rng.range(1.6, 3.0);
+      B.add('canopy', quad(vh * 0.8, vh, vv[0], vv[1], vv[2], vv[3]),
+        makeM(H.x + rng.range(-2.2, 2.2), H.y + rng.range(0.9, 2.6),
+          H.z + rng.range(-2.4, 2.4), 0, rng.range(0, 6.28), rng.range(-0.4, 0.4)));
+    }
+    L.addInst('banana0',
+      makeM(H.x - Math.sin(H.yaw) * 1.6, H.y + 0.6, H.z - Math.cos(H.yaw) * 1.6,
+        0, rng.range(0, 6.28), 0), 0.85, H.y);
+
+    // the anti-collision beacon, still weakly turning over
+    var bcx = H.x - Math.sin(H.yaw) * 2.4;
+    var bcz = H.z - Math.cos(H.yaw) * 2.4;
+    var bcy = H.y + 3.05 * Math.cos(H.roll);
+    out.beacon = new THREE.Vector3(bcx, bcy, bcz);
+    B.add('lit2', cyl(0.075, 0.085, 0.13, 8), makeM(bcx, bcy, bcz));
+
+    out.centre = new THREE.Vector3(H.x, H.y, H.z);
+    out.nose = new THREE.Vector3(H.x + Math.sin(H.yaw) * 4.3, H.y + 1.2,
+      H.z + Math.cos(H.yaw) * 4.3);
+    out.doorSill = new THREE.Vector3(H.x - Math.cos(H.yaw) * 1.5, H.y + 1.0,
+      H.z + Math.sin(H.yaw) * 1.5);
+    L.addCollider(H.x, H.y + 1.5, H.z, 2.9, 1.5, 3.4, 'metal', false,
+      _e1.set(0, H.yaw, 0, 'YXZ'));
+    L.dripEdges.push({ position: new THREE.Vector3(H.x, H.y + 2.7, H.z), fall: 2.2 });
+    return out;
+  }
+
+  // ========================================== THE CREEK CROSSING AND SLUICE ==
+  function buildBridge(L, B, rng) {
+    var P = L.plan, Br = P.bridge, i;
+    var out = {};
+    var nearY = Br.y, farY = Br.y - 0.06;
+    var span = Br.nearZ - Br.farZ;
+    var breakT = 0.52;                        // where the stringers gave way
+    var brZ = Br.nearZ - span * breakT;
+    var brY = nearY - 1.35;
+
+    // abutment piles
+    B.tint = grey(0.8);
+    for (i = -1; i <= 1; i += 2) {
+      B.cyl('timber_wet', 0.11, 0.13, 1.6, Br.x + i * (Br.w * 0.5 + 0.1),
+        nearY - 0.55, Br.nearZ - 0.2, 0.05, 0, 0, 7);
+      B.cyl('timber_wet', 0.11, 0.13, 1.6, Br.x + i * (Br.w * 0.5 + 0.1),
+        farY - 0.55, Br.farZ + 0.2, -0.05, 0, 0, 7);
+    }
+    B.tint = null;
+
+    // three bamboo stringers, sagging to the break
+    for (i = -1; i <= 1; i++) {
+      var sx = Br.x + i * (Br.w * 0.42);
+      var st = [];
+      for (var k = 0; k <= 6; k++) {
+        var t = k / 6;
+        var zz = Br.nearZ - span * breakT * t;
+        var yy = nearY - 1.35 * t * t;
+        st.push([sx + Math.sin(t * 2.4 + i) * 0.05, yy, zz, 0.055]);
+      }
+      B.tint = tint(0xd8d29a, 0.75);
+      B.add('bamboo', tube(st, 6, false));
+      B.tint = null;
+    }
+    // the deck planks that survive
+    var np = 20;
+    for (i = 0; i < np; i++) {
+      var t2 = (i + 0.5) / np;
+      if (rng.next() < 0.24) continue;
+      var pz = Br.nearZ - span * breakT * t2;
+      var py = nearY - 1.35 * t2 * t2 + 0.06;
+      B.tint = tint(0xcfc898, rng.range(0.5, 0.9));
+      B.boxR('bamboo', Br.w, 0.055, 0.20, Br.x + rng.range(-0.05, 0.05), py, pz,
+        rng.range(-0.05, 0.05), rng.range(-0.06, 0.06), rng.range(-0.09, 0.09));
+      B.tint = null;
+    }
+    // the fallen far half, lying in the creek
+    var fx = Br.x + rng.range(-0.4, 0.4);
+    for (i = -1; i <= 1; i++) {
+      var st2 = [];
+      for (k = 0; k <= 4; k++) {
+        var t3 = k / 4;
+        st2.push([fx + i * 0.5 + t3 * 0.6,
+          brY - 0.35 + Math.sin(t3 * 2.0) * 0.10,
+          brZ - span * 0.30 * t3, 0.055]);
+      }
+      B.tint = tint(0xb4ae82, 0.7);
+      B.add('bamboo', tube(st2, 6, false));
+      B.tint = null;
+    }
+    for (i = 0; i < 9; i++) {
+      var t4 = i / 9;
+      B.tint = tint(0xb4ae82, rng.range(0.4, 0.8));
+      B.boxR('bamboo', Br.w * 0.9, 0.055, 0.20, fx + t4 * 0.6 + rng.range(-0.2, 0.2),
+        brY - 0.30 + rng.range(-0.05, 0.10), brZ - span * 0.30 * t4,
+        rng.range(-0.2, 0.2), rng.range(-0.3, 0.3), rng.range(-0.25, 0.25));
+      B.tint = null;
+    }
+
+    // a rope handrail on one side, still standing on the near half
+    B.tint = grey(0.85);
+    var posts = 4;
+    for (i = 0; i < posts; i++) {
+      var t5 = i / (posts - 1) * breakT;
+      var hz = Br.nearZ - span * t5;
+      var hy = nearY - 1.35 * (t5 / breakT) * (t5 / breakT);
+      B.cyl('timber_wet', 0.045, 0.055, 1.0, Br.x + Br.w * 0.5, hy + 0.5, hz,
+        rng.range(-0.08, 0.08), 0, rng.range(-0.10, 0.10), 6);
+    }
+    droop(B, 'rope', Br.x + Br.w * 0.5, nearY + 0.92, Br.nearZ,
+      Br.x + Br.w * 0.5, brY + 0.55, brZ, 0.24, 0.022, 6);
+    B.tint = null;
+
+    L.addCollider(Br.x, nearY - 0.4, Br.nearZ - span * 0.13,
+      Br.w * 0.6, 0.30, span * 0.15, 'wood', true);
+    out.nearLip = new THREE.Vector3(Br.x, nearY, Br.nearZ);
+    out.farLip = new THREE.Vector3(Br.x, farY, Br.farZ);
+    out.breakPoint = new THREE.Vector3(Br.x, brY, brZ);
+    out.deckY = nearY;
+    L.dripEdges.push({ position: new THREE.Vector3(Br.x, nearY, Br.nearZ - 1.2), fall: 1.4 });
+    return out;
+  }
+
+  // A French-era sluice headwall at the creek mouth. The only orthogonal
+  // man-made thing between the spawn and the firebase, and therefore the only
+  // place a straight line survives in the southern half of the level.
+  function buildSluice(L, B, rng) {
+    var P = L.plan, S = P.sluice;
+    var out = {};
+    B.pushXYZ(S.x, S.y, S.z, 0, S.yaw, 0);
+    B.tint = tint(0xb6bcae, 0.55);
+    B.boxR('concrete', S.w, S.h, 0.85, 0, S.h * 0.5 - 0.55, 0, 0, 0, 0);
+    B.tint = null;
+    // wing walls, one of them cracked away from the headwall
+    B.tint = tint(0xa8b0a4, 0.5);
+    B.boxR('concrete', 0.62, S.h * 0.78, 3.4, -S.w * 0.5 + 0.3, S.h * 0.35 - 0.55, -1.8, 0, 0, 0);
+    B.boxR('concrete', 0.62, S.h * 0.70, 3.0, S.w * 0.5 - 0.3, S.h * 0.30 - 0.60, -1.7,
+      0.05, 0.09, -0.06);
+    B.tint = null;
+    // two culvert mouths
+    for (var i = -1; i <= 1; i += 2) {
+      B.tint = grey(0.16);
+      B.cyl('concrete', 0.78, 0.78, 0.95, i * 1.55, 0.35, 0.05, Math.PI * 0.5, 0, 0, 12);
+      B.tint = null;
+      B.tint = tint(0xc4c8ba, 0.6);
+      B.cyl('concrete', 0.98, 0.98, 0.22, i * 1.55, 0.35, 0.44, Math.PI * 0.5, 0, 0, 14);
+      B.tint = null;
+    }
+    // the screw-gate frame and its handwheel
+    B.tint = tint(0x8a5030, 0.9);
+    B.boxR('rust', 0.12, 2.3, 0.12, -1.55, S.h * 0.55, -0.35, 0, 0, 0);
+    B.boxR('rust', 0.12, 2.3, 0.12, -0.85, S.h * 0.55, -0.35, 0, 0, 0);
+    B.boxR('rust', 0.95, 0.14, 0.14, -1.20, S.h * 0.55 + 1.15, -0.35, 0, 0, 0);
+    B.cyl('rust', 0.032, 0.032, 1.5, -1.20, S.h * 0.55 + 0.45, -0.35, 0, 0, 0, 6);
+    B.cyl('rust', 0.30, 0.30, 0.05, -1.20, S.h * 0.55 + 1.25, -0.35, Math.PI * 0.5, 0, 0, 12);
+    for (i = 0; i < 5; i++) {
+      var sa = i * 1.257;
+      B.rod('rust', -1.20, S.h * 0.55 + 1.25, -0.35,
+        -1.20 + Math.sin(sa) * 0.30, S.h * 0.55 + 1.25, -0.35 + Math.cos(sa) * 0.30, 0.02, 4);
+    }
+    B.tint = null;
+    // the apron, silted over
+    B.tint = grey(0.72);
+    B.boxR('concrete', S.w - 0.6, 0.28, 2.4, 0, -0.62, 1.5, -0.06, 0, 0);
+    B.tint = null;
+    // creepers hanging down the face - a bare concrete wall in a jungle is a
+    // wall nobody has looked at
+    for (i = 0; i < 8; i++) {
+      var uvv = atlasUV(CELL.creeper);
+      var vh = rng.range(1.2, 2.6);
+      B.add('canopy', quad(vh * 0.75, vh, uvv[0], uvv[1], uvv[2], uvv[3]),
+        makeM(-S.w * 0.45 + rng.range(0, S.w * 0.9), S.h - 0.55 - vh * 0.42 + rng.range(-0.3, 0.4),
+          0.46, 0, rng.range(-0.35, 0.35), 0));
+    }
+    B.pop();
+    L.addCollider(S.x, S.y + S.h * 0.5 - 0.55, S.z, S.w * 0.5, S.h * 0.5, 0.55,
+      'concrete', false, _e1.set(0, S.yaw, 0, 'YXZ'));
+    out.centre = new THREE.Vector3(S.x, S.y, S.z);
+    out.topY = S.y + S.h - 0.55;
+    L.dripEdges.push({ position: new THREE.Vector3(S.x, S.y + S.h - 0.55, S.z + 0.5),
+      fall: 2.2 });
+    return out;
+  }
+
+  // The spirit house. Small, warm, and deliberately in hero1's frame: it is the
+  // only thing in the southern half of the level that is not green, not
+  // military and not decaying, and its two candles are the entire warm leg of
+  // the grade split in a picture that is otherwise chlorophyll from edge to edge.
+  function buildShrine(L, B, rng) {
+    var P = L.plan, S = P.shrine;
+    var out = {};
+    var gy = L.sampleGround(S.x, S.z);
+    B.pushXYZ(S.x, gy, S.z, 0, S.yaw, 0);
+    B.tint = tint(0xd9d2c2, 0.55);
+    B.boxR('concrete', 0.24, S.h, 0.24, 0, S.h * 0.5, 0, 0, 0, 0.02);
+    B.boxR('concrete', 0.86, 0.09, 0.74, 0, S.h + 0.05, 0, 0, 0, 0.01);
+    B.tint = null;
+    // the house itself
+    B.tint = tint(0xe0c48c, 0.8);
+    B.boxR('timber', 0.62, 0.46, 0.52, 0, S.h + 0.32, -0.02, 0, 0, 0);
+    B.tint = null;
+    // the opening, dark, with the candles inside
+    B.tint = grey(0.10);
+    B.boxR('timber', 0.40, 0.30, 0.05, 0, S.h + 0.30, 0.25, 0, 0, 0);
+    B.tint = null;
+    // tiered roof
+    B.tint = tint(0xc4553a, 0.85);
+    B.boxR('timber', 0.86, 0.05, 0.72, 0, S.h + 0.58, -0.02, 0, 0, 0);
+    B.boxR('timber', 0.62, 0.05, 0.52, 0, S.h + 0.68, -0.02, 0, 0, 0);
+    B.boxR('timber', 0.34, 0.05, 0.30, 0, S.h + 0.77, -0.02, 0, 0, 0);
+    B.cyl('timber', 0.015, 0.03, 0.22, 0, S.h + 0.90, -0.02, 0, 0, 0, 6);
+    B.tint = null;
+    // corner posts of the veranda
+    B.tint = tint(0xe0c48c, 0.7);
+    for (var i = 0; i < 2; i++) {
+      B.boxR('timber', 0.04, 0.28, 0.04, (i ? 1 : -1) * 0.27, S.h + 0.20, 0.30, 0, 0, 0);
+    }
+    B.tint = null;
+    // candles and joss sticks
+    B.add('lit', cyl(0.016, 0.018, 0.11, 6), makeM(-0.09, S.h + 0.19, 0.20));
+    B.add('lit', cyl(0.016, 0.018, 0.08, 6), makeM(0.08, S.h + 0.17, 0.22));
+    B.tint = tint(0xd8b070, 0.8);
+    B.cyl('timber', 0.006, 0.006, 0.24, 0.15, S.h + 0.26, 0.16, 0.10, 0, 0.16, 4);
+    B.tint = null;
+    // a garland over the eave
+    B.tint = tint(0xd8a030, 0.9);
+    droop(B, 'rope', -0.40, S.h + 0.55, 0.34, 0.40, S.h + 0.55, 0.34, 0.10, 0.018, 5);
+    B.tint = null;
+    B.pop();
+    out.centre = new THREE.Vector3(S.x, gy, S.z);
+    out.candle = new THREE.Vector3(
+      S.x + Math.sin(S.yaw) * 0.18 * 0 + Math.cos(S.yaw) * -0.02,
+      gy + S.h + 0.22,
+      S.z + Math.cos(S.yaw) * 0.20);
+    out.topY = gy + S.h + 0.95;
+    L.addCollider(S.x, gy + S.h * 0.5, S.z, 0.20, S.h * 0.5, 0.20, 'concrete');
+    L.dripEdges.push({ position: new THREE.Vector3(S.x + 0.4, gy + S.h + 0.58, S.z),
+      fall: 1.1 });
+    void rng;
+    return out;
+  }
+
+  // The rock outcrop on the east rim: the overview standpoint, a hard mineral
+  // silhouette in a level made of soft things, and a foreground for hero3.
+  function buildOutcrop(L, B, rng) {
+    var P = L.plan, O = P.outcrop, i;
+    var top = L.sampleGround(O.x - 1.5, O.z + 1.0);
+    for (i = 0; i < 11; i++) {
+      var a = (i / 11) * Math.PI * 2 + rng.range(-0.25, 0.25);
+      var r = O.r * rng.range(0.35, 1.0);
+      var bx = O.x + Math.sin(a) * r, bz = O.z + Math.cos(a) * r;
+      var by = L.sampleGround(bx, bz);
+      var w = rng.range(2.0, 4.6), hh = rng.range(1.4, 4.2), d = rng.range(2.0, 4.4);
+      B.tint = grey(rng.range(0.74, 1.06));
+      B.boxR('stonework', w, hh, d, bx, by + hh * 0.35, bz,
+        rng.range(-0.22, 0.22), rng.range(0, 6.28), rng.range(-0.22, 0.22),
+        Math.min(w, Math.min(hh, d)) * 0.28);
+      B.tint = null;
+      L.addCollider(bx, by + hh * 0.35, bz, w * 0.42, hh * 0.5, d * 0.42, 'stone');
+      // ferns and moss in every crack
+      for (var f = 0; f < 3; f++) {
+        var fa = rng.range(0, 6.28), fr = rng.range(w * 0.4, w * 0.8);
+        var fx = bx + Math.sin(fa) * fr, fz = bz + Math.cos(fa) * fr;
+        L.addInst('fern' + rng.int(0, 1),
+          makeM(fx, L.sampleGround(fx, fz), fz, 0, rng.range(0, 6.28), 0),
+          rng.range(0.6, 1.1), L.sampleGround(fx, fz));
+      }
+    }
+    // the shelf the camera stands on
+    B.tint = grey(0.92);
+    B.boxR('stonework', 5.4, 1.1, 5.0, O.x - 1.5, top - 0.45, O.z + 1.0,
+      0.03, 0.4, -0.02, 0.25);
+    B.tint = null;
+    L.addCollider(O.x - 1.5, top - 0.45, O.z + 1.0, 2.7, 0.55, 2.5, 'stone', true);
+    return { centre: new THREE.Vector3(O.x, top, O.z), top: top };
+  }
+
+  // ========================================================== THE UNDERSTORY ==
+  // A jittered lattice with a kind chosen from the sky-exposure field, so the
+  // planting agrees with the light: elephant grass where the sky reaches the
+  // floor, ferns and taro in the shade, banana and mangrove at the water,
+  // bamboo in the disturbed ground along the track. A uniform random scatter of
+  // one plant is on the instant-fail list and, more usefully, is the single
+  // clearest tell that a forest was generated rather than grown.
+  function scatterUnderstory(L, rng) {
+    var P = L.plan;
+    var step = 2.55;
+    var i;
+    for (var gz = Z_MIN + 2; gz < Z_MAX - 2; gz += step) {
+      for (var gx = X_MIN + 2; gx < X_MAX - 2; gx += step) {
+        var x = gx + rng.range(-0.85, 0.85);
+        var z = gz + rng.range(-0.85, 0.85);
+        var rc = riverC(z), rh = riverHalf(z);
+        var a = Math.abs(x - rc) / rh;
+        var y = L.sampleGround(x, z);
+        if (a < 1.0 && y < WATER_Y - 0.32) continue;         // under water
+        var au = Math.abs(x - trackX(z));
+        if (au < TRACK_HALF * 0.95) continue;                 // on the road
+        var dfx = x - FB_X, dfz = z - FB_Z;
+        var fbd = Math.sqrt(dfx * dfx + dfz * dfz);
+        if (fbd < FB_R - 1.2) {
+          // inside the wire the ground was cleared and is only now coming back
+          if (rng.next() > 0.16) continue;
+        }
+        var clear = 0;
+        for (var cm = 0; cm < P.camMarks.length; cm++) {
+          var CM = P.camMarks[cm];
+          var cdx = x - CM.x, cdz = z - CM.z;
+          var cdd = Math.sqrt(cdx * cdx + cdz * cdz);
+          if (cdd < CM.r) { clear = Math.max(clear, 1 - cdd / CM.r); }
+        }
+        if (clear > 0.55) continue;
+        var open = skyOpen(x, z, P);
+        var shore = 1 - M.smoothstep(0.9, 1.9, a);
+        var kind, scale;
+        var roll = rng.next();
+        if (shore > 0.5 && roll < 0.34) {
+          kind = 'banana' + rng.int(0, 1); scale = rng.range(0.72, 1.25);
+        } else if (au < 7.0 && roll < 0.055) {
+          kind = 'bamboo'; scale = rng.range(0.72, 1.12);
+        } else if (open > 0.55) {
+          kind = roll < 0.74 ? 'grass' + rng.int(0, 2)
+            : (roll < 0.90 ? 'fern' + rng.int(0, 1) : 'taro' + rng.int(0, 1));
+          scale = rng.range(0.78, 1.35);
+        } else if (open > 0.28) {
+          kind = roll < 0.40 ? 'grass' + rng.int(0, 2)
+            : (roll < 0.78 ? 'fern' + rng.int(0, 1) : 'taro' + rng.int(0, 1));
+          scale = rng.range(0.70, 1.15);
+        } else {
+          kind = roll < 0.46 ? 'fern' + rng.int(0, 1)
+            : (roll < 0.86 ? 'taro' + rng.int(0, 1) : 'palm');
+          scale = rng.range(0.62, 1.05);
+        }
+        if (kind === 'palm' && rng.next() > 0.22) kind = 'fern' + rng.int(0, 1);
+        // inside a standpoint's ring only low ground cover survives
+        if (clear > 0) {
+          kind = 'grass' + rng.int(0, 2);
+          scale = Math.min(scale, 0.85) * (1 - clear * 0.55);
+        }
+        L.addInst(kind, makeM(x, y, z, rng.range(-0.05, 0.05), rng.range(0, 6.28),
+          rng.range(-0.05, 0.05)), scale, y);
+        // fallen leaf litter cards where the canopy is closed
+        if (rng.bool(open < 0.5 ? 0.42 : 0.26)) {
+          L.litter.push([x + rng.range(-0.6, 0.6), y + 0.02, z + rng.range(-0.6, 0.6),
+            rng.range(0.7, 1.7), rng.range(0, 6.28)]);
+        }
+      }
+    }
+    // a second, denser grass pass along the water's edge and the track verge -
+    // these are the two places the camera stands, and thin ground cover under
+    // the lens is the clearest possible statement that the level is a mesh
+    for (i = 0; i < 420; i++) {
+      var t = rng.next();
+      var zz, xx;
+      if (t < 0.5) {
+        zz = rng.range(Z_MIN + 3, Z_MAX - 3);
+        xx = riverC(zz) + (rng.bool() ? 1 : -1) * riverHalf(zz) * rng.range(1.0, 1.30);
+      } else {
+        zz = rng.range(Z_MIN + 3, Z_MAX - 3);
+        xx = trackX(zz) + (rng.bool() ? 1 : -1) * rng.range(TRACK_HALF, TRACK_HALF + 3.4);
+      }
+      if (xx < X_MIN + 2 || xx > X_MAX - 2) continue;
+      var yy = L.sampleGround(xx, zz);
+      if (yy < WATER_Y - 0.25) continue;
+      L.addInst('grass' + rng.int(0, 2),
+        makeM(xx, yy, zz, rng.range(-0.06, 0.06), rng.range(0, 6.28), 0),
+        rng.range(0.55, 1.30), yy);
+    }
+  }
+
+  // ================================================================ THE ROOF ==
+  // THE CANOPY IS A LAYER, NOT A DECORATION ON THE TREES.
+  //
+  // The first build hung five clusters off each trunk's branches and called
+  // that a canopy. Measured, that is about 450 blobs over sixteen thousand
+  // square metres - one every 37 m2 - so the sky came straight through, the top
+  // half of every framing was blown white overcast, and the level read as a
+  // flooded pole forest rather than as jungle. A closed canopy is the single
+  // most important thing in this brief and it has to be built as its own
+  // stratum, on its own lattice, with its own holes.
+  //
+  // The holes are the point of the whole level: density is 1 - skyOpen, so the
+  // roof closes over the forest and opens exactly where the river, the track,
+  // the clearings and the firebase are - which is where the shafts land, where
+  // the ground is painted bright, and where every published framing looks.
+  //
+  // It costs almost nothing: ~1700 blobs at 16 two-triangle cards is 55k
+  // triangles, against the 2.4 M the understory spends on real leaf geometry.
+  function scatterCanopy(L, rng) {
+    var P = L.plan;
+    var step = 2.85;
+    var pad = 10;
+    for (var gz = Z_MIN - pad; gz < Z_MAX + pad; gz += step) {
+      for (var gx = X_MIN - pad; gx < X_MAX + pad; gx += step) {
+        var x = gx + rng.range(-1.5, 1.5);
+        var z = gz + rng.range(-1.5, 1.5);
+        var cx = M.clamp(x, X_MIN, X_MAX), cz = M.clamp(z, Z_MIN, Z_MAX);
+        var gy = L.sampleGround(cx, cz);
+        var open = skyOpen(cx, cz, P);
+        // Outside the play area the roof is solid: that is the level's horizon
+        // and it must not have a visible edge in it.
+        var outside = (x < X_MIN + 2 || x > X_MAX - 2 || z < Z_MIN + 2 || z > Z_MAX - 2);
+        var dens = outside ? 1.0 : (1 - open * 0.94);
+        // HARD exclusion, not a probability. The firebase was CUT out of the
+        // forest, so nothing overhangs it - and the overview framing stands on
+        // the tower platform inside it, where a six-per-cent chance of a blob
+        // was enough to hang a nine-metre leaf card two metres in front of the
+        // establishing shot's lens.
+        if (!outside) {
+          var fdx = x - FB_X, fdz = z - FB_Z;
+          if (fdx * fdx + fdz * fdz < (FB_R + 3.0) * (FB_R + 3.0)) continue;
+          if (open > 0.80) continue;
+        }
+        if (rng.next() > dens) continue;
+        // high tier - the roof
+        L.addInst('canopy' + (rng.next() < 0.34 ? 0 : (rng.next() < 0.5 ? 1 : 2)),
+          makeM(x, gy + rng.range(13.5, 23.0), z,
+            rng.range(-0.25, 0.25), rng.range(0, 6.28), rng.range(-0.25, 0.25)),
+          rng.range(1.00, 1.70), gy + 19);
+        // mid tier - the thing that was missing between the understory and the
+        // roof, and the reason the middle distance was nothing but bare poles
+        if (rng.bool(0.34)) {
+          L.addInst('canopy' + (rng.next() < 0.6 ? 2 : 1),
+            makeM(x + rng.range(-2.0, 2.0), gy + rng.range(9.5, 15.0),
+              z + rng.range(-2.0, 2.0),
+              rng.range(-0.35, 0.35), rng.range(0, 6.28), rng.range(-0.35, 0.35)),
+            rng.range(0.75, 1.35), gy + 10);
+        }
+        // a dead frond caught on the way down, and a hanging liana, only under
+        // the closed part of the roof
+        if (!outside && open < 0.4 && rng.bool(0.05)) {
+          L.addInst('canopy2',
+            makeM(x + rng.range(-1.5, 1.5), gy + rng.range(3.5, 6.5),
+              z + rng.range(-1.5, 1.5), rng.range(-0.6, 0.6), rng.range(0, 6.28), 0),
+            rng.range(0.5, 0.9), gy + 5);
+        }
+      }
+    }
+  }
+
+  function buildGroundMarks(L, B, rng) {
+    var i, k;
+    // tyre ruts down the whole track
+    for (var z = Z_MAX - 6; z > -20; z -= 1.9) {
+      var tx = trackX(z);
+      var yaw = Math.atan2(trackX(z - 2) - trackX(z + 2), -4);
+      for (k = -1; k <= 1; k += 2) {
+        var rx = tx + k * 0.95 + rng.range(-0.10, 0.10);
+        markCard(B, MARK.tread, rx, L.sampleGround(rx, z) + 0.016, z,
+          0.62, 2.1, yaw, grey(rng.range(0.80, 1.10)));
+      }
+    }
+    // boot traffic at the gate, the bridge and the shrine
+    var walks = [
+      [L.plan.gate.x, L.plan.gate.z, 0.2],
+      [L.plan.bridge.x, L.plan.bridge.nearZ + 1.0, 3.1],
+      [L.plan.shrine.x - 1.6, L.plan.shrine.z, 1.6]
+    ];
+    for (i = 0; i < walks.length; i++) {
+      var sx = walks[i][0], sz = walks[i][1], dir = walks[i][2];
+      for (k = 0; k < 22; k++) {
+        dir += rng.gaussian(0, 0.17);
+        sx += Math.sin(dir) * 0.62; sz += Math.cos(dir) * 0.62;
+        if (sx < X_MIN + 2 || sx > X_MAX - 2 || sz < Z_MIN + 2 || sz > Z_MAX - 2) break;
+        markCard(B, MARK.boot, sx, L.sampleGround(sx, sz) + 0.018, sz,
+          0.17, 0.32, dir, grey(rng.range(0.85, 1.10)));
+      }
+    }
+    // the leaf drift under closed canopy
+    for (i = 0; i < L.litter.length; i++) {
+      var lt = L.litter[i];
+      markCard(B, MARK.litter, lt[0], lt[1], lt[2], lt[3], lt[3], lt[4],
+        new THREE.Color(rng.range(0.85, 1.15), rng.range(0.85, 1.10), rng.range(0.75, 1.0)));
+    }
+    // algal scum along both banks
+    for (i = 0; i < 210; i++) {
+      var zz = rng.range(Z_MIN + 2, Z_MAX - 2);
+      var side = rng.bool() ? 1 : -1;
+      var xx = riverC(zz) + side * riverHalf(zz) * rng.range(0.94, 1.10);
+      if (xx < X_MIN + 1 || xx > X_MAX - 1) continue;
+      var yy = L.sampleGround(xx, zz);
+      markCard(B, MARK.scum, xx, yy + 0.02, zz, rng.range(1.6, 3.4),
+        rng.range(1.6, 3.4), rng.range(0, 6.28),
+        new THREE.Color(rng.range(0.8, 1.15), rng.range(0.9, 1.2), rng.range(0.7, 1.0)));
+    }
+  }
+
+  // ================================================================== LEVEL ==
+  function LevelJungle(ctx) {
+    this.ctx = ctx || null;
+    this.root = new THREE.Object3D();
+    this.root.name = 'level_jungle';
+    this.colliders = [];
+    this.spawnPoints = [];
+    this.navGrid = null;
+    this.cameraPoses = {};
+    this.meshes = [];
+    this.instanced = [];
+    this.lightShafts = [];
+    this.practicalLights = [];
+    this.dripEdges = [];
+    this.anchors = {};
+    this.field = null;
+    this.litter = [];
+    this._inst = Object.create(null);
+    this._matCache = Object.create(null);
+    this._atlas = null;
+    this._bladeSet = null;
+    this._barkSet = null;
+    this._markTex = null;
+    this._litMat = null;
+    this._litMat2 = null;
+    this._clock = { value: 0 };
+    this._hash = new GAME.SpatialHash(5.0);
+    this._stamp = 0;
+    this._t = 0;
+
+    var seed = (ctx && ctx.seed) || 20260801;
+    this.rng = (ctx && ctx.rng && ctx.rng.fork) ? ctx.rng.fork(0x4A554E47) : new GAME.RNG(seed);
+    this.noise = new GAME.Noise((seed ^ 0x3E17A9) >>> 0);
+    // min.y is -4, one metre under the deepest point of the river bed, and it
+    // is NOT slack. lighting.js maps its sky-visibility volume as a fixed 26 m
+    // slab starting at bounds.min.y, and svTrace returns -1 immediately for a
+    // ray that starts outside it - so a generous -14 here put every canopy-gap
+    // shaft origin above the lattice and _solveShaft silently returned null for
+    // all four. The level's one lighting event, deleted by a bounding box.
+    this.bounds = new THREE.Box3(
+      new THREE.Vector3(X_MIN - 8, -4.0, Z_MIN - 8),
+      new THREE.Vector3(X_MAX + 8, 34, Z_MAX + 8));
+
+    // The survey. Available the instant the level is constructed, so
+    // props_jungle never waits for build() and never reads a camera pose.
+    this.plan = plan({ noise: this.noise, rng: this.rng.fork(0x504C41) });
+    this.anchors = buildAnchors(this.plan, this);
+
+    // ---- THE FOLIAGE KIT, published ----------------------------------------
+    // props_jungle has to dress this set with plants, and there is exactly one
+    // way that can go wrong: it authors a second green. Two foliage recipes in
+    // one level is the same defect as two grades in one level - the eye reads
+    // the seam instantly and there is no lighting fix for it. So the level
+    // hands over its own materials, its atlas cell table and the two generators
+    // that made every leaf in it. Anything props grows out of these is the same
+    // plant as the ones already standing next to it.
+    var self = this;
+    this.foliage = {
+      canopyMaterial: function () { return self.material('canopy'); },
+      bladeMaterial: function () { return self.material('blade'); },
+      barkMaterial: function () { return self.material('bark'); },
+      markMaterial: function () { return self.material('mark'); },
+      litMaterial: function () { return self.material('lit'); },
+      CELL: CELL, atlasUV: atlasUV, cardGeo: cardGeo,
+      MARK: MARK, markUV: markUV,
+      blade: blade, tube: tube,
+      grassClump: grassClump, fernPlant: fernPlant, taroPlant: taroPlant,
+      bananaPlant: bananaPlant, palmCrown: palmCrown, canopyCluster: canopyCluster
+    };
+  }
+
+  function buildAnchors(P, L) {
+    function V(x, y, z) { return new THREE.Vector3(x, y, z); }
+    var A = {};
+    A.delta = {
+      x0: X_MIN, x1: X_MAX, z0: Z_MIN, z1: Z_MAX, waterY: WATER_Y,
+      wind: new THREE.Vector2(WIND_X, WIND_Z),
+      riverC: riverC, riverHalf: riverHalf, trackX: trackX,
+      groundY: function (x, z) { return L.sampleGround(x, z); },
+      skyOpen: function (x, z) { return skyOpen(x, z, P); }
+    };
+    A.river = {
+      waterY: WATER_Y,
+      centre: function (z) { return V(riverC(z), WATER_Y, z); },
+      half: riverHalf,
+      eastEdge: function (z) { return V(riverC(z) + riverHalf(z), WATER_Y, z); },
+      westEdge: function (z) { return V(riverC(z) - riverHalf(z), WATER_Y, z); }
+    };
+    A.track = {
+      half: TRACK_HALF, shoulder: TRACK_SHOULDER, pts: TRACK_PTS,
+      centre: function (z) { return V(trackX(z), L.sampleGround(trackX(z), z), z); }
+    };
+    A.spawn = { position: V(trackX(56), 0, 56), yaw: 0 };
+    A.clearings = [];
+    for (var i = 0; i < P.clearings.length; i++) {
+      A.clearings.push({ centre: V(P.clearings[i].x, 0, P.clearings[i].z),
+        r: P.clearings[i].r, open: P.clearings[i].open });
+    }
+    A.firebase = {
+      centre: V(P.firebase.x, P.firebase.y, P.firebase.z), yaw: P.firebase.yaw,
+      radius: P.firebase.r, topY: P.firebase.y,
+      gate: V(P.gate.x, P.gate.y, P.gate.z),
+      gateBearing: P.firebase.gateB, breachBearing: P.firebase.breachB,
+      mortarPit: V(P.mortar.x, P.mortar.y, P.mortar.z),
+      helipad: { centre: V(P.helipad.x, P.helipad.y, P.helipad.z),
+        r: P.helipad.r, yaw: P.helipad.yaw },
+      mast: V(P.mast.x, P.mast.y, P.mast.z),
+      drum: V(P.drum.x, P.drum.y, P.drum.z),
+      shelter: V(P.shelter.x, P.shelter.y, P.shelter.z),
+      local: P.fbW
+    };
+    A.bunker = {
+      centre: V(P.bunker.x, P.bunker.y, P.bunker.z), yaw: P.bunker.yaw,
+      w: P.bunker.w, d: P.bunker.d,
+      floorY: P.bunker.y - P.bunker.sink, roofY: P.bunker.y - P.bunker.sink + 2.62
+    };
+    A.tower = {
+      base: V(P.tower.x, P.tower.y, P.tower.z), yaw: P.tower.yaw,
+      legR: P.tower.legR, platformY: P.tower.y + P.tower.platY,
+      roofY: P.tower.y + P.tower.roofY
+    };
+    A.heli = {
+      centre: V(P.heli.x, P.heli.y, P.heli.z), yaw: P.heli.yaw,
+      roll: P.heli.roll, pitch: P.heli.pitch
+    };
+    A.creek = {
+      half: CREEK_HALF, depth: CREEK_DEPTH, centreZ: creekZ,
+      bridge: { centre: V(P.bridge.x, P.bridge.y, P.bridge.z),
+        nearLip: V(P.bridge.x, P.bridge.y, P.bridge.nearZ),
+        farLip: V(P.bridge.x, P.bridge.y, P.bridge.farZ),
+        w: P.bridge.w, deckY: P.bridge.y }
+    };
+    A.sluice = { centre: V(P.sluice.x, P.sluice.y, P.sluice.z), yaw: P.sluice.yaw,
+      w: P.sluice.w, h: P.sluice.h };
+    A.shrine = { centre: V(P.shrine.x, P.shrine.y, P.shrine.z), yaw: P.shrine.yaw,
+      postH: P.shrine.h };
+    A.outcrop = { centre: V(P.outcrop.x, P.outcrop.y, P.outcrop.z), r: P.outcrop.r };
+    A.trees = [];
+    for (i = 0; i < P.trees.length; i++) {
+      var T = P.trees[i];
+      A.trees.push({ centre: V(T.x, T.y, T.z), r: T.r, height: T.h,
+        canopyY: T.y + T.h * 0.72, buttress: T.bh, shattered: !!T.shattered });
+    }
+    A.logs = [];
+    for (i = 0; i < P.logs.length; i++) {
+      A.logs.push({ a: V(P.logs[i].ax, P.logs[i].ay, P.logs[i].az),
+        b: V(P.logs[i].bx, P.logs[i].by, P.logs[i].bz), r: P.logs[i].r });
+    }
+    A.mangroves = [];
+    for (i = 0; i < P.mangroves.length; i++) {
+      A.mangroves.push({ centre: V(P.mangroves[i].x, P.mangroves[i].y, P.mangroves[i].z),
+        r: P.mangroves[i].r, height: P.mangroves[i].h });
+    }
+    return A;
+  }
+
+  // ---- materials, defensively -----------------------------------------------
+  LevelJungle.prototype.material = function (key) {
+    if (this._matCache[key]) return this._matCache[key];
+    var surf = SURF[key] || SURF.mud;
+    var m = null;
+    try {
+      if (surf.own === 'mud') m = this._mudMaterial(false);
+      else if (surf.own === 'silt') m = this._mudMaterial(true);
+      else if (surf.own === 'water') m = this._waterMaterial();
+      else if (surf.own === 'bark') m = this._barkMaterial();
+      else if (surf.own === 'blade') m = this._foliageMaterial(false);
+      else if (surf.own === 'canopy') m = this._foliageMaterial(true);
+      else if (surf.own === 'lit') m = this._litMaterial(false);
+      else if (surf.own === 'lit2') m = this._litMaterial(true);
+      else if (surf.own === 'mark') m = this._markMaterial();
+      else {
+        var lib = this.ctx && this.ctx.materials;
+        var name = surf.base || 'concrete';
+        var has = false;
+        try { has = !!(lib && typeof lib.has === 'function' && lib.has(name)); }
+        catch (e) { has = false; }
+        if (lib && typeof lib.get === 'function' && has) {
+          var opts = { vertexColors: true, wearMode: 'multiply' };
+          if (surf.env !== undefined) opts.envMapIntensity = surf.env;
+          m = lib.get(name, opts);
+        }
+      }
+    } catch (e2) {
+      GAME.logError('jungle.material:' + key, e2);
+      m = null;
+    }
+    if (!m || !m.isMaterial) m = this._fallbackMaterial(key);
+    this._matCache[key] = m;
+    return m;
+  };
+
+  LevelJungle.prototype._fallbackMaterial = function (key) {
+    var fb = FALLBACK[key] || FALLBACK.mud;
+    var surf = SURF[key] || SURF.mud;
+    var m = new THREE.MeshStandardMaterial({
+      color: new THREE.Color().setHex(fb[0], THREE.SRGBColorSpace),
+      roughness: fb[1], metalness: fb[2], vertexColors: true,
+      envMapIntensity: surf.env !== undefined ? surf.env : 1.0
+    });
+    m.name = 'jungle_fallback_' + key;
+    return m;
+  };
+
+  // THE FOREST FLOOR. materials.js's `dirt` is a world-projected triplanar with
+  // a real meso band, which is exactly what a churned mud floor wants - what it
+  // does NOT have is the colour, because it was authored as warm desert soil.
+  // albedoTarget re-solves its per-channel gain so the mean lands on the same
+  // dark leaf-litter olive that sky.js is already using for this level's ground
+  // bounce (GROUND_ALBEDO_BY_LEVEL.jungle = [0.085 0.120 0.062]); a warm brown
+  // floor here would disagree with the IBL that is lighting it.
+  LevelJungle.prototype._mudMaterial = function (silt) {
+    var lib = this.ctx && this.ctx.materials;
+    if (!lib || typeof lib.get !== 'function') return null;
+    // The wet contract needs its ripple field, and this level is not one of the
+    // ids materials.js turns it on for, so ask for it explicitly.
+    try { if (typeof lib.rippleTexture === 'function') lib.rippleTexture(); }
+    catch (e) { /* the puddles simply stay flat */ }
+    var m = lib.get('dirt', {
+      vertexColors: true, wearMode: 'multiply',
+      albedoTarget: silt ? 0x666c4a : 0x545f38,
+      hue: 1.0,
+      wet: true, puddle: silt ? 0.30 : 0.52,
+      // genDirt's crazing is a fixed feature of the map, so the only control
+      // over how it reads is the world scale it is projected at. At 1 tile/m
+      // the cracks are 20 cm and print as a net of cells right under the lens;
+      // at 2.1 they are 9 cm and read as wet soil grain, which is what a
+      // rained-on forest floor actually looks like.
+      detail: 0.34, macro: 0.90, parallax: 0.006, triScale: 1.35,
+      envMapIntensity: 0.85
+    });
+    // genDirt is authored as sun-cracked desert soil and its normal map draws
+    // a hard crazing pattern that reads as dragon skin on a wet forest floor -
+    // and, tiled at one metre under the lens, as the single most obvious
+    // repeat in the frame. Halving the normal keeps the meso relief that makes
+    // puddles sit in hollows and drops the crazing to a damp mottle.
+    try { if (m.normalScale) m.normalScale.set(0.42, 0.42); }
+    catch (e2) { /* fallback material has none */ }
+    return m;
+  };
+
+  LevelJungle.prototype._waterMaterial = function () {
+    var lib = this.ctx && this.ctx.materials;
+    if (!lib || typeof lib.water !== 'function') return null;
+    // A delta river is silt, not sea: it absorbs BLUE hardest (the sea absorbs
+    // red), so the transmitted colour is brown-green and the surface takes
+    // nearly all its value from the sky it reflects. That reflection is why the
+    // river is the brightest floor in the level and why it can carry the bottom
+    // half of a framing on its own.
+    return lib.water({
+      color: 0x131a12,
+      roughness: 0.085,
+      envMapIntensity: 1.30,
+      depth: 2.4,
+      absorb: [0.17, 0.27, 0.62],
+      bed: 0x2a2414,
+      tint: 0x40431f,
+      foam: 0x9aa07a,
+      foamWidth: 1.1,
+      waveAmp: 0.42
+    });
+  };
+
+  LevelJungle.prototype._barkMaterial = function () {
+    if (!this._barkSet) {
+      try { this._barkSet = buildBarkMaps(0xBA12) || {}; }
+      catch (e) { GAME.logError('jungle.bark', e); this._barkSet = {}; }
+    }
+    var set = this._barkSet;
+    if (!set.albedo) return null;
+    var aniso = this._aniso();
+    var m = new THREE.MeshStandardMaterial({
+      color: 0xffffff, roughness: 1.0, metalness: 0.0,
+      vertexColors: true, envMapIntensity: 0.80
+    });
+    m.map = makeTex(set.albedo, true, aniso);
+    m.normalMap = makeTex(set.normal, false, aniso);
+    m.roughnessMap = makeTex(set.rough, false, aniso);
+    m.normalScale = new THREE.Vector2(1.30, 1.30);
+    m.name = 'jungle_bark';
+    return m;
+  };
+
+  // THE TWO FOLIAGE MATERIALS.
+  //
+  // `canopy` is alpha-cut cards off the atlas and is used only above eight
+  // metres. `blade` is the same shader with no alpha cut at all, applied to the
+  // real folded-ribbon geometry that makes up everything at eye height.
+  //
+  // The emissiveMap is the albedo and the emissive is a deep green at 0.09-0.11
+  // intensity. That is not a glow - against a lit leaf it is five per cent and
+  // invisible - it is the guarantee that a leaf in shadow never reaches black,
+  // which is the single loudest tell in procedural foliage and the reason a
+  // canopy interior usually photographs as a silhouette.
+  LevelJungle.prototype._foliageMaterial = function (isCanopy) {
+    var set;
+    if (isCanopy) {
+      if (!this._atlas) {
+        try { this._atlas = buildCanopyAtlas(this.rng.fork(0xC410)) || {}; }
+        catch (e) { GAME.logError('jungle.atlas', e); this._atlas = {}; }
+      }
+      set = this._atlas;
+    } else {
+      if (!this._bladeSet) {
+        try { this._bladeSet = buildBladeMaps(0xB1AD) || {}; }
+        catch (e2) { GAME.logError('jungle.blade', e2); this._bladeSet = {}; }
+      }
+      set = this._bladeSet;
+    }
+    if (!set || !set.albedo) return null;
+    var aniso = this._aniso();
+    var m = isCanopy
+      ? new THREE.MeshStandardMaterial({
+        color: 0xffffff, roughness: 1.0, metalness: 0.0,
+        side: THREE.DoubleSide, vertexColors: true,
+        transparent: false, alphaTest: 0.42, envMapIntensity: 1.00
+      })
+      : new THREE.MeshPhysicalMaterial({
+        color: 0xffffff, roughness: 1.0, metalness: 0.0,
+        side: THREE.DoubleSide, vertexColors: true,
+        transparent: false, envMapIntensity: 1.10
+      });
+    m.map = makeTex(set.albedo, true, aniso, !isCanopy ? false : true);
+    m.normalMap = makeTex(set.normal, false, aniso, !isCanopy ? false : true);
+    m.roughnessMap = makeTex(set.rough, false, aniso, !isCanopy ? false : true);
+    m.normalScale = new THREE.Vector2(isCanopy ? 0.85 : 1.65, isCanopy ? 0.85 : 1.65);
+    m.emissiveMap = m.map;
+    m.emissive = new THREE.Color().setHex(isCanopy ? 0x2a5218 : 0x38661c,
+      THREE.SRGBColorSpace);
+    // The canopy's lift is deliberately LOWER than the understory's. It is the
+    // top half of every framing, and it is already backlit by the brightest
+    // thing in the level; the understory is what needs the anti-crush floor.
+    m.emissiveIntensity = isCanopy ? 0.075 : 0.095;
+    m.shadowSide = THREE.DoubleSide;
+    if (!isCanopy) {
+      // the waxy cuticle - the only thing that separates two overlapping leaves
+      // of the same value when both are in shade
+      m.sheen = 0.45;
+      m.sheenRoughness = 0.55;
+      m.sheenColor = new THREE.Color().setHex(0xc8e29a, THREE.SRGBColorSpace);
+    }
+    this._addSway(m, isCanopy ? 0.030 : 0.016);
+    m.name = isCanopy ? 'jungle_canopy' : 'jungle_blade';
+    return m;
+  };
+
+  // A two-band object-space sway, applied before project_vertex and scaled by
+  // the vertex's own local height so a plant pivots about its base. Same
+  // technique materials.js uses for its foliage; the shadow pass runs
+  // MeshDepthMaterial and does not sway, which at two centimetres is invisible.
+  LevelJungle.prototype._addSway = function (mat, amount) {
+    var clock = this._clock;
+    mat.onBeforeCompile = function (shader) {
+      shader.uniforms.jgTime = clock;
+      shader.uniforms.jgWind = { value: amount };
+      shader.vertexShader = 'uniform float jgTime;\nuniform float jgWind;\n' +
+        shader.vertexShader.replace('#include <begin_vertex>', [
+          '#include <begin_vertex>',
+          'float jgPh = transformed.x * 1.7 + transformed.z * 2.3;',
+          'float jgS = sin( jgTime * 1.15 + jgPh ) * 0.65 +',
+          '            sin( jgTime * 2.60 + jgPh * 2.1 ) * 0.35;',
+          'transformed.x += jgS * jgWind * max( transformed.y, 0.0 );',
+          'transformed.z += jgS * jgWind * 0.6 * max( transformed.y, 0.0 );'
+        ].join('\n'));
+    };
+    mat.customProgramCacheKey = function () { return 'jgSway' + amount.toFixed(3); };
+  };
+
+  LevelJungle.prototype._litMaterial = function (red) {
+    var m = new THREE.MeshStandardMaterial({
+      color: new THREE.Color().setHex(red ? 0x2a0806 : 0x2c1a08, THREE.SRGBColorSpace),
+      roughness: 0.42, metalness: 0.0, vertexColors: true,
+      emissive: new THREE.Color().setHex(red ? 0xff2a14 : 0xffa848, THREE.SRGBColorSpace),
+      emissiveIntensity: red ? 3.4 : 6.2, side: THREE.DoubleSide, fog: true
+    });
+    m.name = red ? 'jungle_beacon' : 'jungle_flame';
+    if (red) this._litMat2 = m; else this._litMat = m;
+    return m;
+  };
+
+  LevelJungle.prototype._markMaterial = function () {
+    var tex = null;
+    try { tex = buildMarkAtlas(this.rng.fork(0xDECA1)); }
+    catch (e) { GAME.logError('jungle.marks', e); tex = null; }
+    this._markTex = tex;
+    if (tex) tex.anisotropy = this._aniso();
+    var m = new THREE.MeshStandardMaterial({
+      map: tex, color: 0xffffff, roughness: 0.92, metalness: 0.0,
+      transparent: true, depthWrite: false, alphaTest: 0.04,
+      vertexColors: true, side: THREE.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3
+    });
+    m.name = 'jungle_marks';
+    return m;
+  };
+
+  LevelJungle.prototype._aniso = function () {
+    try {
+      var caps = this.ctx && this.ctx.renderer && this.ctx.renderer.capabilities;
+      if (caps && caps.getMaxAnisotropy) {
+        return Math.max(1, Math.min(8, caps.getMaxAnisotropy() || 1));
+      }
+    } catch (e) { /* a nicety */ }
+    return 4;
+  };
+
+  // ---- colliders --------------------------------------------------------------
+  LevelJungle.prototype.addCollider = function (cx, cy, cz, hx, hy, hz, material, isFloor, euler) {
+    var q = new THREE.Quaternion();
+    if (euler) q.setFromEuler(euler);
+    var c = {
+      type: 'box',
+      center: new THREE.Vector3(cx, cy, cz),
+      halfExtents: new THREE.Vector3(Math.abs(hx), Math.abs(hy), Math.abs(hz)),
+      quaternion: q,
+      material: material || 'dirt',
+      floor: !!isFloor
+    };
+    this.colliders.push(c);
+    return c;
+  };
+
+  // ---- instancing --------------------------------------------------------------
+  // Sized to the accumulated array, never to a guessed cap. An InstancedMesh
+  // that overflows its capacity silently drops everything past it and the
+  // failure is invisible until somebody counts, so there is nothing to overflow.
+  var INST_MAT = {
+    grass0: 'blade', grass1: 'blade', grass2: 'blade',
+    fern0: 'blade', fern1: 'blade',
+    taro0: 'blade', taro1: 'blade',
+    banana0: 'blade', banana1: 'blade',
+    palmTrunk: 'bark', palmCrown: 'blade',
+    bambooCulm: 'bark', bambooLeaf: 'canopy',
+    canopy0: 'canopy', canopy1: 'canopy', canopy2: 'canopy'
+  };
+
+  LevelJungle.prototype.addInst = function (kind, m, scale, shadeY) {
+    if (kind === 'palm') {
+      this.addInst('palmTrunk', m, scale, shadeY);
+      this.addInst('palmCrown', m.clone(), scale, shadeY);
+      return;
+    }
+    if (kind === 'bamboo') {
+      this.addInst('bambooCulm', m, scale, shadeY);
+      this.addInst('bambooLeaf', m.clone(), scale, shadeY);
+      return;
+    }
+    if (!INST_MAT[kind]) return;
+    var slot = this._inst[kind] || (this._inst[kind] = { m: [], c: [] });
+    var s = scale === undefined ? 1 : scale;
+    m.scale(new THREE.Vector3(s, s, s));
+    slot.m.push(m);
+    var rng = this.rng;
+    // Per-instance colour is where the forest stops being one shade of green.
+    // Height drives a warm/cool ramp - understory is warm and light because it
+    // is lit by bounce off the litter, canopy is cool and dark because it is
+    // lit by sky through more leaves - and the random value spread on top of
+    // that is what breaks the repeated stamp.
+    var v = rng.range(0.62, 1.22);
+    var warm = M.saturate(1 - (shadeY === undefined ? 0 : (shadeY / 26)));
+    var r = v * (0.80 + 0.34 * warm);
+    var g = v * (0.98 + 0.10 * warm);
+    var b = v * (0.66 + 0.20 * warm);
+    if (kind === 'bambooCulm' || kind === 'palmTrunk') {
+      r = v * 1.12; g = v * 1.06; b = v * 0.72;
+    }
+    slot.c.push(new THREE.Color(r, g, b));
+  };
+
+  LevelJungle.prototype._buildInstances = function () {
+    var rng = this.rng.fork(0x1451);
+    var factory = {
+      grass0: function () { return grassClump(rng, 1.00); },
+      grass1: function () { return grassClump(rng, 1.35, 20); },
+      grass2: function () { return grassClump(rng, 0.72, 13); },
+      fern0: function () { return fernPlant(rng, 1.00); },
+      fern1: function () { return fernPlant(rng, 1.35); },
+      taro0: function () { return taroPlant(rng, 1.00); },
+      taro1: function () { return taroPlant(rng, 1.15); },
+      banana0: function () { return bananaPlant(rng, 1.00); },
+      banana1: function () { return bananaPlant(rng, 1.15); },
+      palmTrunk: function () { return palmTree(rng, 1.0).trunk; },
+      palmCrown: null,
+      bambooCulm: function () { return bambooCulms(rng, 1.0); },
+      bambooLeaf: function () { return bambooLeafCards(rng, 1.0); },
+      canopy0: function () { return canopyCluster(rng, 2.9, CELL.canopyA); },
+      canopy1: function () { return canopyCluster(rng, 2.9, CELL.canopyB); },
+      canopy2: function () { return canopyCluster(rng, 2.9, CELL.canopyC); }
+    };
+    // The crown has to sit on top of the trunk it shares an instance transform
+    // with, so it is generated from the same palm.
+    var palm = palmTree(rng.fork(0x9A1), 1.0);
+    factory.palmTrunk = function () { return palm.trunk; };
+    factory.palmCrown = function () {
+      var crown = palmCrown(rng, 1.0);
+      applyMatrix(crown, makeM(palm.lean * palm.top * 0.30, palm.top,
+        palm.lean * 0.4 * palm.top * 0.30));
+      return whiteColor(crown);
+    };
+
+    for (var kind in this._inst) {
+      var slot = this._inst[kind];
+      if (!slot || !slot.m.length) continue;
+      var make = factory[kind];
+      if (!make) continue;
+      var geo = null;
+      try { geo = make(); }
+      catch (e) { GAME.logError('jungle.plant:' + kind, e); continue; }
+      if (!geo || !geo.attributes || !geo.attributes.position) continue;
+      geo.computeBoundingSphere();
+      var matKey = INST_MAT[kind] || 'blade';
+      var surf = SURF[matKey] || SURF.blade;
+      var mesh = new THREE.InstancedMesh(geo, this.material(matKey), slot.m.length);
+      mesh.name = 'jungle_' + kind;
+      mesh.castShadow = surf.cast && kind.indexOf('grass') !== 0 &&
+        kind.indexOf('fern') !== 0;
+      mesh.receiveShadow = true;
+      mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+      for (var i = 0; i < slot.m.length; i++) {
+        mesh.setMatrixAt(i, slot.m[i]);
+        mesh.setColorAt(i, slot.c[i]);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      mesh.frustumCulled = true;
+      mesh.matrixAutoUpdate = false;
+      mesh.updateMatrix();
+      this.root.add(mesh);
+      this.instanced.push(mesh);
+      slot.m.length = 0; slot.c.length = 0;
+    }
+  };
+
+  // ---- build ------------------------------------------------------------------
+  LevelJungle.prototype.build = async function (ctx) {
+    if (ctx) this.ctx = ctx;
+    var self = this;
+    var rng = this.rng;
+    var B = new Builder();
+    var i;
+
+    function stage(name, fn) {
+      try { fn(); } catch (e) { GAME.logError('jungle.' + name, e); }
+    }
+
+    stage('ground', function () { buildGround(self, rng); });
+    await GAME.yieldFrame();
+    stage('water', function () { buildWater(self); });
+    stage('floorColliders', function () { self._buildFloor(); });
+    await GAME.yieldFrame();
+
+    stage('trees', function () {
+      for (var t = 0; t < self.plan.trees.length; t++) {
+        buildTree(self, B, rng, self.plan.trees[t]);
+      }
+    });
+    await GAME.yieldFrame();
+    stage('mangroves', function () {
+      for (var t = 0; t < self.plan.mangroves.length; t++) {
+        buildMangrove(self, B, rng, self.plan.mangroves[t]);
+      }
+    });
+    stage('logs', function () {
+      for (var t = 0; t < self.plan.logs.length; t++) {
+        buildLog(self, B, rng, self.plan.logs[t]);
+      }
+    });
+    await GAME.yieldFrame();
+
+    stage('firebase', function () { self.builtFirebase = buildFirebase(self, B, rng); });
+    await GAME.yieldFrame();
+    stage('bunker', function () { self.builtBunker = buildBunker(self, B, rng); });
+    stage('tower', function () { self.builtTower = buildTower(self, B, rng); });
+    await GAME.yieldFrame();
+
+    stage('heli', function () { self.builtHeli = buildHeli(self, B, rng); });
+    stage('bridge', function () { self.builtBridge = buildBridge(self, B, rng); });
+    stage('sluice', function () { self.builtSluice = buildSluice(self, B, rng); });
+    stage('shrine', function () { self.builtShrine = buildShrine(self, B, rng); });
+    stage('outcrop', function () { self.builtOutcrop = buildOutcrop(self, B, rng); });
+    await GAME.yieldFrame();
+
+    stage('understory', function () { scatterUnderstory(self, rng); });
+    await GAME.yieldFrame();
+    stage('canopy', function () { scatterCanopy(self, rng); });
+    await GAME.yieldFrame();
+    stage('marks', function () { buildGroundMarks(self, B, rng); });
+    await GAME.yieldFrame();
+
+    stage('merge', function () { self._finalize(B); });
+    await GAME.yieldFrame();
+    stage('instances', function () { self._buildInstances(); });
+    await GAME.yieldFrame();
+
+    stage('lights', function () { self._buildLights(); });
+    stage('spawns', function () { self._buildSpawns(); });
+    stage('nav', function () { self._buildNav(); });
+    stage('broadphase', function () { self._buildBroadphase(); });
+    stage('foam', function () { self._publishFoam(); });
+
+    if (this.ctx && this.ctx.scene) this.ctx.scene.add(this.root);
+    _boxCache.forEach(function (g) { g.dispose(); }); _boxCache.clear();
+    _cylCache.forEach(function (g) { g.dispose(); }); _cylCache.clear();
+    _quadCache.forEach(function (g) { g.dispose(); }); _quadCache.clear();
+    void i;
+    return this;
+  };
+
+  LevelJungle.prototype._finalize = function (B) {
+    var keys = Object.keys(B.buckets);
+    for (var k = 0; k < keys.length; k++) {
+      var key = keys[k];
+      var entries = B.buckets[key];
+      if (!entries || !entries.length) continue;
+      var surf = SURF[key] || SURF.mud;
+      if (key === 'mark') {
+        this.material('mark');
+        if (!this._markTex) { B.buckets[key] = null; continue; }
+      }
+      var geo;
+      try { geo = Geo.mergeAll(entries); }
+      catch (e) { GAME.logError('jungle.merge:' + key, e); continue; }
+      if (!surf.keepUV || !geo.attributes.uv) Geo.worldUV(geo, surf.uv);
+      Geo.copyUV1(geo);
+      try { this._paint(key, entries, geo); }
+      catch (e2) { GAME.logError('jungle.paint:' + key, e2); }
+      geo.computeBoundingSphere();
+      var mesh = new THREE.Mesh(geo, this.material(key));
+      mesh.name = 'jungle_' + key;
+      mesh.castShadow = surf.cast;
+      mesh.receiveShadow = surf.recv;
+      mesh.matrixAutoUpdate = false;
+      mesh.updateMatrix();
+      if (key === 'mark') mesh.renderOrder = 2;
+      if (key === 'glazing') mesh.renderOrder = 1;
+      this.root.add(mesh);
+      this.meshes.push(mesh);
+      B.buckets[key] = null;
+    }
+  };
+
+  // Vertex colours are a plain albedo MULTIPLIER on every bucket. What they
+  // carry that a merged bucket cannot get any other way is per-piece value
+  // spread plus, on everything that stands in a rainforest, a MOSS GRADIENT:
+  // biological growth on any surface is a function of how near the ground it is
+  // and which way it faces, and painting that in is most of what stops the
+  // firebase reading as a set of clean boxes dropped into a jungle.
+  LevelJungle.prototype._paint = function (key, entries, geo) {
+    var pos = geo.attributes.position, nrm = geo.attributes.normal;
+    var pa = pos.array, na = nrm.array;
+    var N = pos.count;
+    var col = new Float32Array(N * 3);
+    var noise = this.noise;
+    var organic = (key === 'bark' || key === 'canopy' || key === 'blade');
+    var emissive = (key === 'lit' || key === 'lit2');
+    var vi = 0, e, i, j;
+    for (e = 0; e < entries.length; e++) {
+      var ent = entries[e];
+      var cnt = vertCount(ent.geometry);
+      var tr = 1, tg = 1, tb = 1;
+      if (ent.tint) { tr = ent.tint.r; tg = ent.tint.g; tb = ent.tint.b; }
+      var dk = ent.dark ? Math.max(0.05, 1 - ent.dark) : 1;
+      for (i = 0; i < cnt; i++) {
+        j = (vi + i) * 3;
+        var x = pa[j], y = pa[j + 1], z = pa[j + 2];
+        var ny = na[j + 1];
+        var r = tr * dk, g = tg * dk, b = tb * dk;
+        if (emissive) { col[j] = r; col[j + 1] = g; col[j + 2] = b; continue; }
+        var v = noise.fbm2(x * 0.42 + 3.0, z * 0.42 - 2.0, 2);
+        var gy = this.sampleGround(x, z);
+        var above = y - gy;
+
+        if (!organic) {
+          // sky exposure: the underside of everything in a forest is lit only
+          // by bounce off leaf litter, so it goes darker AND warmer
+          var facing = M.saturate(ny * 0.5 + 0.5);
+          var lit = 0.62 + 0.44 * facing;
+          r *= lit * (1 + v * 0.10);
+          g *= lit * (1 + v * 0.085);
+          b *= lit * (1 - v * 0.02) * 0.93;
+          // MOSS. Thickest within a metre of the ground, on up-facing and
+          // north-facing surfaces, and it decays to nothing by three metres.
+          var mo = M.saturate(1 - above / 2.6) *
+            M.saturate(0.30 + facing * 0.9) *
+            M.smoothstep(0.42, 0.80, n01(noise.fbm2(x * 0.55 - 8.0, z * 0.55 + 5.0, 2)));
+          r = M.lerp(r, r * 0.52, mo * 0.80);
+          g = M.lerp(g, g * 1.18, mo * 0.80);
+          b = M.lerp(b, b * 0.46, mo * 0.80);
+          // water staining runs DOWN, so it lives on the vertical faces
+          var vert = 1 - Math.abs(ny);
+          var st = vert * M.smoothstep(0.52, 0.88,
+            n01(noise.fbm2(x * 1.5 + 21.0, y * 0.35, 2)));
+          r *= 1 - st * 0.26; g *= 1 - st * 0.22; b *= 1 - st * 0.18;
+        } else {
+          // Bark and leaf: the same moss idea, plus a height ramp that cools
+          // and darkens as it climbs into the canopy.
+          var hh = M.saturate(above / 22.0);
+          r *= (1.10 - hh * 0.34) * (1 + v * 0.10);
+          g *= (1.02 - hh * 0.12) * (1 + v * 0.07);
+          b *= (0.90 - hh * 0.10) * (1 - v * 0.04);
+          if (key === 'bark') {
+            var bm = M.saturate(1 - above / 3.4) *
+              M.smoothstep(0.38, 0.78, n01(noise.fbm2(x * 0.62 + 4.0, y * 0.30 - 1.0, 2)));
+            r = M.lerp(r, r * 0.48, bm * 0.85);
+            g = M.lerp(g, g * 1.30, bm * 0.85);
+            b = M.lerp(b, b * 0.44, bm * 0.85);
+          }
+        }
+        col[j] = M.clamp(r, 0.04, 2.2);
+        col[j + 1] = M.clamp(g, 0.04, 2.2);
+        col[j + 2] = M.clamp(b, 0.04, 2.2);
+      }
+      vi += cnt;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  };
+
+  // ---- ground sampling ---------------------------------------------------------
+  LevelJungle.prototype.sampleGround = function (x, z) {
+    var F = this.field;
+    if (F) {
+      var fx = (x - F.x0) / F.cell, fz = (z - F.z0) / F.cell;
+      if (fx >= 0 && fz >= 0 && fx <= F.w - 1.001 && fz <= F.h - 1.001) {
+        var i0 = fx | 0, j0 = fz | 0;
+        var tx = fx - i0, tz = fz - j0;
+        var a = F.a[j0 * F.w + i0], b = F.a[j0 * F.w + i0 + 1];
+        var c = F.a[(j0 + 1) * F.w + i0], d = F.a[(j0 + 1) * F.w + i0 + 1];
+        return M.lerp(M.lerp(a, b, tx), M.lerp(c, d, tx), tz);
+      }
+    }
+    return groundY(x, z, this.plan);
+  };
+
+  // Thick floor slabs following the terrain. The player controller resolves
+  // against colliders, not against sampleGround, so without these the delta has
+  // no floor at all. 4 m tiles taking the MAXIMUM of nine samples: standing a
+  // few centimetres proud of a root buttress is invisible, sinking into one is
+  // not. The river bed gets its own slabs so wading is possible.
+  LevelJungle.prototype._buildFloor = function () {
+    var step = 4.0;
+    var Bk = this.plan.bunker;
+    var bc = Math.cos(Bk.yaw), bs = Math.sin(Bk.yaw);
+    for (var z = Z_MIN; z < Z_MAX; z += step) {
+      for (var x = X_MIN; x < X_MAX; x += step) {
+        // The bunker is a pit with its own floor slab. A 4 m tile taking the
+        // MAXIMUM of nine samples would take the plateau lip and pave straight
+        // over the room.
+        var ddx = (x + step * 0.5) - Bk.x, ddz = (z + step * 0.5) - Bk.z;
+        if (Math.abs(ddx * bc - ddz * bs) < Bk.w * 0.5 + 1.6 &&
+            Math.abs(ddx * bs + ddz * bc) < Bk.d * 0.5 + 1.6) continue;
+        var top = -1e9;
+        for (var sj = 0; sj <= 2; sj++) {
+          for (var si = 0; si <= 2; si++) {
+            var y = this.sampleGround(x + si * step * 0.5, z + sj * step * 0.5);
+            if (y > top) top = y;
+          }
+        }
+        if (top < -1e8) continue;
+        this.addCollider(x + step * 0.5, top - 1.4, z + step * 0.5,
+          step * 0.5, 1.4, step * 0.5, 'dirt', true);
+      }
+    }
+  };
+
+  // ---- the light rig ---------------------------------------------------------
+  // A midday jungle has almost no practicals and inventing street lighting here
+  // would be a lie. What it does have is things that burn regardless of the
+  // hour: two candles in a spirit house, a brazier in the firebase, a hurricane
+  // lamp and a worklight in a bunker that gets no daylight, and a wreck whose
+  // beacon has not finished dying. Every one of them has visible geometry in
+  // this file - a light with no visible source is not a light - and every one
+  // is deliberately in a published framing.
+  //
+  // The SHAFTS are the level's real lighting event and they are published with
+  // `lux`, which makes them FIXTURES rather than solar. That is not a cheat: the
+  // env profile pins sky = 'overcast', so a shaft gated on the solar disc would
+  // simply not exist, and "light arrives as shafts filtered through canopy" is
+  // the first line of the brief. Their colour is yellow-green because that is
+  // what light is after it has been through forty metres of leaf.
+  LevelJungle.prototype._buildLights = function () {
+    var P = this.plan;
+    var pl = this.practicalLights = [];
+    var Sh = this.builtShrine, Fb = this.builtFirebase, Bk = this.builtBunker;
+    var He = this.builtHeli;
+
+    if (Sh && Sh.candle) {
+      pl.push({
+        name: 'shrine_candles', kind: 'fire',
+        pos: [Sh.candle.x, Sh.candle.y, Sh.candle.z],
+        kelvin: 1880, intensity: 7.0, distance: 5.0, dayBase: 1.0,
+        haloScale: 0.55, haloMax: 1.05, haloGain: 0.6,
+        bulbR: 0.035, bulbGain: 1.4, fixed: 1
+      });
+    }
+    if (Fb && Fb.drum) {
+      pl.push({
+        name: 'firebase_brazier', kind: 'fire',
+        pos: [Fb.drum.x, Fb.drum.y + 0.32, Fb.drum.z],
+        kelvin: 1760, intensity: 30, distance: 13, dayBase: 1.0,
+        haloScale: 1.05, haloMax: 2.1, haloGain: 0.7,
+        bulbR: 0.20, bulbGain: 1.2, fixed: 1
+      });
+    }
+    if (Bk && Bk.lantern) {
+      pl.push({
+        name: 'bunker_lantern', kind: 'tungsten',
+        pos: [Bk.lantern.x, Bk.lantern.y, Bk.lantern.z],
+        kelvin: 2180, intensity: 46, distance: 9.5, dayBase: 1.0,
+        haloScale: 0.72, haloMax: 1.6, bulbR: 0.055, fixed: 1
+      });
+    }
+    if (Bk && Bk.worklight) {
+      pl.push({
+        name: 'bunker_worklight', kind: 'fluoro',
+        pos: [Bk.worklight.x, Bk.worklight.y, Bk.worklight.z],
+        kelvin: 3350, intensity: 58, distance: 11.0, dayBase: 1.0,
+        cone: 1.05, penumbra: 0.55,
+        aimPos: [Bk.worklight.x - 1.6, Bk.floorY + 0.35, Bk.worklight.z - 2.6],
+        haloScale: 0.68, haloMax: 1.5, bulbR: 0.07, bulbFlat: 0.5, fixed: 1
+      });
+    }
+    if (He && He.beacon) {
+      pl.push({
+        name: 'heli_beacon', kind: 'sodium',
+        pos: [He.beacon.x, He.beacon.y, He.beacon.z],
+        color: 0xff3418, intensity: 6.5, distance: 7.0, dayBase: 1.0,
+        haloScale: 0.62, haloMax: 1.25, bulbR: 0.075, fixed: 1
+      });
+    }
+
+    // ---- the shafts ---------------------------------------------------------
+    var shafts = this.lightShafts = [];
+    var self = this;
+    function gap(kind, x, z, rise, dx, dz, width, lux, col) {
+      var gy = self.sampleGround(x, z);
+      shafts.push({
+        kind: kind,
+        origin: new THREE.Vector3(x, gy + rise, z),
+        dir: new THREE.Vector3(dx, -1, dz).normalize(),
+        width: width, length: rise, strength: 1.0,
+        lux: lux, always: true, color: col
+      });
+    }
+    // 1 - the track clearing south of the creek. hero1's subject.
+    gap('hero1', P.clearings[0].x + 0.4, P.clearings[0].z, 11.5,
+      0.17, 0.11, 3.5, 15, 0xd8e8a2);
+    // 2 - the gap the helicopter came down through. hero2's key.
+    gap('hero2', P.heli.x + 1.2, P.heli.z - 1.6, 12.0,
+      -0.12, 0.15, 3.1, 15, 0xd2e6a8);
+    // 3 - over the firebase, between the shattered survivors.
+    gap('hero3', P.firebase.x - 3.0, P.firebase.z + 5.0, 8.5,
+      0.13, -0.09, 3.8, 12, 0xdcea9e);
+    // 4 - the shell hole in the bunker roof. The whole reason the interior
+    //     framing is not a black rectangle.
+    if (Bk && Bk.holeAbove) {
+      shafts.push({
+        kind: 'interior',
+        origin: Bk.holeAbove.clone(),
+        dir: new THREE.Vector3(0.07, -1, 0.12).normalize(),
+        width: 2.0, length: 4.2, strength: 1.0,
+        lux: 15, always: true, color: 0xe6e2bc
+      });
+    }
+  };
+
+  // The sea shader lays scum and foam along whatever edges it is given. Without
+  // them the river is a clean plane butted against the bank, which is the
+  // clearest possible statement that it IS a plane.
+  LevelJungle.prototype._publishFoam = function () {
+    var lib = this.ctx && this.ctx.materials;
+    if (!lib || typeof lib.setWaterFoamEdges !== 'function') return;
+    var segs = [];
+    var zs = [-52, -36, -20, -6, 8, 22, 36, 50, 64];
+    for (var i = 0; i + 1 < zs.length && segs.length < 14; i++) {
+      var z0 = zs[i], z1 = zs[i + 1];
+      segs.push([riverC(z0) + riverHalf(z0), z0, riverC(z1) + riverHalf(z1), z1]);
+      if (segs.length < 14) {
+        segs.push([riverC(z0) - riverHalf(z0), z0, riverC(z1) - riverHalf(z1), z1]);
+      }
+    }
+    try { lib.setWaterFoamEdges(segs); }
+    catch (e) { GAME.logError('jungle.foam', e); }
+  };
+
+  // ---- spawns and the published framings -------------------------------------
+  LevelJungle.prototype._buildSpawns = function () {
+    var self = this;
+    var P = this.plan;
+    var V = THREE.Vector3;
+
+    function sp(x, z, yaw, yOff) {
+      self.spawnPoints.push({
+        position: new V(x, self.sampleGround(x, z) + (yOff || 0.03), z), yaw: yaw
+      });
+    }
+    function pose(px, py, pz, tx, ty, tz) {
+      var dx = tx - px, dy = ty - py, dz = tz - pz;
+      var horiz = Math.sqrt(dx * dx + dz * dz);
+      return {
+        position: new V(px, py, pz),
+        yaw: Math.atan2(-dx, -dz),
+        pitch: Math.atan2(dy, Math.max(1e-4, horiz))
+      };
+    }
+
+    // [0] is the player: the southern landing, on the track, facing north up it
+    // with the whole approach to the firebase ahead.
+    sp(trackX(57) + 0.8, 57, 0.03);
+    sp(trackX(48) - 1.4, 48, 0.02);
+    sp(trackX(39) + 2.0, 39, -0.06);
+    sp(trackX(30) - 1.8, 30, 0.04);
+    sp(trackX(20) + 1.6, 20, 0.02);
+    sp(trackX(10) - 2.2, 10, 0.0);
+    sp(trackX(2) + 2.4, 2, 0.0);
+    sp(P.gate.x - 1.4, P.gate.z + 2.2, 0.0);
+    sp(P.helipad.x, P.helipad.z, 2.6);
+    sp(P.mortar.x - 3.4, P.mortar.z + 1.0, 1.9);
+    var bkA = this.anchors.bunker;
+    sp(bkA.centre.x + 2.4, bkA.centre.z + 5.0, 3.14);
+    sp(P.heli.x + 5.0, P.heli.z + 2.5, -1.5);
+    sp(P.bridge.x + 1.6, P.bridge.nearZ + 2.0, 0.0);
+    sp(P.sluice.x + 3.0, P.sluice.z + 3.0, -1.0);
+
+    var g;
+
+    // ---- HERO1 : the signature image ---------------------------------------
+    // Standing in the track ruts at z = 48, west of the crown so the road
+    // curves away to the right, looking north. Six depths, and each one is a
+    // different KIND of thing, which is what stops a canopy frame collapsing
+    // into one wash of green:
+    //   * 0-2 m  elephant grass at the verge, in the bottom corners
+    //   * 5-8 m  the fallen trunk lying across the road - the foreground bar
+    //   * 10 m   the spirit house on the right verge, the only warm mark
+    //   * 12 m   the canopy gap: a shaft landing in the ruts, with mist in it
+    //   * 21 m   the collapsed bamboo footbridge over the creek
+    //   * 40 m+  the track climbing to the firebase, dissolving into vapour
+    // The aim is at the road surface 15 m out rather than at the vanishing
+    // point, which puts the canopy ceiling on the upper third for free and
+    // keeps the bright overcast out of the top of the frame - a jungle whose
+    // top half is sky is not a jungle, and it is also how a vertical imbalance
+    // metric goes to four.
+    var h1z = 48.0;
+    var h1x = trackX(h1z) - 1.45;
+    g = this.sampleGround(h1x, h1z);
+    var hero1 = pose(h1x, g + 1.66, h1z,
+      trackX(33.0), this.sampleGround(trackX(33.0), 33.0) + 1.15, 33.0);
+
+    // ---- HERO2 : the wreck --------------------------------------------------
+    // SOLVED, not guessed. The requirement is specific: the camera has to be on
+    // the LAND side so the airframe is read against the bright river rather
+    // than against more forest, close enough that the rotor and the torn boom
+    // are legible, and high enough on the bank to see the skids in the water
+    // without turning the shot into a plan view. A fan of bearings is scored
+    // against exactly those three things.
+    var hx = P.heli.x, hz = P.heli.z, hy = P.heli.y;
+    // AUTHORED, NOT SEARCHED, and the reason is worth recording. Three rounds of
+    // scored search were run over the bank and every one of them traded the
+    // subject away for its own scoring terms: the first stood off the TAIL
+    // quarter, where a slick is a box seen end-on; the second found clear ground
+    // seventeen metres out and made the wreck a detail; the third walked down to
+    // the waterline and put a mangrove clump across half the frame. The pose has
+    // exactly one correct answer - square onto the fuselage, at ten metres, on
+    // the bank - and plan() has already cleared the understory and the mangroves
+    // along that bearing (P.camMarks). Searching for something the plan has
+    // already decided just gives the search a chance to be wrong.
+    var beam = P.heli.yaw + Math.PI * 0.5;
+    var bx0 = Math.sin(beam), bz0 = Math.cos(beam);
+    var hd2 = 10.0, hcx = 0, hcz = 0, hcy = 0;
+    for (var hstep = 0; hstep < 7; hstep++) {
+      hcx = hx + bx0 * hd2; hcz = hz + bz0 * hd2;
+      hcy = this.sampleGround(hcx, hcz);
+      // step back only if the mark landed in the water
+      if (hcy > WATER_Y + 0.35) break;
+      hd2 += 1.2;
+    }
+    var hero2 = pose(hcx, hcy + 1.62, hcz, hx, hy + 1.75, hz);
+
+    // ---- HERO3 : the watchtower, and the verticality ------------------------
+    // Standing on the PSP at the north end of the firebase looking back south
+    // across it. The brazier is 13 m out on the left third with its own light
+    // on the sandbags around it; the command bunker's shell-holed roof closes
+    // the left edge; the tower is 19 m away at centre-right with its whole
+    // 10.7 m in frame from underneath, and the canopy stands behind it - which
+    // is the point, because a tower photographed against sky could be anywhere.
+    var camL = P.fbW(-4.0, -11.0);
+    var h3g = this.sampleGround(camL[0], camL[1]);
+    var TW = this.anchors.tower;
+    var hero3 = pose(camL[0], h3g + 1.62, camL[1],
+      TW.base.x, P.firebase.y + 7.0, TW.base.z);
+
+    // ---- INTERIOR : the command bunker --------------------------------------
+    // Just inside the doorway, looking across the cone of light coming through
+    // the shell hole. Solved from the bunker's own geometry (see buildBunker)
+    // so it can never drift off the hole it exists to photograph.
+    var interior;
+    if (this.builtBunker && this.builtBunker.interiorEye) {
+      var ie = this.builtBunker.interiorEye, it = this.builtBunker.interiorTarget;
+      interior = pose(ie.x, this.builtBunker.floorY + 1.58, ie.z, it.x, it.y, it.z);
+    } else {
+      var bc = this.anchors.bunker;
+      interior = pose(bc.centre.x, bc.floorY + 1.58, bc.centre.z + 3.0,
+        bc.centre.x, bc.floorY + 1.2, bc.centre.z - 3.0);
+    }
+
+    // ---- OVERVIEW ------------------------------------------------------------
+    // From the watchtower platform. This is the ONLY place in the level you can
+    // get above the understory, which is the honest answer for a jungle: there
+    // is no hillside to stand on because the canopy is 25 m tall and closed.
+    // From up here the firebase is laid out below, the track runs away south
+    // through the canopy, the river opens on the right, and the far bank goes
+    // into vapour - the whole level in one frame, in four depths.
+    var tYaw = P.tower.yaw;
+    var fwdX = Math.sin(tYaw), fwdZ = Math.cos(tYaw);
+    var tp = (this.builtTower && this.builtTower.platform) || null;
+    var ovx = (tp ? tp.x : TW.base.x) + fwdX * 2.10;
+    var ovy = (tp ? tp.y : TW.platformY) + 1.55;
+    var ovz = (tp ? tp.z : TW.base.z) + fwdZ * 2.10;
+    var ovtx = ovx + fwdX * 40.0, ovtz = ovz + fwdZ * 40.0;
+    var overview = pose(ovx, ovy, ovz,
+      ovtx, this.sampleGround(M.clamp(ovtx, X_MIN, X_MAX),
+        M.clamp(ovtz, Z_MIN, Z_MAX)) + 4.0, ovtz);
+
+    this.cameraPoses = {
+      overview: overview, hero1: hero1, hero2: hero2, hero3: hero3,
+      interior: interior,
+      // kept so an operator can ask for them by the level's own names too
+      track: hero1, wreck: hero2, firebase: hero3, bunker: interior,
+      tower: overview
+    };
+  };
+
+  // ---- nav ---------------------------------------------------------------------
+  LevelJungle.prototype._buildNav = function () {
+    var cell = 0.85;
+    var ox = X_MIN + 2, oz = Z_MIN + 2;
+    var w = Math.ceil((X_MAX - 2 - ox) / cell);
+    var h = Math.ceil((Z_MAX - 2 - oz) / cell);
+    var walkable = new Uint8Array(w * h);
+    var height = new Float32Array(w * h);
+    var obst = [], i;
+    var min = new THREE.Vector3(), max = new THREE.Vector3();
+    for (i = 0; i < this.colliders.length; i++) {
+      var c = this.colliders[i];
+      if (c.floor) continue;
+      GAME.Collision.boxBounds(c, min, max);
+      obst.push([min.x - 0.30, max.x + 0.30, min.z - 0.30, max.z + 0.30, min.y, max.y]);
+    }
+    for (var iz = 0; iz < h; iz++) {
+      var z = oz + (iz + 0.5) * cell;
+      for (var ix = 0; ix < w; ix++) {
+        var x = ox + (ix + 0.5) * cell;
+        var idx = iz * w + ix;
+        var y = this.sampleGround(x, z);
+        height[idx] = y;
+        // deep water is not walkable; the shallows and the mud bars are
+        if (y < WATER_Y - 0.55) continue;
+        // nor is the steep ground of the rim or the creek scarp
+        var s1 = this.sampleGround(x + cell, z), s2 = this.sampleGround(x, z + cell);
+        if (Math.abs(s1 - y) > 0.85 || Math.abs(s2 - y) > 0.85) continue;
+        var ok = 1;
+        for (i = 0; i < obst.length; i++) {
+          var o = obst[i];
+          if (x < o[0] || x > o[1] || z < o[2] || z > o[3]) continue;
+          if (o[5] > y + 0.42 && o[4] < y + 1.80) { ok = 0; break; }
+        }
+        walkable[idx] = ok;
+      }
+    }
+    this.navGrid = {
+      origin: new THREE.Vector3(ox, 0, oz),
+      cellSize: cell, w: w, h: h,
+      walkable: walkable, height: height,
+      at: function (px, pz) {
+        var gx = Math.floor((px - ox) / cell), gz = Math.floor((pz - oz) / cell);
+        if (gx < 0 || gz < 0 || gx >= w || gz >= h) return 0;
+        return walkable[gz * w + gx];
+      },
+      heightAt: function (px, pz) {
+        var gx = Math.floor((px - ox) / cell), gz = Math.floor((pz - oz) / cell);
+        if (gx < 0 || gz < 0 || gx >= w || gz >= h) return 0;
+        return height[gz * w + gx];
+      }
+    };
+  };
+
+  // ---- broadphase + raycast ------------------------------------------------------
+  LevelJungle.prototype._buildBroadphase = function () {
+    var min = new THREE.Vector3(), max = new THREE.Vector3();
+    this._hash.clear();
+    for (var i = 0; i < this.colliders.length; i++) {
+      var c = this.colliders[i];
+      c._id = i;
+      c._stamp = -1;
+      GAME.Collision.boxBounds(c, min, max);
+      this._hash.insert(c, min, max);
+    }
+  };
+
+  var _rcDir = new THREE.Vector3();
+  var _rcHit = { point: new THREE.Vector3(), normal: new THREE.Vector3() };
+
+  LevelJungle.prototype.raycast = function (origin, dir, maxDist) {
+    var out = {
+      hit: false, point: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0),
+      material: null, distance: maxDist === undefined ? Infinity : maxDist, collider: null
+    };
+    if (!origin || !dir) return out;
+    maxDist = (maxDist === undefined || maxDist <= 0) ? 400 : maxDist;
+    out.distance = maxDist;
+    var d = _rcDir.copy(dir);
+    var dl = d.length();
+    if (dl < 1e-9) return out;
+    d.multiplyScalar(1 / dl);
+
+    var cell = this._hash.cell;
+    var stamp = ++this._stamp;
+    var ix = Math.floor(origin.x / cell), iy = Math.floor(origin.y / cell);
+    var iz = Math.floor(origin.z / cell);
+    var sx = d.x > 0 ? 1 : -1, sy = d.y > 0 ? 1 : -1, sz = d.z > 0 ? 1 : -1;
+    var ax = Math.abs(d.x), ay = Math.abs(d.y), az = Math.abs(d.z);
+    var tdx = ax > 1e-9 ? cell / ax : Infinity;
+    var tdy = ay > 1e-9 ? cell / ay : Infinity;
+    var tdz = az > 1e-9 ? cell / az : Infinity;
+    var tmx = ax > 1e-9 ? ((d.x > 0 ? (ix + 1) * cell - origin.x : origin.x - ix * cell) / ax) : Infinity;
+    var tmy = ay > 1e-9 ? ((d.y > 0 ? (iy + 1) * cell - origin.y : origin.y - iy * cell) / ay) : Infinity;
+    var tmz = az > 1e-9 ? ((d.z > 0 ? (iz + 1) * cell - origin.z : origin.z - iz * cell) / az) : Infinity;
+
+    var best = maxDist, bestC = null;
+    var map = this._hash.map, keyOf = this._hash._key;
+    var guard = 0, t = 0;
+    while (t <= maxDist && guard++ < 900) {
+      var bucket = map.get(keyOf.call(this._hash, ix, iy, iz));
+      if (bucket) {
+        for (var i = 0; i < bucket.length; i++) {
+          var c = bucket[i];
+          if (c._stamp === stamp) continue;
+          c._stamp = stamp;
+          var hitT = GAME.Collision.raycastBox(origin, d, c, _rcHit);
+          if (hitT >= 0 && hitT < best) {
+            best = hitT; bestC = c;
+            out.point.copy(_rcHit.point);
+            out.normal.copy(_rcHit.normal);
+          }
+        }
+      }
+      var tNext = Math.min(tmx, Math.min(tmy, tmz));
+      if (bestC && best <= tNext) break;
+      t = tNext;
+      if (tmx <= tmy && tmx <= tmz) { ix += sx; tmx += tdx; }
+      else if (tmy <= tmz) { iy += sy; tmy += tdy; }
+      else { iz += sz; tmz += tdz; }
+      if (!isFinite(t)) break;
+    }
+    if (bestC) {
+      out.hit = true;
+      out.distance = best;
+      out.collider = bestC;
+      out.material = bestC.material;
+    }
+    return out;
+  };
+
+  // ---- per frame ------------------------------------------------------------------
+  // The delta itself is static. What is not: the air moves the leaves, the fire
+  // in the drum and the two candles are flames rather than lamps, and the
+  // wreck's beacon is still cycling on a dying battery.
+  //
+  // The wetness line is the one that matters. materials.js only drives its soak
+  // layer on levels whose registry entry declares a weather preset, and this
+  // level declares its drizzle inside `env` instead - so the whole wet contract
+  // would sit at zero on a level whose brief is "humid drizzle, water dripping
+  // from leaves". setWetness/setRainIntensity are public API and this is what
+  // they exist for: the level knows it is raining even when the registry
+  // heuristic does not.
+  LevelJungle.prototype.update = function (dt, ctx) {
+    this._t += (dt || 0);
+    var t = this._t;
+    this._clock.value = t;
+
+    try {
+      var lib = ctx && ctx.materials;
+      var w = ctx && ctx.weather;
+      if (lib && w && !lib.wetEnabled) {
+        if (typeof lib.setWetness === 'function' && isFinite(w.wetness)) {
+          lib.setWetness(w.wetness);
+        }
+        if (typeof lib.setRainIntensity === 'function' && isFinite(w.rainIntensity)) {
+          lib.setRainIntensity(w.rainIntensity);
+        }
+        if (typeof lib.setWind === 'function' && w.windDir && isFinite(w.windSpeed)) {
+          lib.setWind(w.windDir.x, w.windDir.y, w.windSpeed);
+        }
+      }
+    } catch (e) { /* the level renders dry rather than not at all */ }
+
+    // Flame, driven by two decorrelated noise bands and never a sine: a sine
+    // reads as an animation curve within about two cycles.
+    var m = this._litMat;
+    if (m) {
+      var f1 = this.noise.fbm2(t * 2.7, 3.1, 3, 2, 0.5);
+      var f2 = this.noise.perlin2(t * 0.83, 17.4);
+      m.emissiveIntensity = 6.2 * M.clamp(1.0 + f1 * 0.34 + f2 * 0.20, 0.42, 1.75);
+    }
+    var m2 = this._litMat2;
+    if (m2) {
+      // a dying rotating beacon: mostly off, a hard flash, a slow decay
+      var ph = (t * 0.72) % 1;
+      var flash = Math.pow(M.saturate(1 - ph * 3.0), 2.0);
+      m2.emissiveIntensity = 0.35 + 4.2 * flash;
+    }
+  };
+
+  GAME.LevelJungle = LevelJungle;
+})(window.GAME, window.THREE);

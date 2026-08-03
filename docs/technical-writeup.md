@@ -1,6 +1,6 @@
 # OPERATION BLACKOUT
 
-## A 122,000-line AAA-target FPS with zero art assets, built by orchestrated AI agents
+## A 157,000-line AAA-target FPS with zero art assets, built by orchestrated AI agents
 
 *Technical write-up — architecture, methodology, findings, and applicability to future game development.*
 
@@ -16,7 +16,7 @@
 
 | Metric | Value |
 |---|---|
-| Game source | 121,758 lines across 28 JavaScript modules |
+| Game source | 156,859 lines across 36 JavaScript modules |
 | Tooling | 1,616 lines of Python across 9 tools |
 | Design docs | 1,138 lines of Markdown contracts |
 | Levels | 10, each with a distinct time of day, weather, light source and palette |
@@ -401,6 +401,10 @@ Ten levels, each pinned to a different point in time-of-day, weather, light sour
 
 *Levels 3–6. Top to bottom: Kirovsk Pass (blizzard whiteout), Line 4 Zarechnaya (flooded metro, lit only by failing fluorescents), Meridian Tower (unfinished skyscraper at sunset), AMARG Boneyard (desert aircraft storage at brutal noon). Each is pinned to a different point in time-of-day, weather, light source, spatial character and material family.*
 
+![Levels 7-10](embed/wave2_sheet.jpg)
+
+*Levels 7–10. Top to bottom: Facility K-17 (a buried command facility with no sky, lit by failing fluorescents and rotating alarm beacons), Mekong Delta (canopy light shafts through dense growth), Zubair Refinery (flare stacks throwing moving firelight over a wet apron at dusk), Bayon Ruins (overgrown stone temple at dawn in ground mist). Each was built by two agents — geometry then dressing — with no edits to any shared rendering system.*
+
 ![Line 4 — Zarechnaya](embed/metro_hero.jpg)
 
 *Line 4 — Zarechnaya. A sealed level with no sky at all: every photon comes from emergency fluorescent strips and worklights. The sickly green grade, standing water and tunnel geometry are all driven by the level's declarative environment profile — no shared rendering system was edited to produce this look.*
@@ -475,9 +479,10 @@ Every number below is measured from the orchestration logs, not estimated.
 | Harbor critique round 2 | 15 | 4.20M | 2,009 |
 | Harbor regression round 3 | 6 | 2.10M | 1,138 |
 | Build levels 3–6 | 13 | 5.26M | 1,849 |
-| **Total** | **147** | **39.2M** | **16,620** |
+| Build levels 7–10 | 9 | 4.15M | 1,525 |
+| **Total** | **156** | **43.4M** | **18,145** |
 
-Roughly **39.2 million tokens across 147 agent runs and 16,620 tool calls**, producing ~122,000 lines of game code plus tooling and documentation.
+Roughly **43.4 million tokens across 156 agent runs and 18,145 tool calls**, producing ~157,000 lines of game code plus tooling and documentation.
 
 ## 10.2 Converting that to money
 
@@ -487,11 +492,11 @@ At Claude Opus 5 API rates (**$5 per million input, $25 per million output**):
 
 | Assumption | Estimate |
 |---|---|
-| 90% input / 10% output, no caching | **~$275** |
+| 90% input / 10% output, no caching | **~$305** |
 | Same split, with prompt caching on the stable prefix | Materially lower — cache reads bill at ~0.1× input |
-| Worst case (all output-priced) | ~$980 |
+| Worst case (all output-priced) | ~$1,085 |
 
-**Call it a few hundred dollars of API-equivalent usage for the whole project** — ten levels of a 122,000-line game. For comparison, that is a rounding error against a single day of one professional game developer's time.
+**Call it a few hundred dollars of API-equivalent usage for the whole project** — ten levels of a 157,000-line game. For comparison, that is a rounding error against a single day of one professional game developer's time.
 
 This particular run executed on a **Claude Code subscription** rather than metered API billing, which changes the economics: the constraint became rate limits rather than cost. That was not theoretical — one workflow lost 12 of 20 agents mid-run to a session limit and had to be resumed. The resume replayed the 8 completed agents from cache and re-ran only the 12 that died, which is why the interrupted round still cost 3.78M tokens with nothing to show for it.
 
@@ -504,6 +509,7 @@ This is the most useful number in the project:
 | Level 1 (market) | 21.2M | Includes building the entire engine — 14 systems from nothing |
 | Level 2 (harbor) | 12.7M | One level, but required edits to 6 shared systems |
 | Levels 3–6 | 5.3M for four | **~1.3M per level** |
+| Levels 7–10 | 4.2M for four | **~1.0M per level** — no fix round needed |
 
 **Level 2 cost roughly 10× what levels 3–6 did, per level.** The difference is entirely architectural. Level 2 required every agent to edit `sky.js`, `lighting.js`, `postfx.js` and `weather.js` — serialising work onto shared files, and requiring three separate fix-and-critique rounds to undo the resulting breakage.
 
