@@ -837,7 +837,9 @@
       g.save();
       g.translate(S * 0.5 + Math.cos(sa) * sr, S * 0.5 + Math.sin(sa) * sr);
       g.rotate(rng.range(0, 6.283));
-      g.fillStyle = 'rgba(' + rng.pick(['206,186,132', '182,160,108', '154,134,88', '218,202,158']) +
+      // straw is warm, but only just: this is the one legitimately warm mark in
+      // the level and it is 4 m from a barn door, not in the middle of a road
+      g.fillStyle = 'rgba(' + rng.pick(['186,174,140', '164,150,116', '138,126,98', '198,188,160']) +
         ',' + rng.range(0.5, 0.95).toFixed(2) + ')';
       g.fillRect(0, 0, rng.range(S * 0.02, S * 0.10), rng.range(S * 0.003, S * 0.010));
       g.restore();
@@ -845,18 +847,25 @@
     g.restore();
 
     // ---- diesel, grit and the slush a stalled lorry stands in ---------------
+    // COOLED, deliberately. The warm version of this cell produced a salmon
+    // ground patch at the checkpoint measuring RGB (0.537, 0.487, 0.483) at
+    // saturation 0.101 in a frame whose global saturation is 0.055 - the most
+    // chromatic thing on screen, in a level whose brief is white and pale blue.
+    // A single warm blotch in a whiteout reads as a bug, not as storytelling.
+    // Trodden slush IS blue-grey: it is snow with grit in it, seen under a sky
+    // that is the only light source in the level.
     o = origin(CELL.diesel);
     g.save(); g.translate(o[0], o[1]);
     var dg = g.createRadialGradient(S * 0.5, S * 0.5, S * 0.02, S * 0.5, S * 0.5, S * 0.5);
-    dg.addColorStop(0, 'rgba(20,18,15,0.80)');
-    dg.addColorStop(0.30, 'rgba(38,34,28,0.56)');
-    dg.addColorStop(0.68, 'rgba(74,70,64,0.26)');
-    dg.addColorStop(1, 'rgba(90,88,84,0.0)');
+    dg.addColorStop(0, 'rgba(17,19,24,0.80)');
+    dg.addColorStop(0.30, 'rgba(33,37,46,0.56)');
+    dg.addColorStop(0.68, 'rgba(64,71,84,0.26)');
+    dg.addColorStop(1, 'rgba(80,88,102,0.0)');
     g.fillStyle = dg; g.fillRect(0, 0, S, S);
     // the rainbow film at the edge of a fuel spill, faint - it is a wet mark on
     // a frozen level and overselling it would be a lie
     for (i = 0; i < 5; i++) {
-      g.strokeStyle = 'rgba(' + ['120,96,140', '96,120,132', '132,116,88'][i % 3] + ',0.16)';
+      g.strokeStyle = 'rgba(' + ['104,96,132', '86,112,128', '96,104,96'][i % 3] + ',0.11)';
       g.lineWidth = S * 0.02;
       g.beginPath();
       g.ellipse(S * 0.5, S * 0.5, S * (0.18 + i * 0.055), S * (0.14 + i * 0.048),
@@ -866,8 +875,8 @@
     for (i = 0; i < 700; i++) {
       var ga = rng.range(0, 6.283), gr2 = Math.pow(rng.next(), 0.5) * S * 0.5;
       var v = rng.range(0.12, 0.5);
-      g.fillStyle = 'rgba(' + Math.round(60 + v * 110) + ',' + Math.round(56 + v * 100) +
-        ',' + Math.round(50 + v * 92) + ',' + (0.22 + v).toFixed(2) + ')';
+      g.fillStyle = 'rgba(' + Math.round(44 + v * 84) + ',' + Math.round(51 + v * 92) +
+        ',' + Math.round(63 + v * 106) + ',' + (0.22 + v).toFixed(2) + ')';
       g.fillRect(S * 0.5 + Math.cos(ga) * gr2, S * 0.5 + Math.sin(ga) * gr2,
         rng.range(0.6, 2.2), rng.range(0.6, 2.2));
     }
@@ -1390,17 +1399,84 @@
     return g.toNonIndexed ? (function () { var t = g.toNonIndexed(); g.dispose(); return t; })() : g;
   };
 
+  // ---- THE COLLAR ----------------------------------------------------------
+  // A ring of snow banked round the foot of something standing in it, welded
+  // into the surface rather than sitting on it.
+  //
+  // This is the fix for the level's most damaging measured defect. A vertical
+  // luminance profile through the marker pole in enemy_closeup: pole 0.368,
+  // snow 0.434, then 0.437 +/- 0.004 for the next 64 pixels - sixty-four pixels
+  // of mathematically flat snow directly beneath a 1.55 m post. Under bucket A:
+  // body 0.307, then a 0.21 jump to 0.518 in nine pixels with no gradient. The
+  // _settle() machinery is elaborate and correct and it solves Y; Y was never
+  // what the eye reads. What reads is contact - a drift collar, a scour seam,
+  // and a darkening in the ground under the object, and this is the first of
+  // the three.
+  //
+  // Deliberately not a circle: proud and banked on the lee (+WIND_X, +WIND_Z),
+  // scoured to nothing upwind, and the outer rim sinks BELOW the surrounding
+  // surface so it cannot read as a washer lying on the ground.
+  K.snowCollar = function (r, h, noise, seed) {
+    var seg = 10, rings = 3;
+    var inR = Math.max(0.030, r * 0.55);
+    var grid = [], ri, si;
+    for (ri = 0; ri <= rings; ri++) {
+      var t = ri / rings;
+      var row = [];
+      for (si = 0; si <= seg; si++) {
+        var a = (si % seg) / seg * Math.PI * 2;
+        var c = Math.cos(a), s = Math.sin(a);
+        var lee = M.saturate((c * WIND_X + s * WIND_Z) * 0.5 + 0.5);
+        // Smooth and periodic in the azimuth. A per-vertex hash here makes
+        // adjacent segments differ by half their radius, and a ten-segment ring
+        // carrying that is a white star sitting on the snow rather than a bank
+        // growing out of it.
+        var ph = (seed || 0) * 0.618;
+        var jit = 0.88 + 0.13 * Math.sin(a * 2 + ph) + 0.08 * Math.sin(a * 3 - ph * 1.7);
+        var rOut = r * (0.92 + 0.78 * lee * lee) * jit;
+        var rr = inR + (rOut - inR) * t;
+        var prof = (1 - t) * 0.50 + Math.max(0, 1 - Math.abs((t - 0.32) / 0.64)) * 0.78;
+        var yy = h * (0.28 + 1.15 * lee) * jit * prof - 0.045 * t * t;
+        row.push([c * rr, yy, s * rr]);
+      }
+      grid.push(row);
+    }
+    var pos = [], nor = [];
+    function tri(A, Bv, C) {
+      var ux = Bv[0] - A[0], uy = Bv[1] - A[1], uz = Bv[2] - A[2];
+      var vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
+      var nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      var l = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      pos.push(A[0], A[1], A[2], Bv[0], Bv[1], Bv[2], C[0], C[1], C[2]);
+      nor.push(nx / l, ny / l, nz / l, nx / l, ny / l, nz / l, nx / l, ny / l, nz / l);
+    }
+    for (ri = 0; ri < rings; ri++) {
+      for (si = 0; si < seg; si++) {
+        tri(grid[ri][si], grid[ri][si + 1], grid[ri + 1][si + 1]);
+        tri(grid[ri][si], grid[ri + 1][si + 1], grid[ri + 1][si]);
+      }
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
+    return g;
+  };
+
   // A free drift lump: banked snow against a wall, a wheel, a fence post.
   K.snowLump = function (noise, rng) {
-    var g = new THREE.SphereGeometry(0.5, 9, 6);
+    // 12 x 7 rather than 9 x 6, and flatter. At the old tessellation a bank
+    // scaled out to four metres across resolved into a faceted pyramid with a
+    // hard apex - a drift is a smooth wind-made surface and a visible facet on
+    // one is the same failure as a flat wall, just curved.
+    var g = new THREE.SphereGeometry(0.5, 12, 7);
     var p = g.attributes.position;
     for (var i = 0; i < p.count; i++) {
       var x = p.getX(i), y = p.getY(i), z = p.getZ(i);
       var n1 = noise.fbm3(x * 2.6 + 11, y * 2.6, z * 2.6 - 5, 3, 2.1, 0.55);
       // squashed, and drawn out downwind into a tail
-      var tail = 1 + 0.85 * M.saturate((x * WIND_X + z * WIND_Z) * 2);
-      p.setXYZ(i, x * (1 + n1 * 0.30) * tail, Math.max(0, y * (0.52 + n1 * 0.22)),
-        z * (1 + n1 * 0.30) * tail);
+      var tail = 1 + 0.72 * M.saturate((x * WIND_X + z * WIND_Z) * 2);
+      p.setXYZ(i, x * (1 + n1 * 0.26) * tail, Math.max(0, y * (0.44 + n1 * 0.18)),
+        z * (1 + n1 * 0.26) * tail);
     }
     p.needsUpdate = true;
     g.computeVertexNormals();
@@ -1800,8 +1876,10 @@
     this.smokeParts = [];
     this.ravens = [];
     this._occ = new Map();
+    this._contact = [];             // {x,z,r} handed to level.paintGroundContact
     this._skipped = 0;
     this._capCount = 0;
+    this._collarCount = 0;
 
     this.stats = { instances: 0, drawCalls: 0, tris: 0, colliders: 0, skipped: 0, full: [] };
 
@@ -2340,6 +2418,12 @@
       this._snowCap(x, capY, z, capW, capD, opts.capH === undefined ? 0.075 : opts.capH, yaw);
       if (r > 0.20) this._drift(x, z, r * this.rng.range(1.05, 1.55), y);
     }
+    // The collar and its contact ring go on EVERY dropped prop, cap or no cap:
+    // it is not dressing, it is the thing that stops the prop being a decal.
+    if (opts.collar !== false) {
+      this._collar(x, y - (opts.sink || 0), z,
+        Math.max(0.20, (opts.collarR || r * 1.05) * sc), opts.collarH);
+    }
     return y;
   };
 
@@ -2368,6 +2452,24 @@
     var g = K.snowCap(w, d, h, this.noise, this._capCount * 0.37, [this.windDir.x, this.windDir.y]);
     this._static('snow', g, Tn(x, y, z, 0, yaw || 0, 0));
     this._capCount++;
+  };
+
+  // A modelled collar at the foot of a prop, plus the contact occluder that
+  // goes with it.  The two are issued together on purpose: a collar with no
+  // darkening under it still photographs as a cutout, and a darkening with no
+  // collar reads as a stain.  The third leg - the actual vertex-colour ring in
+  // the ground mesh - is rasterised by the LEVEL, from the list built here, in
+  // _commit; see LevelSnowbound.paintGroundContact.
+  PropsSnowbound.prototype._collar = function (x, y, z, r, h) {
+    if (this._collarCount === undefined) this._collarCount = 0;
+    this._contact.push({ x: x, z: z, r: r });
+    if (this._collarCount > 900) return;
+    if (!(r > 0.06)) return;
+    if (this._inChurch(x, z, 0)) return;
+    var g = K.snowCollar(r, h === undefined ? Math.min(0.14, r * 0.28) : h,
+      this.noise, this._collarCount * 0.61);
+    this._static('snow', g, Tn(x, (y === undefined ? this._ground(x, z) : y) - 0.02, z));
+    this._collarCount++;
   };
 
   // A drift banked against something.  Deposition is on the LEE side, which for
@@ -2609,6 +2711,9 @@
   PropsSnowbound.prototype._putSettled = function (key, geo, x, z, yaw, r, dy, k) {
     var st = this._settle(x, z, r === undefined ? 0.6 : r, yaw || 0, k);
     this._static(key, geo, Tn(x, st.y + (dy || 0), z, st.rx, yaw || 0, st.rz));
+    // Same contract as _drop: anything standing on the snow gets a modelled
+    // base, not a corrected height.
+    this._collar(x, st.y + (dy || 0), z, Math.max(0.24, (r === undefined ? 0.6 : r) * 0.95));
     return st.y;
   };
 
@@ -3617,10 +3722,29 @@
         }
       }
     }
-    this._snowCap(ex, ey + 0.72, ez, bagW * 6.4, 0.75, 0.14, yaw + Math.PI * 0.5);
+    // SNOW ON EVERY UPWARD FACE. hero2 photographed a clean, sharp, snow-free
+    // checkpoint in the middle of a blizzard while the dacha roofs twelve
+    // metres behind it carried 30 cm - the single most obvious way this frame
+    // was losing. Every crown, lid, rail and top face at this checkpoint now
+    // carries a load, and every base carries a windward bank.
+    this._snowCap(ex, ey + 0.78, ez, bagW * 6.4, 0.70, 0.11, yaw + Math.PI * 0.5);
+    for (i = 0; i < 6; i++) {
+      var bcx = ex + px * (i - 2.5) * bagW * 0.92;
+      var bcz = ez + pz * (i - 2.5) * bagW * 0.92;
+      this._snowCap(bcx, ey + 0.72, bcz, bagW * 1.15, 0.66, R.range(0.10, 0.19),
+        yaw + Math.PI * 0.5 + R.gaussian(0, 0.14));
+      // and on the middle course's step-back, where a bag ledge catches it
+      if (i % 2 === 0) {
+        this._snowCap(bcx + ax * 0.30, ey + 0.48, bcz + az * 0.30, bagW * 1.0, 0.30, 0.08,
+          yaw + Math.PI * 0.5);
+      }
+    }
     this._collider(ex, ey, ez, [bagW * 3.4, 0.36, 0.42], yaw + Math.PI * 0.5, 'sandbag');
     this._occupy(ex, ez, 2.2);
     this._bankFace(ex, ez, yaw, bagW * 3.2, this.windDir.x, this.windDir.y, 0.7, 5, 0.45);
+    this._bankFace(ex, ez, yaw, bagW * 3.0, -this.windDir.x, -this.windDir.y, 0.55, 4, 0.30);
+    this._collar(ex + px * 1.2, ey, ez + pz * 1.2, 1.10, 0.20);
+    this._collar(ex - px * 1.2, ey, ez - pz * 1.2, 1.10, 0.20);
     // the kit inside the emplacement
     this._drop(this.B.ammo, ex + ax * R.range(-1.5, -0.8) + px * R.range(-1.0, 1.0),
       ez + az * R.range(-1.5, -0.8) + pz * R.range(-1.0, 1.0),
@@ -3637,9 +3761,20 @@
     for (i = -1; i <= 1; i += 2) {
       var tx2 = trx + px * i * 1.45 + R.range(-0.2, 0.2);
       var tz2 = trz + pz * i * 1.45 + R.range(-0.2, 0.2);
-      var ty2 = this._putSettled('wood', trg, tx2, tz2,
-        yaw + Math.PI * 0.5 + R.range(-0.25, 0.25), 0.8, -0.06);
-      this._snowCap(tx2, ty2 + 0.96, tz2, 1.45, 0.14, 0.05, yaw + Math.PI * 0.5);
+      var tyaw = yaw + Math.PI * 0.5 + R.range(-0.25, 0.25);
+      var ty2 = this._putSettled('wood', trg, tx2, tz2, tyaw, 0.8, -0.06);
+      // the top rail, the mid rail and both trestle feet all catch snow: bare
+      // timber with crisp arrises in a whiteout reads as a prop from another
+      // level dropped into this one
+      this._snowCap(tx2, ty2 + 0.99, tz2, 1.45, 0.20, 0.12, tyaw);
+      this._snowCap(tx2, ty2 + 0.63, tz2, 1.40, 0.15, 0.07, tyaw);
+      for (var tl = -1; tl <= 1; tl += 2) {
+        var flx = tx2 + Math.cos(tyaw) * tl * 0.58;
+        var flz = tz2 - Math.sin(tyaw) * tl * 0.58;
+        this._snowCap(flx, ty2 + 0.38, flz, 0.24, 0.50, 0.06, tyaw);
+        this._collar(flx, ty2, flz, 0.42, 0.13);
+      }
+      this._drift(tx2 + this.windDir.x * 0.75, tz2 + this.windDir.y * 0.75, R.range(0.45, 0.75));
       this._occupy(tx2, tz2, 0.9);
     }
     // One of them knocked flat, which is what says a vehicle came through.
@@ -3651,15 +3786,58 @@
       yaw + R.range(0, 6.28), 1.52, R.range(-0.2, 0.2));
 
     // ---- hazard drums, half buried -----------------------------------------
-    for (i = 0; i < 4; i++) {
-      var dd = R.range(-6.0, -1.5);
-      var dl = R.range(-3.4, 3.4);
-      this._drop(this.B.drum, near.x + ax * dd + px * dl, near.z + az * dd + pz * dl, {
+    // Clean cylinders with no windward drift piled against them and no scour on
+    // the lee is exactly what a drum in a gale does not look like.
+    for (i = 0; i < 5; i++) {
+      var dd = R.range(-6.4, -1.5);
+      var dl = R.range(-3.6, 3.6);
+      var dxx = near.x + ax * dd + px * dl, dzz = near.z + az * dd + pz * dl;
+      var dyy = this._drop(this.B.drum, dxx, dzz, {
         r: 0.45, onRoad: true, onPath: true, sink: R.range(0.05, 0.32), tilt: 0.14,
-        capW: 0.56, capD: 0.56, capY: 0.89, capH: 0.08,
+        capW: 0.62, capD: 0.62, capY: 0.885, capH: 0.13,
+        collarR: 0.62, collarH: 0.19,
         collider: [0.30, 0.44, 0.30], material: 'metal'
       });
+      if (dyy !== null) {
+        // the windward bank against the flank, and the scour hollow downwind
+        this._drift(dxx - this.windDir.x * 0.44, dzz - this.windDir.y * 0.44,
+          R.range(0.42, 0.62), dyy, 0.55);
+        this._drift(dxx + this.windDir.x * 1.05, dzz + this.windDir.y * 1.05,
+          R.range(0.30, 0.50), dyy, 0.42);
+        // a ledge of snow on the top chime
+        this._snowCap(dxx, dyy + 0.60, dzz, 0.66, 0.30, 0.07, R.range(0, M.TAU));
+      }
     }
+
+    // ---- the near foreground on the approach ---------------------------------
+    // Measured off the BRIDGE anchor, not off a framing: 10.5 m back down the
+    // carriageway from the near lip and 2.5 m onto its west side. That is where
+    // a load that came off the last lorry to try this road would be, and it is
+    // also - because hero2 stands 4 m further back on the east side - the near
+    // LEFT of that frame, which had nothing inside six metres and therefore no
+    // scale reference at all.
+    var spx = near.x - ax * 10.5 - px * 2.5;
+    var spz = near.z - az * 10.5 - pz * 2.5;
+    var spy = this._ground(spx, spz);
+    this._drop(this.B.drum, spx, spz, {
+      r: 0.50, onRoad: true, onPath: true, tilt: 0.9,
+      yaw: yaw + R.range(0.4, 1.1), sink: R.range(0.14, 0.30),
+      capW: 0.80, capD: 0.55, capY: 0.30, capH: 0.10, collarR: 0.75, collarH: 0.20
+    });
+    for (i = 0; i < 3; i++) {
+      this._drop(this.B.crate, spx + px * R.range(0.7, 1.9) + ax * R.range(-1.1, 0.9),
+        spz + pz * R.range(0.7, 1.9) + az * R.range(-1.1, 0.9), {
+          r: 0.44, onRoad: true, onPath: true, tilt: 0.30,
+          sink: R.range(0.04, 0.26), scale: R.range(0.85, 1.2),
+          capW: 0.72, capD: 0.62, capY: 0.50, capH: 0.13
+        });
+    }
+    this._drop(this.B.tyre, spx - px * R.range(0.9, 1.6), spz - pz * R.range(0.9, 1.6), {
+      r: 0.55, onRoad: true, onPath: true, tilt: 0.20, sink: R.range(0.16, 0.36),
+      capW: 0.82, capD: 0.82, capY: 0.14, capH: 0.07
+    });
+    this._drift(spx + this.windDir.x * 1.3, spz + this.windDir.y * 1.3, R.range(0.7, 1.1), spy);
+    this._mark(CELL.diesel, spx + ax * 1.4, spz + az * 1.4, 2.2, 1.8, yaw, spy);
 
     // ---- the sign ------------------------------------------------------------
     // Well off the road's centreline.  The level already puts a striped
@@ -4318,6 +4496,18 @@
   PropsSnowbound.prototype._commit = function () {
     var key, i;
 
+    // ---- contact rings in the ground mesh -----------------------------------
+    // The third leg of the grounding fix, and the only one that cannot be done
+    // from this module alone: the level rasterises a blue-driven sky-occlusion
+    // ring into its own ground vertex colours for every prop we have placed.
+    // GTAO is on and delivers about a 15% drop under a dacha eave, which is
+    // nowhere near enough when ambient IS the lighting.
+    try {
+      if (this.L && typeof this.L.paintGroundContact === 'function' && this._contact.length) {
+        this.stats.contact = this.L.paintGroundContact(this._contact);
+      }
+    } catch (eC) { GAME.logError('propsS.contact', eC); }
+
     // ---- rope, cable and washing line ---------------------------------------
     this._buildTubes();
 
@@ -4421,6 +4611,7 @@
     this.stats.colliders = this.colliders.length;
     this.stats.skipped = this._skipped;
     this.stats.caps = this._capCount;
+    this.stats.collars = this._collarCount || 0;
     this.stats.drifts = this._driftCount || 0;
     this.stats.icicles = this._icicleCount || 0;
     this.stats.marks = this._markCount || 0;
