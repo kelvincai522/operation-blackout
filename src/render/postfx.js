@@ -132,6 +132,45 @@
 // defaults are the character-for-character expressions they replaced, and
 // street.png differences to zero against the frozen reference on all 2.76 M
 // bytes after the round, md5 included.
+//
+// ----------------------------------------------------------------------------
+// LEVELS 3-10: THE GRADE BECOMES DATA
+// ----------------------------------------------------------------------------
+// Ten levels graded by one look are one level with different props, so the
+// per-level look moved out of code and into a table:
+//
+//   setGradePreset(name)   'warm' (the market) | 'night' (the harbor storm) |
+//                          'cold' | 'green' | 'bleach' | 'alarm' | 'verdant' |
+//                          'sodium' | 'dawn'. Level ids and the legacy
+//                          'market'/'storm' spellings are aliases. An unknown
+//                          name is logged and ignored, never fatal.
+//   setExposureBias(n)     a trim in STOPS on the PRINT gain, applied downstream
+//                          of the adaptation loop so the meter cannot be
+//                          destabilised by it.
+//
+// Two structural rules make this safe for the frozen levels:
+//
+//   * a preset is "restore the authored default, then overlay this table",
+//     never a diff. 'warm' is therefore the EMPTY overlay - reproducing the
+//     market is a property of the mechanism, not a set of numbers that has to
+//     be kept in sync with the settings block. 'night' is STORM_GRADE, the same
+//     object level 2 has always applied, applied by the same loop, from the
+//     same starting state (the constructor calls it before anything has moved),
+//     so the restore is the identity there.
+//   * the three genuinely new knobs needed by the new presets - midSat,
+//     sunLensGate, volumePracticals - all default to an exact no-op, and midSat
+//     is a uniform-controlled BRANCH rather than a mix, because mix(x, x, t) is
+//     not bit-exact and this module's regression gate is a byte comparison.
+//
+// The other thing levels 3-10 needed from this file is that NOTHING here may
+// assume a sky. Two paths did. The sun streak and the flare ghosts fire on the
+// projected key-light direction alone, and with no sky that direction is a
+// fallback constant pointing at an imaginary sun inside a buried corridor; the
+// volumetric march is key-only, and a key-only march on a level whose key is
+// dark contributes literally nothing (measured on the harbor, by A/B). Both are
+// now openable by a preset, both still default to exactly the shipped path.
+// Metering is the third: see GREEN_GRADE for the three separate mechanisms that
+// drive an enclosed frame to a grey wash, and how each is bounded.
 // ============================================================================
 (function (GAME, THREE) {
   'use strict';
@@ -2496,6 +2535,9 @@
     'uniform vec3 uMidTint;',
     'uniform vec3 uHighTint;',
     'uniform float uShadowSat;',
+    // Midtone saturation. 1.0 skips the block below outright, so level 1 and
+    // level 2 never execute a single instruction of it.
+    'uniform float uMidSat;',
     'uniform float uShadowAmt;',
     'uniform float uMidAmt;',
     'uniform float uHighAmt;',
@@ -2610,6 +2652,26 @@
     '  // would just cancel the teal it is there to protect.',
     '  float ys = pfLum( c );',
     '  c = mix( vec3( ys ), c, mix( 1.0, uShadowSat, sh ) );',
+    '',
+    '  // MIDTONE saturation, over the mid mask, and gated on a uniform so that a',
+    '  // preset that does not ask for it costs nothing and - more importantly -',
+    '  // cannot perturb a single bit. mix(x, x, t) is NOT guaranteed to return x',
+    '  // exactly (it is x*(1-t) + x*t, and 1-t is not exact for most t), so a',
+    '  // no-op written as a mix would have been a byte-level regression on two',
+    '  // frozen levels. The branch is uniform-controlled, so it is free.',
+    '  //',
+    '  // Why a second saturation control at all: "near-monochrome concrete with',
+    '  // saturated red alarm accents" and "sickly fluorescent green, crushed',
+    '  // saturation elsewhere" are the same request, and the global `saturation`',
+    '  // cannot express either - it desaturates the accents along with the',
+    '  // surround. The accents are EMITTERS, so they sit in the highlight mask;',
+    '  // taking the chroma out of the mid mask (and, via shadowSat, the shadow',
+    '  // mask) leaves them the only coloured thing in the frame, which is exactly',
+    '  // what the brief describes.',
+    '  if ( uMidSat < 0.999 ) {',
+    '    float ym = pfLum( c );',
+    '    c = mix( vec3( ym ), c, mix( 1.0, uMidSat, mid ) );',
+    '  }',
     '',
     '  c *= mix( vec3( 1.0 ), uShadowTint, sh * uShadowAmt );',
     '  c *= mix( vec3( 1.0 ), uMidTint,    mid * uMidAmt );',
@@ -3729,6 +3791,46 @@
       hitTint: new THREE.Color(1.0, 0.34, 0.28),
 
       // ======================================================================
+      // LEVELS 3-10 - the three knobs the new grade presets needed that did not
+      // already exist. Same rule as every other addition in this file: the
+      // DEFAULT of each one is an exact no-op, verified structurally rather than
+      // by taste, so the two frozen levels cannot move.
+      // ======================================================================
+
+      // A saturation applied over the MIDTONE mask, exactly as shadowSat is
+      // applied over the shadow mask. 1.0 skips the block entirely (the shader
+      // branches on it, so the market does not even evaluate the expression -
+      // see pfGrade), which is why this is a branch and not a mix: mix(x,x,t) is
+      // not bit-exact on every driver and this file's regression gate is a byte
+      // comparison.
+      //
+      // It exists because two of the new levels need "desaturated everywhere
+      // EXCEPT the light sources", and the global `saturation` cannot express
+      // that - it takes the sources down with everything else. The bunker's red
+      // alarm beacons and the metro's fluorescent tubes both land in the
+      // HIGHLIGHT mask, so crushing the mids and the shadows leaves them alone.
+      midSat: 1.0,
+
+      // 0 = the shipped behaviour: the sun streak and the flare ghosts fire on
+      // the projected key-light DIRECTION alone. That is correct outdoors and
+      // wrong in a buried facility, where sunDir falls back to DEFAULT_SUN, the
+      // key is a dead 0 W light nobody can see, and the ghosts would sample a
+      // bloom pyramid full of emergency strips - the exact defect the harbor
+      // round measured and gated (see the uSunOnScreen block in _render). The
+      // harbor keeps its own hard-coded gate, untouched; this is the same gate
+      // made available to any preset that asks for it. Interior presets also
+      // zero streakIntensity/flareIntensity, so this is belt AND braces.
+      sunLensGate: 0,
+
+      // 0 = the volumetric march is KEY-ONLY off the harbor, exactly as shipped.
+      // 1 lets a preset opt into the same equi-angular local-practical term the
+      // storm uses (see FRAG_VOLUME). Without it, a level with no sky gets a
+      // raymarch whose only light source has zero intensity - which the harbor
+      // round already proved contributes literally nothing, measured by A/B.
+      // volumePracticalCount still gates the loop, so this alone does nothing.
+      volumePracticals: 0,
+
+      // ======================================================================
       // LEVEL 2 "COLD HARBOR" - storm additions.
       //
       // Every value below is authored so that its DEFAULT is the market's
@@ -3884,6 +3986,19 @@
     // runs, so the level branch can be decided here - which is what lets the
     // market skip allocating the SSR target entirely.
     this.gradePreset = 'market';
+    // THE AUTHORED DEFAULT, FROZEN. Every preset is applied as "restore this,
+    // then overlay the preset's own table", which is what makes a preset a
+    // complete statement of a look rather than a diff against whatever happened
+    // to be applied before it. Snapshotted here, before setGradePreset can run,
+    // so it is always the values the file was authored with.
+    //
+    // This does not move the harbor: setGradePreset('storm') is called exactly
+    // once, from the line below, at which point settings ALREADY equals the
+    // snapshot - so the restore is the identity and the overlay is the same
+    // overlay it always was.
+    this._gradeBase = snapshotGrade(this.settings);
+    this._exposureStops = 0;
+    this._exposureBiasBase = this.settings.exposureBias;
     this._harbor = !!(ctx && (ctx.levelId === 'harbor' ||
       (ctx.levelDef && ctx.levelDef.weather === 'storm')));
     this._flashAdapt = 0;     // peak-hold envelope on ctx.weather.flash
@@ -4439,35 +4554,807 @@
     lightningHighlight: 0.15
   };
 
+  // ==========================================================================
+  // LEVELS 3-10: the rest of the grade table
+  //
+  // Nine presets, and the ONLY reason they exist is that ten levels graded by
+  // one look are one level with different props. Each table below is a complete
+  // statement of a colour identity, applied the same way STORM_GRADE is: the
+  // authored default is restored first and the table is overlaid onto it, so a
+  // preset is a look rather than a diff against whatever ran before it.
+  //
+  // WHAT IS AND IS NOT CALIBRATED HERE, STATED PLAINLY. The market's and the
+  // harbor's exposure numbers are MEASURED - refAvg is a real log-average read
+  // back off a real capture through settings.debugProbe. The eight levels below
+  // do not exist yet, so nothing about them can be measured, and inventing an
+  // exposureRefAvg for a level nobody has built is how a level ends up two stops
+  // off with a number that looks authoritative. So:
+  //
+  //   * OUTDOOR presets keep the market's measured (refAvg, refGain) pivot and
+  //     move only the SHAPE terms - slope, the clamp window, todBiasFloor, the
+  //     trim. Those are statements about how the meter should behave, not about
+  //     what the level measures, and they are safe without a capture.
+  //   * INTERIOR presets ('green', 'alarm') MUST move more, because the market's
+  //     law is structurally wrong with no sky in the frame - see the block on
+  //     each of them. They are still written so the worst case is bounded rather
+  //     than calibrated: the window cannot open past ~+0.8 EV of the market's
+  //     own reference gain whatever the scene average turns out to be.
+  //   * every level carries an `exposure` trim in its env profile (main.js),
+  //     which is exactly the right place for the last quarter stop once someone
+  //     has an actual frame to look at. See setExposureBias.
+  //
+  // The COLOUR half needs no capture to be right and is where the work went.
+  // One invariant runs through all nine: the highlight leg must end up redder
+  // relative to blue than the shadow leg, or analyze.py's grade_split - which
+  // is literally (hiR - hiB) - (shR - shB) - reports "no meaningful colour
+  // grade". That is compatible with every palette in the roster including the
+  // green one, as long as the green is taken toward YELLOW-green in the
+  // highlights and the cool leg carries the blue. It is not compatible with a
+  // cyan highlight over a cyan shadow, which is the trap.
+  // ==========================================================================
+
+  // ---- 'cold' - Kirovsk Pass, blizzard whiteout ----------------------------
+  // The hardest of the nine to keep out of "grey and dead", and the reason is
+  // arithmetic rather than taste: an overcast whiteout has almost no chroma of
+  // its own and almost no tonal range, so a grade that leans on either has
+  // nothing to work with. Both problems are solved from the SHADOW side. Snow
+  // is a volumetric scatterer - light goes into it, bounces around and comes
+  // back out - so its shadows are genuinely bright and genuinely blue (skylight
+  // is the only thing lighting them), and that is a real physical statement,
+  // not a stylisation. Hence: the highest print black in the roster, a long
+  // gentle toe, and the strongest blue rotation of any daylight preset. The
+  // highlights are left near-neutral on purpose - warm snow is wrong - so the
+  // split comes almost entirely from the cool leg, which is also what keeps
+  // grade_split comfortably positive without a warm push that would look like
+  // sunlight in a storm.
+  var COLD_GRADE = {
+    // Whiteout is the BRIGHTEST scene in the roster and the meter's instinct is
+    // to normalise it back to mid-grey, which is precisely the "flat, grey,
+    // dead" failure. A low slope leaves the absolute radiance in the print;
+    // the trim keeps the blown sky out of the average so the ground still sets
+    // the stop.
+    exposureSlope: 0.55,
+    exposureMin: 1.60,
+    exposureMax: 7.50,
+    todBiasFloor: 0.55,
+    adaptUp: 2.20,
+    adaptDown: 1.10,
+    meterTrim: 1,
+    meterTrimLo: 2.60,
+    meterTrimHi: 9.00,
+    meterLumFloor: 0.0015,
+
+    contrast: 1.08,          // gentle: a blizzard has no hard edges
+    pivot: 0.46,             // ...about a HIGH pivot, because the frame is high
+    pivotTrack: 0.90,
+    saturation: 0.76,        // low, but nowhere near monochrome
+    agxSaturation: 1.04,
+    scotopic: 0.30,
+    // White is deliberately hard to reach. A whiteout that clips is a white
+    // card; the whole subject of the level lives in the top two stops and it
+    // has to keep a gradient there, so the shoulder is long and the roll-off
+    // ahead of AgX starts high and asymptotes wide.
+    whitePoint: 1.26,
+    highlightKnee: 3.20,
+    highlightRange: 9.00,
+    // LIFTED BLACKS, stated three ways because they are the identity of this
+    // preset: almost no printer black (there is no black in a blizzard), a real
+    // additive lift, and a toe whose asymptote is ~2.5x the market's with a
+    // floor pushed further still - and since the knee is SOLVED from the gap
+    // between the two, widening the gap is what buys the long soft roll rather
+    // than a shelf.
+    printerBlack: 0.0060,
+    lift: new THREE.Vector3(0.0090, 0.0098, 0.0115),
+    toeBlackScale: 1.55,
+    toeFloorScale: 1.85,
+    shadowChroma: new THREE.Color(0.80, 0.97, 1.22),
+    shadowChromaAmount: 0.42,
+    shadowTint: new THREE.Color(0.900, 0.985, 1.100),
+    midTint: new THREE.Color(0.975, 1.000, 1.030),
+    highTint: new THREE.Color(1.030, 1.006, 0.972),   // near-neutral, barely warm
+    shadowSat: 0.58,
+    shadowAmount: 0.92,
+    midAmount: 0.30,
+    highAmount: 0.40,
+    gain: new THREE.Vector3(1.005, 1.000, 1.005),
+    grain: 0.026,
+    grainLowKey: 0.60,       // a high-key frame needs almost no dither
+    vignette: 0.13,          // a whiteout has no corners to lose
+    // Wide, soft veiling glare is what driving snow actually does to a lens.
+    bloomThreshold: 1.20,
+    bloomKnee: 0.90,
+    bloomIntensity: 0.30,
+    bloomClamp: 6.00,
+    bloomMipFalloff: 0.88,
+    bloomRadius: 1.30,
+    // There is no sun disc in a blizzard, so there is no streak and no ghost.
+    streakIntensity: 0.0,
+    flareIntensity: 0.0,
+    flareAspect: 1.0,
+    // A thick, near-isotropic medium filling the whole air column: distance
+    // dissolves into white, which is the brief's own description of the level.
+    volumeIntensity: 0.16,
+    volumeDensity: 0.040,
+    volumeHeightFalloff: 0.035,
+    volumeBaseHeight: -3.0,
+    volumeAnisotropy: 0.45,
+    volumeMaxDist: 70.0
+  };
+
+  // ---- 'green' - Line 4, flooded metro. INTERIOR ---------------------------
+  // NO SKY AT ALL, and that breaks the market's metering law structurally
+  // rather than by a stop or two. Three separate mechanisms have to be
+  // disarmed, and all three are visible in the numbers below:
+  //
+  //   1. todBias is derived from sky.sunIntensity, i.e. it is an ABSOLUTE "how
+  //      bright is the sun" term. Underground it reads 0 and pins on
+  //      todBiasFloor, which on the market is 0.34 - a 1.55 stop darkening
+  //      applied to a level that has no sun to be darkened by. todBiasFloor 1.0
+  //      hands the absolute level back to the scene's own radiance and to the
+  //      grade, which is where it belongs when every photon is a practical.
+  //   2. the log average of a tunnel collapses toward zero, so ratio pins at
+  //      its 60x clamp, pow(60, 0.86) is ~35, and the meter answers "open seven
+  //      stops" - a black level printed as an evenly-lit grey one. The floor
+  //      under the average, the low slope and the narrow window each cut a
+  //      different part of that path.
+  //   3. a handful of fluorescents in a large dark field is the harbor's
+  //      problem exactly, so it gets the harbor's answer: a trimmed mean that
+  //      discards the tube cores before they set the stop for the tunnel.
+  //
+  // The window is BOUNDED rather than calibrated, which matters because nobody
+  // has captured this level yet: whatever the scene average turns out to be,
+  // the stop cannot land more than ~+0.8 EV above the market's own reference
+  // gain nor below ~-0.9 EV. It cannot meter itself into black and it cannot
+  // meter itself into a wash. A level agent trims the last quarter stop with
+  // the `exposure` field in its env profile.
+  var GREEN_GRADE = {
+    exposureRefAvg: 0.021,
+    exposureRefGain: 3.40,
+    exposureSlope: 0.40,
+    exposureMin: 1.90,
+    exposureMax: 6.20,
+    todBiasFloor: 1.0,
+    adaptUp: 1.80,
+    adaptDown: 0.85,
+    meterTrim: 1,
+    meterTrimLo: 2.00,
+    meterTrimHi: 8.00,
+    meterLumFloor: 0.0030,
+
+    // High contrast about a LOW pivot that tracks the frame's own midtone
+    // completely - the harbor's lesson, and it applies harder here: a service
+    // corridor lit by one failing strip has no tonal content above a daylight
+    // pivot at all, so a fixed one turns the contrast term into a darkener.
+    contrast: 1.36,
+    pivot: 0.34,
+    pivotTrack: 1.0,
+    saturation: 0.88,
+    // ...and the chroma is taken OUT of everything the fluorescents are not.
+    // The tubes and the red emergency strips are emitters and land in the
+    // highlight mask, so they keep their colour while the tile, the grime and
+    // the standing water go nearly grey. That contrast - a sick green light on
+    // a colourless world - is the level's whole identity, and a global
+    // saturation cut cannot produce it.
+    midSat: 0.55,
+    shadowSat: 0.50,
+    agxSaturation: 1.18,
+    scotopic: 0.58,
+    whitePoint: 1.05,        // white is EASY to reach: the strips snap
+    highlightKnee: 1.60,
+    highlightRange: 7.00,
+    printerBlack: 0.0140,
+    lift: new THREE.Vector3(0.0026, 0.0030, 0.0028),
+    toeBlackScale: 1.00,     // deep, but the 0.040 encoded floor still holds
+    toeFloorScale: 1.18,
+    // The cool leg is BLUE-cyan and the warm leg is YELLOW-green. That split is
+    // what makes the level read as sickly-green rather than as a green wash,
+    // and it is also what keeps grade_split positive with a green palette -
+    // see the note at the top of this section.
+    shadowChroma: new THREE.Color(0.72, 1.02, 1.10),
+    shadowChromaAmount: 0.58,
+    shadowTint: new THREE.Color(0.860, 1.010, 1.045),
+    midTint: new THREE.Color(0.930, 1.055, 0.985),
+    highTint: new THREE.Color(1.020, 1.075, 0.905),
+    shadowAmount: 0.95,
+    midAmount: 0.55,
+    highAmount: 0.62,
+    gain: new THREE.Vector3(0.995, 1.010, 0.995),
+    grain: 0.036,
+    grainLowKey: 1.80,
+    vignette: 0.24,
+    bloomThreshold: 0.90,
+    bloomKnee: 0.72,
+    bloomIntensity: 0.32,
+    bloomClamp: 4.00,
+    bloomMipFalloff: 0.82,
+    bloomRadius: 1.22,
+    // No sun exists, so nothing may pretend one does - see settings.sunLensGate.
+    streakIntensity: 0.0,
+    flareIntensity: 0.0,
+    flareAspect: 1.0,
+    sunLensGate: 1,
+    // The medium is lit by the practicals or it is not lit at all.
+    volumePracticals: 1,
+    volumePracticalCount: 6,
+    volumePracticalGain: 0.40,
+    volumeMaxInscatter: 0.40,
+    volumeIntensity: 0.22,
+    volumeDensity: 0.020,
+    volumeHeightFalloff: 0.020,   // a tunnel has no height gradient
+    volumeBaseHeight: -4.0,
+    volumeAnisotropy: 0.60,
+    volumeMaxDist: 60.0,
+    // Tiled walls are a periodic comb at distance and the two-tap CA split
+    // synthesises fringes on exactly that - the defect the harbor round
+    // diagnosed. The spectral sweep cannot.
+    chromaticAberration: 0.0018,
+    caSpectral: 1,
+    sharpenExtGate: 1.0
+  };
+
+  // ---- 'bleach' - AMARG boneyard, high noon --------------------------------
+  // The brief names the trap: "a flat, white, contrastless frame". Overhead sun
+  // on bare tarmac genuinely has that histogram, so the grade cannot fix it by
+  // pulling the exposure down - that just makes a dark flat frame. What it can
+  // do is make sure the two things the level DOES have survive: the sky, which
+  // must roll rather than clip, and the deep shade under the airframes, which
+  // is the only real black in the frame and the only place colour separation
+  // can live. Hence an early, long highlight roll-off, a high white point, and
+  // a sky-blue shadow rotation against a yellow midtone.
+  var BLEACH_GRADE = {
+    exposureSlope: 0.62,
+    exposureMin: 1.40,
+    exposureMax: 7.00,
+    todBiasFloor: 0.40,
+    meterTrim: 1,
+    meterTrimLo: 3.00,     // the tarmac sets the stop, not the sky
+    meterTrimHi: 11.00,
+    meterLumFloor: 0.0012,
+
+    contrast: 1.30,
+    pivot: 0.43,
+    pivotTrack: 0.85,
+    saturation: 0.80,      // bleached: the colour is baked out of everything
+    agxSaturation: 1.06,
+    scotopic: 0.34,
+    // THE SKY MUST NOT CLIP. uHiKnee comes DOWN (compress early) and uHiRange
+    // goes UP (asymptote late and well below AgX's own +4.03 EV ceiling), which
+    // together turn what would be a flat white plateau into a gradient. The
+    // high white point then keeps the print's own shoulder long.
+    whitePoint: 1.30,
+    highlightKnee: 2.00,
+    highlightRange: 11.00,
+    printerBlack: 0.0135,
+    toeBlackScale: 1.06,
+    toeFloorScale: 1.15,
+    shadowChroma: new THREE.Color(0.86, 0.96, 1.14),
+    shadowChromaAmount: 0.36,
+    shadowTint: new THREE.Color(0.895, 0.985, 1.085),
+    midTint: new THREE.Color(1.055, 1.020, 0.905),   // the yellow in the midtones
+    highTint: new THREE.Color(1.045, 1.020, 0.955),  // bleached: warm-NEUTRAL
+    shadowSat: 0.66,
+    shadowAmount: 0.88,
+    midAmount: 0.46,
+    highAmount: 0.55,
+    gain: new THREE.Vector3(1.015, 1.005, 0.985),
+    grain: 0.026,
+    grainLowKey: 0.40,
+    vignette: 0.20,
+    // A tight, restrained pyramid. Wide bloom at noon is haze, and haze is the
+    // flat frame this preset exists to avoid.
+    bloomThreshold: 1.35,
+    bloomKnee: 0.95,
+    bloomIntensity: 0.22,
+    bloomClamp: 8.00,
+    bloomMipFalloff: 0.74,
+    bloomRadius: 1.05,
+    streakIntensity: 0.018,
+    streakSpread: 1.8,
+    streakTint: new THREE.Color(1.0, 0.90, 0.72),
+    flareIntensity: 0.026,
+    flareAspect: 1.0,
+    // Thin, high, strongly forward-scattering: heat shimmer and dust over a
+    // very long sightline, not ground fog.
+    volumeIntensity: 0.20,
+    volumeDensity: 0.014,
+    volumeHeightFalloff: 0.14,
+    volumeBaseHeight: -1.0,
+    volumeAnisotropy: 0.70,
+    volumeMaxDist: 130.0
+  };
+
+  // ---- 'alarm' - Facility K-17. INTERIOR -----------------------------------
+  // Same no-sky metering problem as the metro and the same three answers; see
+  // GREEN_GRADE for the reasoning, which is not repeated.
+  //
+  // The colour problem is different and specific: "near-monochrome concrete
+  // with saturated red alarm accents surviving the grade. Red must stay red,
+  // not go orange." Three things would each break that on their own:
+  //
+  //   * a global `saturation` low enough to make concrete read as concrete
+  //     takes the beacons down with it. So the desaturation is applied over the
+  //     MID and SHADOW masks only (midSat/shadowSat) and the global term stays
+  //     high. The beacons are emitters, so they sit in the highlight mask and
+  //     are not touched by either.
+  //   * AgX desaturates bright values toward white per channel, so a hot red
+  //     core arrives at the curve as three clipped channels and prints pink-
+  //     white. The highlight roll-off ahead of it is set LOW (1.30) so the core
+  //     is compressed to a gradient below AgX's clamp instead, and agxSaturation
+  //     is raised to give back what the curve still takes.
+  //   * a warm highlight leg drags red toward ORANGE if it lifts green. This
+  //     one lifts RED and cuts green (1.075, 0.975, 0.945), i.e. it pushes a
+  //     red further into red, and it still leaves grade_split strongly positive
+  //     because R - B is +0.13 at the top against a cool leg at the bottom.
+  //
+  // scotopic is deliberately LOW rather than high: the Purkinje term takes
+  // chroma out of dark pixels, and a red beacon seen down a long dark corridor
+  // is exactly a dark red pixel.
+  var ALARM_GRADE = {
+    exposureRefAvg: 0.021,
+    exposureRefGain: 3.30,
+    exposureSlope: 0.36,
+    exposureMin: 1.85,
+    exposureMax: 5.80,
+    todBiasFloor: 1.0,
+    adaptUp: 1.70,
+    adaptDown: 0.80,
+    meterTrim: 1,
+    meterTrimLo: 1.90,
+    meterTrimHi: 8.00,
+    meterLumFloor: 0.0030,
+
+    contrast: 1.30,
+    pivot: 0.35,
+    pivotTrack: 1.0,
+    saturation: 0.92,       // NOT low - see above
+    midSat: 0.40,           // the concrete goes near-monochrome
+    shadowSat: 0.34,        // ...and so does the dark between the lights
+    agxSaturation: 1.24,    // ...and what survives to the top comes back hard
+    scotopic: 0.30,
+    whitePoint: 1.04,
+    highlightKnee: 1.30,
+    highlightRange: 8.50,
+    printerBlack: 0.0120,
+    toeBlackScale: 1.02,
+    toeFloorScale: 1.22,
+    // Barely cool. Concrete under emergency light is grey with a hint of blue,
+    // not navy, and a strong rotation here would fight the red accents for the
+    // frame's only chroma budget.
+    shadowChroma: new THREE.Color(0.94, 0.99, 1.06),
+    shadowChromaAmount: 0.30,
+    shadowTint: new THREE.Color(0.955, 0.995, 1.045),
+    midTint: new THREE.Color(1.000, 0.995, 1.000),
+    highTint: new THREE.Color(1.075, 0.975, 0.945),
+    shadowAmount: 0.90,
+    midAmount: 0.18,
+    highAmount: 0.52,
+    gain: new THREE.Vector3(1.010, 0.998, 0.998),
+    grain: 0.038,
+    grainLowKey: 1.70,
+    vignette: 0.28,         // claustrophobic, and the corners have signal to spare
+    bloomThreshold: 0.85,
+    bloomKnee: 0.70,
+    bloomIntensity: 0.34,
+    bloomClamp: 3.60,       // a beacon halo, never a white disc
+    bloomMipFalloff: 0.84,
+    bloomRadius: 1.26,
+    streakIntensity: 0.0,
+    flareIntensity: 0.0,
+    flareAspect: 1.0,
+    sunLensGate: 1,
+    volumePracticals: 1,
+    volumePracticalCount: 6,
+    volumePracticalGain: 0.55,   // dust in the beams is named in the brief
+    volumeMaxInscatter: 0.42,
+    volumeIntensity: 0.24,
+    volumeDensity: 0.026,
+    volumeHeightFalloff: 0.018,
+    volumeBaseHeight: -4.0,
+    volumeAnisotropy: 0.66,
+    volumeMaxDist: 55.0,
+    chromaticAberration: 0.0018,
+    caSpectral: 1,
+    sharpenExtGate: 1.0
+  };
+
+  // ---- 'verdant' - Mekong Delta --------------------------------------------
+  // "Saturated green must not become a flat green wash - it needs value range
+  // and warm/cool separation." Both halves of that are grade work and both are
+  // done here explicitly:
+  //
+  //   VALUE RANGE comes from contrast about a tracking pivot plus a shadow leg
+  //   that gives up a third of its chroma. A canopy is a green thing lit by
+  //   green-filtered light in front of green shade; if the shade holds the same
+  //   saturation as the canopy there is no separation to see, whatever the
+  //   luminance does.
+  //   WARM/COOL comes from the strongest highlight leg of any daylight preset
+  //   (the shafts) against a cool blue-green rotation (the shade). The mid leg
+  //   carries the canopy's own green so the frame still reads green overall.
+  //
+  // Saturation is the highest in the roster but deliberately stops short of
+  // analyze.py's oversaturation flag: 0.96 global x 1.20 post-AgX, against the
+  // market's 0.93 x 1.12.
+  var VERDANT_GRADE = {
+    exposureSlope: 0.72,     // dappled light: real local adaptation is wanted
+    exposureMin: 1.20,
+    exposureMax: 9.00,
+    todBiasFloor: 0.46,
+    meterTrim: 1,
+    meterTrimLo: 2.80,       // sun through a canopy gap must not set the stop
+    meterTrimHi: 10.00,
+    meterLumFloor: 0.0012,
+
+    contrast: 1.32,
+    pivot: 0.39,
+    pivotTrack: 0.92,
+    saturation: 0.96,
+    agxSaturation: 1.20,
+    scotopic: 0.30,
+    whitePoint: 1.10,
+    highlightKnee: 2.20,
+    highlightRange: 7.00,
+    printerBlack: 0.0130,
+    toeBlackScale: 1.10,
+    toeFloorScale: 1.30,     // wet shade under a canopy still holds detail
+    shadowChroma: new THREE.Color(0.74, 1.00, 1.12),
+    shadowChromaAmount: 0.44,
+    shadowTint: new THREE.Color(0.885, 1.000, 1.080),
+    midTint: new THREE.Color(0.960, 1.045, 0.960),
+    highTint: new THREE.Color(1.095, 1.010, 0.865),
+    shadowSat: 0.66,
+    shadowAmount: 0.92,
+    midAmount: 0.42,
+    highAmount: 0.66,
+    gain: new THREE.Vector3(1.000, 1.008, 0.996),
+    grain: 0.030,
+    grainLowKey: 1.00,
+    vignette: 0.24,
+    bloomThreshold: 1.10,
+    bloomKnee: 0.82,
+    bloomIntensity: 0.28,
+    bloomClamp: 6.00,
+    bloomMipFalloff: 0.82,
+    bloomRadius: 1.20,
+    streakIntensity: 0.014,
+    streakTint: new THREE.Color(1.0, 0.94, 0.68),
+    flareIntensity: 0.022,
+    flareAspect: 1.0,
+    // The thickest, most forward-scattering medium of the daylight presets:
+    // humid air between trunks is what makes a canopy shaft visible at all.
+    volumeIntensity: 0.30,
+    volumeDensity: 0.048,
+    volumeHeightFalloff: 0.055,
+    volumeBaseHeight: -2.0,
+    volumeAnisotropy: 0.76,
+    volumeMaxDist: 75.0
+  };
+
+  // ---- 'sodium' - Zubair refinery, dusk ------------------------------------
+  // The strongest warm/cool split in the roster, as briefed, and the numbers
+  // say so: the highlight leg runs R/B at 1.150/0.800 (+0.35 on the split
+  // metric before the shadow leg is counted) against a blue-VIOLET rotation at
+  // 0.80/1.28. That is roughly three times the market's separation.
+  //
+  // Blue-violet rather than the harbor's cyan-green, and the difference is one
+  // channel: violet needs R to sit ABOVE G, cyan-green needs it below. Getting
+  // that backwards is how two night levels end up looking like the same night
+  // level, which is the failure this whole table exists to prevent.
+  var SODIUM_GRADE = {
+    exposureSlope: 0.58,
+    exposureMin: 1.60,
+    exposureMax: 7.00,
+    todBiasFloor: 0.58,     // dusk is low-key on purpose, but not night-dark
+    meterTrim: 1,
+    meterTrimLo: 2.20,      // the flare stacks are not the subject
+    meterTrimHi: 9.00,
+    meterLumFloor: 0.0020,
+
+    contrast: 1.32,
+    pivot: 0.37,
+    pivotTrack: 0.96,
+    saturation: 0.98,
+    agxSaturation: 1.20,
+    scotopic: 0.38,
+    whitePoint: 1.08,
+    // A flare stack is a genuine emitter and must keep a monotone gradient
+    // across its core, so the roll-off starts early and asymptotes wide.
+    highlightKnee: 1.70,
+    highlightRange: 8.00,
+    printerBlack: 0.0125,
+    toeBlackScale: 1.10,
+    toeFloorScale: 1.28,
+    shadowChroma: new THREE.Color(0.80, 0.84, 1.28),
+    shadowChromaAmount: 0.62,
+    shadowTint: new THREE.Color(0.860, 0.930, 1.135),
+    midTint: new THREE.Color(1.020, 0.990, 1.000),
+    highTint: new THREE.Color(1.150, 0.995, 0.800),
+    shadowSat: 0.60,
+    shadowAmount: 0.95,
+    midAmount: 0.24,
+    highAmount: 0.74,
+    gain: new THREE.Vector3(1.015, 1.000, 0.995),
+    grain: 0.032,
+    grainLowKey: 1.30,
+    vignette: 0.22,
+    bloomThreshold: 0.95,
+    bloomKnee: 0.78,
+    bloomIntensity: 0.34,
+    bloomClamp: 5.50,
+    bloomMipFalloff: 0.86,
+    bloomRadius: 1.30,
+    // The one preset that keeps a real streak: a low dusk sun on a lattice of
+    // steel, plus fire above it, is what an anamorphic flare is FOR.
+    streakIntensity: 0.030,
+    streakSpread: 2.2,
+    streakTint: new THREE.Color(1.0, 0.60, 0.26),
+    flareIntensity: 0.020,
+    flareAspect: 1.0,
+    // Flare stacks and floods light the air as well as the steel.
+    volumePracticals: 1,
+    volumePracticalCount: 6,
+    volumePracticalGain: 0.35,
+    volumeMaxInscatter: 0.50,
+    volumeIntensity: 0.28,
+    volumeDensity: 0.030,
+    volumeHeightFalloff: 0.045,
+    volumeBaseHeight: -2.0,
+    volumeAnisotropy: 0.74,
+    volumeMaxDist: 110.0
+  };
+
+  // ---- 'dawn' - Bayon ruins ------------------------------------------------
+  // "The quietest level in the roster - its power is atmosphere and scale, not
+  // intensity." A quiet grade is not a weak one; it is a specific shape, and
+  // every term below is chosen so that nothing in the frame SNAPS:
+  //
+  //   * the lowest contrast of the nine (1.05 against the market's 1.20),
+  //   * the highest print black after the blizzard, from a big toe asymptote
+  //     plus a real lift - ground mist sits in every shadow and mist has no
+  //     black in it,
+  //   * a high white point, so the print's shoulder is long and the top of the
+  //     range is never quite reached,
+  //   * the widest, softest bloom pyramid in the table.
+  //
+  // The colour is a narrow rose-gold over blue-grey - the smallest separation
+  // of the nine, which is the point, but still unambiguously positive.
+  var DAWN_GRADE = {
+    exposureSlope: 0.66,
+    exposureMin: 1.30,
+    exposureMax: 7.50,
+    todBiasFloor: 0.50,
+    meterTrim: 1,
+    meterTrimLo: 2.60,
+    meterTrimHi: 9.50,
+    meterLumFloor: 0.0015,
+
+    contrast: 1.05,
+    pivot: 0.44,
+    pivotTrack: 0.90,
+    saturation: 0.86,
+    agxSaturation: 1.04,
+    scotopic: 0.34,
+    whitePoint: 1.24,
+    highlightKnee: 2.80,
+    highlightRange: 8.50,
+    printerBlack: 0.0055,
+    lift: new THREE.Vector3(0.0085, 0.0088, 0.0100),
+    toeBlackScale: 1.48,
+    toeFloorScale: 1.75,
+    // Blue-GREY, not blue: shadowSat is left high so the mist keeps its own
+    // faint colour rather than being replaced by the rotation target.
+    shadowChroma: new THREE.Color(0.88, 0.97, 1.14),
+    shadowChromaAmount: 0.30,
+    shadowTint: new THREE.Color(0.925, 0.990, 1.070),
+    midTint: new THREE.Color(1.020, 0.998, 0.985),
+    // Rose-gold needs G to sit BETWEEN R and B - the same requirement teal has,
+    // mirrored. R > G > B with G near neutral is gold; G below B would be pink.
+    highTint: new THREE.Color(1.080, 1.002, 0.925),
+    shadowSat: 0.74,
+    shadowAmount: 0.86,
+    midAmount: 0.26,
+    highAmount: 0.54,
+    gain: new THREE.Vector3(1.010, 1.000, 0.998),
+    grain: 0.030,
+    grainLowKey: 1.10,
+    vignette: 0.15,
+    bloomThreshold: 0.95,
+    bloomKnee: 0.80,
+    bloomIntensity: 0.32,
+    bloomClamp: 5.00,
+    bloomMipFalloff: 0.90,   // the widest pyramid in the table: mist
+    bloomRadius: 1.34,
+    streakIntensity: 0.016,
+    streakTint: new THREE.Color(1.0, 0.82, 0.66),
+    flareIntensity: 0.024,
+    flareAspect: 1.0,
+    // Long god rays between the towers: a thick, low, strongly forward
+    // scattering medium marched a long way.
+    volumeIntensity: 0.34,
+    volumeDensity: 0.052,
+    volumeHeightFalloff: 0.075,
+    volumeBaseHeight: -1.5,
+    volumeAnisotropy: 0.78,
+    volumeMaxDist: 95.0
+  };
+
+  // The table itself. 'warm' is the empty overlay, i.e. the authored default
+  // restored and nothing put on top of it - which is what makes "reproduce the
+  // market exactly" a structural guarantee rather than a set of numbers that
+  // have to be kept in sync with the settings block above.
+  var GRADE_PRESETS = {
+    warm: {},
+    night: STORM_GRADE,
+    cold: COLD_GRADE,
+    green: GREEN_GRADE,
+    bleach: BLEACH_GRADE,
+    alarm: ALARM_GRADE,
+    verdant: VERDANT_GRADE,
+    sodium: SODIUM_GRADE,
+    dawn: DAWN_GRADE
+  };
+
+  // Names the two shipped levels and the level ids already use, mapped onto the
+  // canonical nine. 'market'/'storm' are the strings this module has always
+  // taken and must keep taking; the level ids are here so that a level author
+  // who writes grade:'metro' gets the metro grade instead of a silent fallback.
+  var GRADE_ALIAS = {
+    market: 'warm', 'default': 'warm', golden: 'warm', highrise: 'warm',
+    storm: 'night', harbor: 'night',
+    snow: 'cold', blizzard: 'cold', snowbound: 'cold',
+    metro: 'green', flooded: 'green',
+    bleached: 'bleach', desert: 'bleach', boneyard: 'bleach',
+    bunker: 'alarm',
+    jungle: 'verdant',
+    refinery: 'sodium',
+    ruins: 'dawn', mist: 'dawn'
+  };
+
+  // Colours and vectors are cloned rather than shared, so a preset table can
+  // never be mutated by a later frame writing through settings.
+  function cloneGradeValue(v) {
+    if (v && v.isColor) return v.clone();
+    if (v && v.isVector3) return v.clone();
+    return v;
+  }
+
+  function snapshotGrade(src) {
+    var out = {};
+    for (var k in src) {
+      if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
+      out[k] = cloneGradeValue(src[k]);
+    }
+    return out;
+  }
+
+  // Overlay `src` onto `dst`. Character-for-character the loop setGradePreset
+  // used to run inline, so the storm applies exactly as it always did.
+  function overlayGrade(dst, src) {
+    for (var k in src) {
+      if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
+      dst[k] = cloneGradeValue(src[k]);
+    }
+  }
+
   /**
-   * @param {string} name  'market' (the authored default) | 'storm'
+   * Select a colour grade by name. Data, not code: a level declares its look in
+   * the LEVELS table in main.js and never touches this file.
+   *
+   * @param {string} name  'warm' (the market, the authored default) | 'night'
+   *   (the harbor storm) | 'cold' | 'green' | 'bleach' | 'alarm' | 'verdant' |
+   *   'sodium' | 'dawn'. Level ids and the legacy 'market'/'storm' spellings are
+   *   accepted as aliases. An unknown name is logged and IGNORED - the grade
+   *   already in force stays in force, which for a fresh level is the authored
+   *   default, so an unimplemented preset degrades to a look rather than to a
+   *   black screen.
    */
   PostFX.prototype.setGradePreset = function (name) {
-    if (name !== 'storm') { this.gradePreset = 'market'; return this; }
-    var s = this.settings;
-    // The grade's key normalisation is an ABSOLUTE reference - "how low-key is
-    // this frame against a noon one" - while the metering reference above is a
-    // per-level calibration. They are multiplied into the same uKeyRef, so
-    // re-pivoting the meter onto a night average would otherwise tell pfGrade
-    // that a storm night is a noon frame and hand it the noon toe, which is a
-    // shelf that would crush three quarters of this level. Solving the scale
-    // back out holds uKeyRef at exactly the value it has in the market.
-    var keyRef = s.exposureRefGain * s.exposureRefAvg * s.gradeKeyRefScale;
-    for (var k in STORM_GRADE) {
-      if (!Object.prototype.hasOwnProperty.call(STORM_GRADE, k)) continue;
-      var v = STORM_GRADE[k];
-      if (v && v.isColor) s[k] = v.clone();
-      else if (v && v.isVector3) s[k] = v.clone();
-      else s[k] = v;
-    }
-    s.gradeKeyRefScale = keyRef / Math.max(s.exposureRefGain * s.exposureRefAvg, 1e-6);
-    this.gradePreset = 'storm';
-    // _bloomNorm is derived from bloomMipFalloff at allocation time.
-    if (this._targets) {
-      try { this._allocate(this._size.x | 0, this._size.y | 0); }
-      catch (e) { GAME.logError('postfx.setGradePreset', e); }
+    try {
+      var key = (typeof name === 'string' ? name : '').trim().toLowerCase();
+      if (GRADE_ALIAS[key]) key = GRADE_ALIAS[key];
+      var table = Object.prototype.hasOwnProperty.call(GRADE_PRESETS, key)
+        ? GRADE_PRESETS[key] : null;
+      if (!table) {
+        GAME.logError('postfx.setGradePreset',
+          'unknown grade preset "' + name + '" - keeping "' + this.gradePreset + '"');
+        return this;
+      }
+
+      var s = this.settings;
+      // Back to the authored default first. A preset is a complete look, so
+      // applying one must not depend on which one ran before it. On the harbor
+      // this is the identity: setGradePreset('storm') is called once, from the
+      // constructor, at the exact moment settings still equals the snapshot.
+      if (this._gradeBase) overlayGrade(s, this._gradeBase);
+
+      // The grade's key normalisation is an ABSOLUTE reference - "how low-key is
+      // this frame against a noon one" - while the metering reference is a
+      // per-level calibration. They are multiplied into the same uKeyRef, so
+      // re-pivoting the meter onto a night average would otherwise tell pfGrade
+      // that a storm night is a noon frame and hand it the noon toe, which is a
+      // shelf that would crush three quarters of that level. Solving the scale
+      // back out holds uKeyRef at exactly the value it has in the market, for
+      // every preset, whatever it does to the meter.
+      var keyRef = s.exposureRefGain * s.exposureRefAvg * s.gradeKeyRefScale;
+      overlayGrade(s, table);
+      s.gradeKeyRefScale = keyRef / Math.max(s.exposureRefGain * s.exposureRefAvg, 1e-6);
+
+      // The preset owns the resting bias; setExposureBias trims it in stops on
+      // top. Re-applied here so the two can be called in either order.
+      this._exposureBiasBase = s.exposureBias;
+      this._applyExposureStops();
+      this.gradePreset = key;
+
+      // streakTint is the one grade value pushed into its material at BUILD
+      // time rather than per frame, so a preset applied afterwards would
+      // silently drop it - and every preset except the harbor's is applied
+      // afterwards, because main.js runs env profiles after the build pass.
+      // this.mat does not exist yet when the constructor applies the storm, so
+      // this block is skipped there and level 2 cannot move.
+      if (this.mat && this.mat.streak && s.streakTint) {
+        this.mat.streak.uniforms.uTint.value.set(
+          s.streakTint.r, s.streakTint.g, s.streakTint.b);
+      }
+
+      // _bloomNorm is derived from bloomMipFalloff at allocation time.
+      if (this._targets) this._allocate(this._size.x | 0, this._size.y | 0);
+    } catch (e) {
+      GAME.logError('postfx.setGradePreset', e);
     }
     return this;
+  };
+
+  // The names setGradePreset will accept. Exposed so a level or a tool can
+  // check a profile without guessing.
+  PostFX.prototype.gradePresetNames = function () {
+    var out = [];
+    for (var k in GRADE_PRESETS) {
+      if (Object.prototype.hasOwnProperty.call(GRADE_PRESETS, k)) out.push(k);
+    }
+    return out;
+  };
+
+  // --------------------------------------------------------------------------
+  // Exposure trim, in STOPS.
+  //
+  // settings.exposureBias is a linear multiplier on the PRINT gain - it is
+  // applied to the metered result, downstream of the adaptation loop in
+  // FRAG_EXPOSURE, in all four places that consume the gain (the AO resolve's
+  // exposure-relative thresholds, the viewmodel lock, the grade's key
+  // normalisation and the composite itself). That placement is what makes this
+  // safe to drive from a level profile: the meter's own state, its target, its
+  // clamps and its time constants are untouched, so the adaptation cannot be
+  // destabilised, cannot oscillate, and cannot be walked outside its window by
+  // a trim. It shifts the print, exactly as a camera's exposure compensation
+  // dial does, and the metering keeps doing its own job underneath.
+  //
+  // It DOES move the grade's key (uKeyRef normalisation reads the same bias),
+  // and that is correct rather than incidental: a print carried up a stop IS a
+  // higher-key print, and the tonal masks, the S-curve pivot, the toe and the
+  // grain all have to follow it or a +1 stop trim would land the frame in a
+  // grade authored for a darker one.
+  //
+  // @param {number} stops  -1..+1 in normal use; clamped to +-2, because a trim
+  //   larger than that is a metering calibration and belongs in a preset.
+  //   A non-finite value is treated as 0 rather than poisoning every gain in
+  //   the chain with a NaN.
+  // --------------------------------------------------------------------------
+  PostFX.prototype.setExposureBias = function (stops) {
+    var n = (typeof stops === 'number' && isFinite(stops)) ? stops : 0;
+    this._exposureStops = M.clamp(n, -2, 2);
+    try { this._applyExposureStops(); }
+    catch (e) { GAME.logError('postfx.setExposureBias', e); }
+    return this;
+  };
+
+  PostFX.prototype._applyExposureStops = function () {
+    var base = this._exposureBiasBase;
+    if (typeof base !== 'number' || !isFinite(base) || base <= 0) base = 1.0;
+    var st = this._exposureStops || 0;
+    // pow(2, 0) is exactly 1 and base * 1 is exactly base, so a level that
+    // never calls setExposureBias - which is both frozen levels - keeps the
+    // authored bias bit-for-bit.
+    var v = base * Math.pow(2, st);
+    this.settings.exposureBias = (isFinite(v) && v > 0) ? M.clamp(v, 0.05, 20) : base;
   };
 
   // --------------------------------------------------------------------------
@@ -4817,7 +5704,7 @@
       uGamma: U(s.gamma.clone()), uGain: U(s.gain.clone()),
       uShadowTint: U(new THREE.Vector3()), uMidTint: U(new THREE.Vector3()),
       uHighTint: U(new THREE.Vector3()),
-      uShadowSat: U(s.shadowSat),
+      uShadowSat: U(s.shadowSat), uMidSat: U(s.midSat),
       uShadowAmt: U(s.shadowAmount), uMidAmt: U(s.midAmount), uHighAmt: U(s.highAmount),
       uFlashTint: U(new THREE.Vector3()), uFlash: U(0), uHit: U(0),
       // Storm additions - all no-ops at these values (see FRAG_COMPOSITE).
@@ -5545,6 +6432,13 @@
     // and the ghosts sample the bloom pyramid, which here is full of sodium mast
     // lamps. Harbor-gated: level 1's own low-sun framings are frozen.
     if (this._harbor) onScreen *= M.saturate((sunI - 0.4) / 1.6);
+    // ...and the same gate, opt-in, for any preset that asks for it. It is the
+    // INTERIOR case that needs it: a level with no sky has no sunDirection, so
+    // sunDir falls back to DEFAULT_SUN and this term would otherwise report a
+    // sun sitting in the middle of a buried corridor. s.sunLensGate is 0 on the
+    // market (and the harbor takes the branch above), so this line is
+    // unreachable on both frozen levels.
+    else if (s.sunLensGate > 0) onScreen *= M.saturate((sunI - 0.4) / 1.6);
     this._sunOnScreen = onScreen;
 
     // ==================================================== 2. motion vectors ==
@@ -6061,6 +6955,9 @@
     cu.uMidTint.value.set(s.midTint.r, s.midTint.g, s.midTint.b);
     cu.uHighTint.value.set(s.highTint.r, s.highTint.g, s.highTint.b);
     cu.uShadowSat.value = M.clamp(s.shadowSat, 0, 1);
+    // 1.0 (the authored default, and both frozen levels) branches the block out
+    // of the shader entirely - see pfGrade.
+    cu.uMidSat.value = M.clamp(s.midSat === undefined ? 1 : s.midSat, 0, 1.5);
     cu.uShadowAmt.value = s.shadowAmount;
     cu.uMidAmt.value = s.midAmount;
     cu.uHighAmt.value = s.highAmount * (1 + Math.max(0, s.flashHighBoost || 0) * flashRel);
@@ -6201,7 +7098,13 @@
     var maxN = Math.max(0, Math.min(6, s.volumePracticalCount | 0));
     var n = 0;
 
-    if (maxN > 0 && this._harbor) {
+    // The market never reaches the body (volumePracticalCount is 0, so maxN is
+    // 0 and the && short-circuits before either flag is read) and the harbor
+    // takes the first term, so both frozen levels are bit-identical. The second
+    // term is what lets an INTERIOR preset light the medium: with no sky there
+    // is no key, and the harbor round already measured what a key-only march
+    // contributes to a level whose key is dark - nothing, not one pixel.
+    if (maxN > 0 && (this._harbor || s.volumePracticals > 0)) {
       // Slots are allocated once and refilled in place - this runs every frame
       // and six object literals a frame is six object literals a frame.
       var picks = this._pracPicks;

@@ -129,6 +129,13 @@
       (ctx.levelDef && ctx.levelDef.weather === 'storm')));
   }
 
+  // Levels 3-10: the ones that publish the standard generic pose keys instead of
+  // the two shipped levels' bespoke framings. Anything gated on this can never
+  // move market or harbor, which is the point - both are frozen.
+  function isGeneric(ctx) {
+    return !!(ctx && ctx.levelId && ctx.levelId !== 'market' && !isHarbor(ctx));
+  }
+
   // The standing pose every weapon/combat framing starts from.
   //
   // These used to call S.street() unconditionally. On the harbor that is wrong
@@ -170,6 +177,39 @@
       try { var g = lv.sampleGround(x, z); if (isFinite(g)) y = g; } catch (e) { /* flat */ }
     }
     return new V(x, y, z);
+  }
+
+  // Generic framing for levels 3-10. The level is the single source of truth
+  // for its own compositions; there are deliberately no duplicated fallback
+  // coordinates here, because a stale guess photographs a wall more
+  // convincingly than it fails.
+  function genericPose(ctx, key, fov, cleanPlate) {
+    var poses = (ctx.level && ctx.level.cameraPoses) || null;
+    var p = poses && poses[key];
+    if (p && p.position) {
+      place(ctx, [p.position.x, p.position.y, p.position.z], p.yaw || 0, p.pitch || 0);
+    } else {
+      var sp = (ctx.level && ctx.level.spawnPoints && ctx.level.spawnPoints[0]) || null;
+      if (sp && sp.position) {
+        place(ctx, [sp.position.x, sp.position.y + 1.66, sp.position.z], sp.yaw || 0, 0);
+      } else {
+        place(ctx, [0, 1.66, 8], 0, 0);
+      }
+      GAME.logError('scenario', 'pose "' + key + '" missing from level.cameraPoses');
+    }
+    if (fov) setFov(ctx, fov);
+    if (cleanPlate) { hideHud(ctx); hideViewmodel(ctx); }
+  }
+
+  // A point in front of the camera, for spawning combatants into frame without
+  // each level having to hand-author a firefight position.
+  function aheadOfCamera(ctx, dist) {
+    var y = ctx.camera.rotation.y;
+    return new V(
+      ctx.camera.position.x - Math.sin(y) * dist,
+      0,
+      ctx.camera.position.z - Math.cos(y) * dist
+    );
   }
 
   var S = {
@@ -282,6 +322,53 @@
         ctx._harborPortrait = 1;
         return;
       }
+      // ...and none of it transfers to levels 3-10 either, for the same reason.
+      // PORTRAIT_MARKS is sixteen coordinates MEASURED IN THE MARKET, and the
+      // search that ranks them calls sunlit(), which returns false for every
+      // candidate in a level with no sun above the horizon - metro has no sky at
+      // all. So the search fell through to PORTRAIT_MARKS[0] and stood the
+      // subject on a market coordinate in a flooded subway: the delivered frame
+      // was a dutch-tilted view of a mannequin's legs against a wall. Solve it
+      // from the level's OWN published framing instead, exactly as the harbor
+      // does - stand on hero1, search forward for standable ground, and let
+      // framePortrait re-solve the standoff from the subject's real height.
+      //
+      // framePortrait() is deliberately NOT used to deliver it. That function
+      // re-seats the eye on PORTRAIT.ax/az - the market's sun bearing - at an
+      // ABSOLUTE y of 1.68, which is only an eye height in a level whose floor
+      // is at y = 0. It would also throw away the standpoint the level just
+      // published, and with it the only guarantee that the subject is standing
+      // somewhere lit. So the camera does not move at all here: it stays on
+      // hero1 and simply looks at the man who has been put on its own lens axis.
+      if (isGeneric(ctx)) {
+        genericPose(ctx, 'hero1', PORTRAIT.fov, true);
+        var gmark = combatMark(ctx, 1, 0, 0, 2.4, 5.0);
+        var ge = spawnEnemies(ctx, 1, gmark, 0, 0, true);
+        var gsub = (ge && ge.length) ? ge[0] : null;
+        ctx._holdEnemy = gsub;
+        ctx._holdMark = gmark;
+        holdEnemy(gsub, gmark);
+        // Aim at 53% of his measured height - heads read, boots are cheap.
+        var gaimY = gmark.y + 0.95;
+        var grp = gsub && (gsub.group || gsub.root || gsub.mesh);
+        if (grp && grp.isObject3D) {
+          try {
+            grp.updateMatrixWorld(true);
+            _pBox.makeEmpty(); _pBox.setFromObject(grp);
+            if (!_pBox.isEmpty()) {
+              _pBox.getSize(_pSize);
+              if (isFinite(_pSize.y) && _pSize.y > 0.7 && _pSize.y < 3.0) {
+                gaimY = _pBox.min.y + _pSize.y * 0.53;
+              }
+            }
+          } catch (err) { GAME.logError('scenario.genericPortrait', err); }
+        }
+        var gcam = ctx.camera.position;
+        lookAtPoint(ctx, [gcam.x, gcam.y, gcam.z],
+          _pTarget.set(gmark.x, gaimY, gmark.z), PORTRAIT.fov);
+        ctx.camera.updateMatrixWorld(true);
+        return;
+      }
       timeOfDay(ctx, 0.33);
       var shot = pickPortrait(ctx);
       var mark = shot.mark;
@@ -334,6 +421,44 @@
     rain_closeup: function (ctx) {
       harborPose(ctx, 'quay', 55);
       hideHud(ctx);
+    },
+
+    // ---- GENERIC LEVEL FRAMINGS --------------------------------------------
+    // Every level from 3 onward publishes cameraPoses under these standard
+    // keys, so adding a level needs NO new scenario code here. The market and
+    // harbor keep their bespoke names above for continuity.
+    lv_overview: function (ctx) { genericPose(ctx, 'overview', 64, true); },
+    lv_hero1: function (ctx) { genericPose(ctx, 'hero1', 75, false); },
+    lv_hero2: function (ctx) { genericPose(ctx, 'hero2', 75, false); },
+    lv_hero3: function (ctx) { genericPose(ctx, 'hero3', 75, false); },
+    lv_hero4: function (ctx) { genericPose(ctx, 'hero4', 75, false); },
+    lv_interior: function (ctx) { genericPose(ctx, 'interior', 78, false); },
+    lv_ads: function (ctx) {
+      genericPose(ctx, 'hero1', 75, false);
+      if (ctx.weapons) {
+        ctx.weapons.forceADS = true;
+        if (ctx.weapons.setADS) ctx.weapons.setADS(true, true);
+      }
+    },
+    lv_firefight: function (ctx) {
+      genericPose(ctx, 'hero1', 75, false);
+      // A flat 9 m straight ahead, with one shared base height for the whole
+      // squad, is the exact failure combatMark()/`ground` were written to stop -
+      // and levels 3-10 walked into it again. On snowbound (nothing but drift
+      // flanks) it put one man on thin air over a drift edge and buried another
+      // to the waist. Search outward for a standoff where all four are on
+      // walkable ground, then re-sample each man onto the terrain under his own
+      // feet. Same call the harbor firefight already makes.
+      spawnEnemies(ctx, 4, combatMark(ctx, 4, 3.0, 3.4, 9, 26), 3.0, 3.4, true);
+      ctx._fireAt = 1.2;
+    },
+    lv_muzzleflash: function (ctx) {
+      genericPose(ctx, 'hero1', 75, false);
+      ctx._fireAt = 0.75;
+    },
+    lv_explosion: function (ctx) {
+      genericPose(ctx, 'hero1', 75, false);
+      ctx._explodeAt = 0.9;
     },
 
     // ---- technical ---------------------------------------------------------

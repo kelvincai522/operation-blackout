@@ -26,3 +26,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Intermediate JPEGs generated only for document embedding.
+docs/embed/

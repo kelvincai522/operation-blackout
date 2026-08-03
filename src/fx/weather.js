@@ -1,20 +1,37 @@
 // ============================================================================
 // OPERATION BLACKOUT - src/fx/weather.js  ->  GAME.Weather
 //
-// Rain, storm and lightning for LEVEL 2 "COLD HARBOR". This module OWNS the
-// weather contract; every other system reads it and nobody else writes it:
+// Precipitation, atmosphere and lightning. This module OWNS the weather
+// contract; every other system reads it and nobody else writes it:
 //
 //   weather.wetness        0..1 global surface wetness
-//   weather.rainIntensity  0..1
+//   weather.rainIntensity  0..1  LIQUID precipitation only - see the note below
 //   weather.windDir        THREE.Vector2, normalised (x = world X, y = world Z)
 //   weather.windSpeed      m/s
 //   weather.flash          0..1 lightning intensity THIS frame (0 most frames)
 //   weather.flashDir       THREE.Vector3 pointing TOWARD the flash, i.e. the
 //                          same convention as sky.sunDirection, so
 //                          dot(normal, flashDir) is the lambert term
-//   weather.fogDensity     the fog density the current storm implies
-//   weather.setPreset(n)   'storm' | 'drizzle' | 'clear'
+//   weather.fogDensity     the extinction coefficient the current sky implies
+//   weather.setPreset(n)   'clear' | 'storm' | 'drizzle' | 'blizzard'
 //   weather.strike()       force a lightning strike now (capture determinism)
+//
+// Every field above is published on EVERY preset, always a finite number, so a
+// consumer never branches on the preset name. Three optional extras are
+// published alongside them for consumers that want to be precipitation-kind
+// agnostic; every current consumer still works reading the seven fields above:
+//
+//   weather.snowIntensity   0..1 FROZEN precipitation
+//   weather.precipIntensity max(rain, snow) - "how hard is it coming down"
+//   weather.precipitation   'none' | 'rain' | 'snow'
+//
+// WHY rainIntensity IS ZERO IN A BLIZZARD, AND MUST BE. materials.js feeds it
+// (with wetness) into the wet contract: film thickness, puddle coverage, the
+// ripple amplitude on standing water. Publishing snow through it would render
+// Kirovsk Pass on wet asphalt, which is the single most obvious way to get a
+// snow level wrong. Snow is dry: `blizzard` carries wetness 0.10 and
+// rainIntensity 0, and asks for the whole visibility budget through fogDensity
+// instead. `precipIntensity` is the field for "is anything falling".
 //
 // LEVEL 1 SAFETY. On any level that is not the harbor the preset is 'clear',
 // and 'clear' is not merely quiet - it is *absent*. No geometry is generated,
@@ -64,6 +81,8 @@
   var _v3 = new THREE.Vector3();
   var _v4 = new THREE.Vector3();
   var _c1 = new THREE.Color();
+  var _c2 = new THREE.Color();
+  var _c3 = new THREE.Color();
   var _size = new THREE.Vector2();
   var _box3 = new THREE.Box3();
 
@@ -95,18 +114,118 @@
   // volumetrics) was perfectly legible. A density that only looks right when
   // the atmosphere is switched off is the wrong density.
   // --------------------------------------------------------------------------
+  // ADDITIVE ONLY. `clear` and `storm` are the two presets a SHIPPED level
+  // selects (market and harbor), and their objects are frozen character for
+  // character. Every field the newer presets need is read with a default
+  // (`p.snow || 0`, `p.look || null`) precisely so these two never grow a key.
   var PRESETS = {
     clear: {
       rain: 0.0, wetness: 0.0, wind: 1.1, gust: 0.35, fog: 0.0045,
       lightning: 0, mist: 0.0, spray: 0.0, lens: 0.0
     },
+    // ---- DRIZZLE - Mekong Delta ---------------------------------------------
+    // "Fine, slow, sparse, with heavy drips off foliage rather than driving
+    // streaks. Humid, not violent."
+    //
+    // The old entry was a scaled-down storm: 0.32 rain, 3.6 m/s wind, and
+    // lightning 0.35, which meant a midday jungle got thunderstorm strikes.
+    // Lightning is now the STORM'S ALONE, and every dial that says "violent"
+    // comes off:
+    //   * wind 1.6 m/s. A canopy floor is nearly still air; the rain falls
+    //     almost vertically and what moves is the mist, not the drops.
+    //   * `look.fall` 0.55 and `look.streak` 0.42. Drizzle is 1-2 m/s drops,
+    //     not 9. A 1/60 s exposure of a 5 m/s drop is a 8 cm dash, and the
+    //     difference between a dash and a 30 cm slash is the difference between
+    //     drizzle and a downpour.
+    //   * `look.width` 1.30 and `look.blur` 1.45: fatter, softer, fewer. Fine
+    //     rain at close range is out-of-focus specks, not hairlines.
+    //   * `dripGain` 1.9. The brief puts the water on the LEAVES, so the drip
+    //     ropes carry nearly twice the weight the storm gives them and the
+    //     falling field carries a third.
+    // fog 0.0125 is V = 313 m: mist between the trunks with the far bank still
+    // legible, which is a humid day and not a whiteout.
     drizzle: {
-      rain: 0.32, wetness: 0.62, wind: 3.6, gust: 1.1, fog: 0.0080,
-      lightning: 0.35, mist: 0.40, spray: 0.35, lens: 0.30
+      rain: 0.30, wetness: 0.58, wind: 1.6, gust: 0.55, fog: 0.0125,
+      lightning: 0, mist: 0.75, spray: 0.0, lens: 0.22,
+      kind: 'rain',
+      look: {
+        adaptive: true, ref: [0.14, 0.17, 0.13], refFloor: 0.055, refCeil: 1.10,
+        fall: 0.55, streak: 0.42, width: 1.30, blur: 1.45,
+        // MEASURED ON A DAYLIT TEST FRAME AND RAISED TWICE.
+        //
+        // The rain is ADDITIVE and the rain shader ends its alpha with
+        // `0.44 + 3.2 * lit`. Both are right for a harbor at 02:00, where the
+        // apron is 0.01 linear and every drop the eye can see is standing in a
+        // sodium cone: a streak there adds twelve times its own background. A
+        // midday jungle has NO practicals at all, so every drop sits on the
+        // 0.44 floor AND has to add to a background three hundred times
+        // brighter. Probed on the test frame, the falling field was lifting its
+        // background by 2% - measurably present, visually absent.
+        //
+        // The local contrast an additive streak achieves is alpha * drop, and
+        // both terms scale out of the exposure (drop is a multiple of the
+        // MEASURED background), so 5.5 * 2.0 is a 0.22 lift wherever the grade
+        // lands. Restrained enough to stay drizzle, present enough to see.
+        rainGain: 5.5, drop: 2.0, air: 0.80,
+        // The mist is BRIGHTER than the scene here and darker than it in the
+        // harbor, and that is not a taste flip - mist is lit by the sky, so at
+        // 02:00 it sits above a black apron and at midday it sits above a shaded
+        // forest floor. The factor is against the measured background either
+        // way; only the background moved.
+        mistCol: 1.45, mistGain: 0.22,
+        dripGain: 1.9, splash: 0.65
+      }
     },
     storm: {
       rain: 1.0, wetness: 1.0, wind: 9.5, gust: 3.4, fog: 0.0145,
       lightning: 1, mist: 1.0, spray: 1.0, lens: 1.0
+    },
+    // ---- BLIZZARD - Kirovsk Pass --------------------------------------------
+    // NOT RAIN RECOLOURED. Every number here is a different physical regime:
+    //
+    //   rain 0, snow 1.0        - the rain machinery is never even built.
+    //   wetness 0.10            - SNOW IS NOT WATER. materials.js multiplies
+    //                             this by each surface's puddle susceptibility
+    //                             to get the standing-water level, so 0.10 puts
+    //                             the water line at 0.90 of the puddle field:
+    //                             effectively nothing ponds and nothing sheets.
+    //                             It is not zero because a boot-packed path and
+    //                             a truck bonnet do go slick.
+    //   wind 13 / gust 5.5      - a blizzard is a WIND event. At a 0.9 m/s
+    //                             terminal velocity that is a 15:1 wind-to-fall
+    //                             ratio against the storm's 1:1, which is why
+    //                             the flakes travel almost horizontally.
+    //   fog 0.026               - V = 150 m by Koschmieder. Transmittance is
+    //                             0.21 at 60 m and 0.04 at 125 m, so the pine
+    //                             line dissolves into white exactly as the brief
+    //                             asks while a 40 m landmark still reads. The
+    //                             storm's 0.0145 (V = 270 m) is a sea mist; this
+    //                             is a whiteout, and it is the single largest
+    //                             lever the level has.
+    //   haze 1.0, drift 1.0     - the whiteout card deck and the ground
+    //                             spindrift, both snow-only layers.
+    //   lens 0.06               - flakes melt on a warm front element, but a
+    //                             lens full of water is a storm effect and this
+    //                             is not that. Near zero, not zero.
+    blizzard: {
+      rain: 0.0, snow: 1.0, wetness: 0.10, wind: 13.0, gust: 5.5, fog: 0.026,
+      lightning: 0, mist: 0.0, spray: 0.0, lens: 0.06,
+      haze: 1.0, drift: 1.0, kind: 'snow',
+      look: {
+        adaptive: true, ref: [0.60, 0.64, 0.72], refFloor: 0.30, refCeil: 1.70,
+        // The flake core sits 62% above the veil it falls through and the halo
+        // 72% below it. Both are derived from the SAME measured background, so
+        // a flake reads against the whiteout and against a black dacha wall
+        // without either number being a guess about the exposure.
+        // `drift` measured, not chosen. At 1.20 the spindrift landed at 0.74
+        // against a snow ground of 0.72 and was invisible in the test frame -
+        // blowing snow over lying snow genuinely IS low contrast, but a layer
+        // that photographs as nothing is not honesty, it is a missing feature.
+        // 1.55 puts it clearly above the ground it crosses while staying under
+        // the flake cores at 1.62, which is the right order: the thing in the
+        // air is brighter than the thing on the ground.
+        core: 1.75, rim: 0.26, haze: 1.06, drift: 1.55, hazeGain: 0.34
+      }
     }
   };
 
@@ -767,6 +886,304 @@
     '}'
   ].join('\n');
 
+  // ==========================================================================
+  // SNOW
+  //
+  // A SEPARATE SYSTEM, not the rain shader with a white uBaseCol, because
+  // almost nothing about a snowflake matches a raindrop:
+  //
+  //  * IT TUMBLES. A raindrop is a falling sphere and its path is a straight
+  //    line; a flake is a plate with a huge area-to-mass ratio that seesaws,
+  //    stalls and skids. Three incommensurate sinusoids per flake (uFlutter)
+  //    give a meander that never repeats and never syncs with its neighbours.
+  //    This is the single largest visual difference between snow and recoloured
+  //    rain and it is worth every one of its instructions.
+  //  * IT IS SLOW. 0.8-1.2 m/s against a raindrop's 7-11. That is what turns a
+  //    streak into a disc: at 1/60 s a flake moves a centimetre of its own
+  //    diameter, so it is a SHAPE on film and not a dash.
+  //  * THE WIND OWNS IT. Same per-particle `2.15 - sp` shear the rain uses, but
+  //    against a fifteenth of the fall speed, so the spread of trajectories is
+  //    enormous - heavy aggregates cut across light ones and the field has
+  //    internal structure instead of being one translating sheet.
+  //  * IT VARIES IN SIZE BY AN ORDER OF MAGNITUDE. aRand.x spans 0.5-2.4 inside
+  //    a layer, and the three layers are nested logarithmically on top of that,
+  //    so any frame holds flakes from 1 px to 50 px. Size IS the depth cue;
+  //    there is no perspective information in a field of identical dots.
+  //
+  // THE HARD PART IS THAT IT HAS TO READ AGAINST WHITE **AND** AGAINST BLACK.
+  // An additive particle (which is what the rain is) is invisible against a
+  // whiteout and a normal-blended white one is invisible against snow. Neither
+  // works, because in this level both backgrounds are in the same frame: the
+  // sky, the drifts and the dachas.
+  //
+  // So a flake is composited OVER, premultiplied, as a bright core inside a
+  // DARKER halo. Against the whiteout the halo wins and the flake prints as a
+  // soft grey lozenge; against a dark wall the core wins and it prints as a
+  // bright one. Both colours are derived from the measured background every
+  // frame (see _syncPalette), so the contrast survives any exposure the grade
+  // lands on. The halo is strongest on the near layer and almost gone on the
+  // far one, which is also correct - it is the near flakes that cross both
+  // backgrounds, and it doubles as the defocus a 3 cm object 60 cm from the
+  // lens actually has.
+  // ==========================================================================
+  var SNOW_VERT = [
+    'attribute vec3 aBase;',   // 0..1 inside the volume
+    'attribute vec4 aRand;',   // x size mul, y fall mul, z brightness, w flutter mul
+    'uniform vec3 uCentre;',
+    'uniform vec3 uBox;',
+    'uniform vec3 uDrift;',
+    'uniform vec3 uVel;',
+    'uniform float uTime;',
+    'uniform float uSize;',
+    'uniform float uStretch;',
+    'uniform float uFlutter;',
+    'uniform float uPixelScale;',
+    'uniform float uMinPx;',
+    'uniform float uMaxPx;',
+    'uniform float uNearFade;',
+    'uniform float uFarFade;',
+    'uniform float uSnow;',
+    'uniform float uGain;',
+    'uniform float uFogSigma;',
+    'uniform vec3 uCoreCol;',
+    'uniform vec2 uSheetDir;',
+    'uniform float uSheetPhase;',
+    'uniform vec4 uRoofRect;',
+    'uniform float uRoofScale;',
+    'uniform sampler2D uRoofMap;',
+    // Identity for every world volume; the camera's matrixWorld for the
+    // viewmodel volume, whose "world" is really camera-local space.
+    'uniform mat4 uLightXf;',
+    LIGHT_PARS,
+    'varying vec2 vUv;',
+    'varying vec3 vCol;',
+    'varying float vAlpha;',
+    'varying float vViewZ;',
+    'void main() {',
+    '  vUv = uv;',
+    '  float sp = aRand.y;',
+    '  // A dense aggregate (sp > 1) falls faster and is blown LESS far; a dry',
+    '  // crystal hangs and is carried away. Against a 0.9 m/s fall that spread',
+    '  // is what makes the field look three-dimensional in motion.',
+    '  float ws = 2.15 - sp;',
+    '  vec3 base = aBase * uBox;',
+    '  // THE TUMBLE. Applied in world space BEFORE the wrap, so a flake keeps',
+    '  // meandering across the volume seam instead of snapping straight there.',
+    '  // Rates are deliberately incommensurate (1.0 / 1.63 / 0.79) - a common',
+    '  // factor would put the whole field on one breathing cycle.',
+    '  float ph = aRand.z * 6.2831853;',
+    '  float tt = uTime * (0.45 + 0.75 * aRand.w);',
+    '  float amp = uFlutter * (0.35 + 1.25 * aRand.w);',
+    '  vec3 flut = vec3(sin(tt + ph),',
+    '                   sin(tt * 1.63 + ph * 2.1) * 0.30,',
+    '                   cos(tt * 0.79 + ph * 1.7)) * amp;',
+    '  vec3 drift = vec3(uDrift.x * ws, uDrift.y * sp, uDrift.z * ws);',
+    '  vec3 hb = uBox * 0.5;',
+    '  vec3 world = uCentre + mod(base + drift + flut - uCentre + hb, uBox) - hb;',
+    '  vec3 wp = (uLightXf * vec4(world, 1.0)).xyz;',
+    '',
+    '  vec3 vel = vec3(uVel.x * ws, uVel.y * sp, uVel.z * ws);',
+    '  vec4 vp = viewMatrix * vec4(world, 1.0);',
+    '  float dist = max(-vp.z, 0.001);',
+    '  vec3 vdir = (viewMatrix * vec4(vel, 0.0)).xyz;',
+    '  float vl = length(vdir);',
+    '  vdir = vl > 1e-5 ? vdir / vl : vec3(0.0, -1.0, 0.0);',
+    '  vec3 toEye = normalize(-vp.xyz);',
+    '  vec3 side = cross(vdir, toEye);',
+    '  float sl = length(side);',
+    '  side = sl > 1e-4 ? side / sl : vec3(1.0, 0.0, 0.0);',
+    '',
+    '  // SIZE IS THE PARALLAX, and the clamps are what stop it lying at either',
+    '  // end: below uMinPx a flake stops surviving the resolve and simply',
+    '  // vanishes (which is how a far field should thin out, but it has to',
+    '  // FADE rather than flicker), and above uMaxPx a flake 40 cm from the',
+    '  // lens becomes a dinner plate.',
+    '  float wpp = dist * uPixelScale;',
+    '  float want = uSize * aRand.x;',
+    '  float rad = min(max(want, wpp * uMinPx), wpp * uMaxPx);',
+    '  // The dim that pays for the inflation. A flake widened four times to',
+    '  // survive one pixel must carry a quarter of the opacity or the far field',
+    '  // turns into a grey wash.',
+    '  float subpix = clamp(want / max(rad, 1e-5), 0.30, 1.0);',
+    '  // Snow barely streaks - that is the point - but at 13 m/s the near layer',
+    '  // does travel a couple of its own diameters per frame, and a perfectly',
+    '  // round near flake in a gale reads as floating ash.',
+    '  float stretch = 1.0 + uStretch * (0.55 + 0.90 * sp);',
+    '  vp.xyz += vdir * (position.y * rad * 2.0 * stretch) + side * (position.x * rad * 2.0);',
+    '  gl_Position = projectionMatrix * vp;',
+    '  vViewZ = dist;',
+    '',
+    '  vec3 rel = (world - uCentre) / hb;',
+    '  float edge = max(max(abs(rel.x), abs(rel.y)), abs(rel.z));',
+    '  float a = 1.0 - smoothstep(0.62, 1.0, edge);',
+    '  a *= smoothstep(uNearFade, uNearFade * 3.2, dist);',
+    '  a *= mix(1.0, 1.0 - smoothstep(uFarFade * 0.45, uFarFade, dist), 0.88);',
+    '  // Real extinction, the same sigma the whiteout uses. A flake at 70 m is',
+    '  // BEHIND 70 m of blowing snow and belongs in the veil, not drawn crisply',
+    '  // on top of it - drawing it on top is what makes weather look like a',
+    '  // screen overlay.',
+    '  a *= exp(-dist * uFogSigma * 0.75);',
+    '  a *= uSnow * uGain * (0.55 + 0.70 * aRand.z);',
+    '  a *= subpix;',
+    '  // Squall curtains travelling downwind, world-anchored, so the density',
+    '  // surges through the valley instead of the whole field dimming at once.',
+    '  float sheet = 0.5 + 0.5 * cos(6.2831853 * (dot(wp.xz, uSheetDir) * 0.021 + uSheetPhase));',
+    '  a *= mix(0.62, 1.38, sheet * sheet);',
+    '  // It does not snow indoors either. Same coarse shelter grid the rain',
+    '  // reads, so a church porch or a truck cab is dry.',
+    '  vec2 ruv = (wp.xz - uRoofRect.xy) * uRoofRect.zw;',
+    '  float roofY = 0.0;',
+    '  if (ruv.x > 0.0 && ruv.x < 1.0 && ruv.y > 0.0 && ruv.y < 1.0) {',
+    '    roofY = texture2D(uRoofMap, ruv).r * uRoofScale;',
+    '  }',
+    '  a *= 1.0 - step(0.5, roofY) * step(wp.y + 0.05, roofY);',
+    '  vAlpha = min(a, 1.0);',
+    '',
+    '  // Practicals still count: a flake crossing a truck headlamp or a lit',
+    '  // window is the only warm thing in the palette.',
+    '  vCol = uCoreCol + gbSampleLights(wp) * 0.55;',
+    '}'
+  ].join('\n');
+
+  var SNOW_FRAG = [
+    SOFT_PARS,
+    'uniform float uSoftDist;',
+    'uniform vec3 uRimCol;',
+    'uniform float uRim;',
+    'uniform vec2 uCoreR;',
+    'varying vec2 vUv;',
+    'varying vec3 vCol;',
+    'varying float vAlpha;',
+    'varying float vViewZ;',
+    'void main() {',
+    '  vec2 p = vUv * 2.0 - 1.0;',
+    '  float r = length(p);',
+    '  if (r > 1.0) discard;',
+    '  // A BRIGHT BODY WITH A DARK RIM, and the balance between the two is the',
+    '  // whole ballgame. See the block comment above SNOW_VERT for why a flake',
+    '  // needs both at all.',
+    '  //',
+    '  // TWICE MEASURED. The first pass put a narrow annulus at a fixed radius',
+    '  // and printed a frame of hollow soap bubbles. The second derived the',
+    '  // shadow as the disc MINUS a pow()-tightened core, which is annular by',
+    '  // construction - zero at the centre by definition - and with the core',
+    '  // exponent at 2.8 the bright part covered a tenth of the area the shadow',
+    '  // did, so the eye read the shadow and the flakes came back as RINGS',
+    '  // again. The shape was never the problem; the RATIO was.',
+    '  //',
+    '  // So: uCoreR.x is barely above 1, which means the bright body is the',
+    '  // whole disc and the centre carries full coverage - a flake cannot look',
+    '  // hollow when its middle is the most opaque part of it. The rim is then',
+    '  // a narrow band at uCoreR.y, dark and with real coverage, doing only the',
+    '  // job it is there for: giving the flake an edge against a background it',
+    '  // cannot out-brighten. On a dark wall the rim is invisible and the body',
+    '  // reads; on the whiteout the body clips into the sky and the rim reads.',
+    '  float disc = 1.0 - smoothstep(0.0, 1.0, r);',
+    '  float ac = pow(disc, uCoreR.x) * vAlpha;',
+    '  float ring = smoothstep(uCoreR.y - 0.40, uCoreR.y, r) *',
+    '               (1.0 - smoothstep(uCoreR.y, 1.0, r));',
+    '  float ah = ring * vAlpha * uRim;',
+    '  float a = ac + ah;',
+    '  if (a < 0.0025) discard;',
+    '  // PREMULTIPLIED. Two colours at two coverages resolve into one vec4 with',
+    '  // no divide, and the normalisation below keeps the pair legal where the',
+    '  // core and the halo overlap.',
+    '  vec3 col = vCol * ac + uRimCol * ah;',
+    '  float k = a > 1.0 ? 1.0 / a : 1.0;',
+    '  float sf = gbSoft(vViewZ, uSoftDist) * k;',
+    '  gl_FragColor = vec4(col * sf, a * sf);',
+    '}'
+  ].join('\n');
+
+  // ==========================================================================
+  // SPINDRIFT: the sheet of loose snow the wind drags across the drifts.
+  //
+  // Without it a snow level is a static white ground plane with particles in
+  // front of it, and the ground is most of the frame. This is the layer that
+  // makes the SURFACE part of the weather.
+  //
+  // Camera-facing (so it never goes edge-on), extremely wide and low, sitting
+  // ON the ground rather than floating over it, and advecting at 1.75x the
+  // wind - loose snow at the surface outruns the mean flow in gusts. The
+  // motion the eye reads is not the card translating, it is the texture
+  // STREAMING through the card: a rigid sprite sliding sideways reads as a
+  // decal on a conveyor, which is exactly what the first pass looked like.
+  // ==========================================================================
+  var DRIFT_VERT = [
+    'attribute vec4 aBase;',   // xz 0..1 in the volume, y height frac, w phase
+    'attribute vec4 aRand;',   // x half-length, y height, z bright, w speed mul
+    'uniform vec3 uCentre;',
+    'uniform vec3 uBox;',
+    'uniform vec3 uDrift;',
+    'uniform float uGroundY;',
+    'uniform float uTime;',
+    'uniform float uGain;',
+    'uniform float uScroll;',
+    'uniform vec3 uBaseCol;',
+    LIGHT_PARS,
+    'varying vec2 vUv;',
+    'varying vec3 vCol;',
+    'varying float vAlpha;',
+    'varying float vViewZ;',
+    'varying float vScroll;',
+    'void main() {',
+    '  vUv = uv;',
+    '  vec2 hb = uBox.xz * 0.5;',
+    '  vec2 base = aBase.xz * uBox.xz;',
+    '  vec2 drift = uDrift.xz * aRand.w;',
+    '  vec2 xz = uCentre.xz + mod(base + drift - uCentre.xz + hb, uBox.xz) - hb;',
+    '  // y^2 so the population piles up in the first few centimetres: spindrift',
+    '  // is a boundary-layer phenomenon, and a uniform vertical spread reads as',
+    '  // ground fog instead.',
+    '  float y = uGroundY + aBase.y * aBase.y * uBox.y;',
+    '  vec3 world = vec3(xz.x, y, xz.y);',
+    '  vec3 toCam = cameraPosition - world;',
+    '  toCam.y = 0.0;',
+    '  float tl = length(toCam);',
+    '  toCam = tl > 1e-4 ? toCam / tl : vec3(0.0, 0.0, 1.0);',
+    '  vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), toCam));',
+    '  world += right * (position.x * aRand.x) + vec3(0.0, (position.y + 0.5) * aRand.y, 0.0);',
+    '  vec4 vp = viewMatrix * vec4(world, 1.0);',
+    '  gl_Position = projectionMatrix * vp;',
+    '  float dist = max(-vp.z, 0.001);',
+    '  vViewZ = dist;',
+    '  vec2 rel = (xz - uCentre.xz) / hb;',
+    '  float edge = max(abs(rel.x), abs(rel.y));',
+    '  float a = 1.0 - smoothstep(0.58, 1.0, edge);',
+    '  // Close enough to walk through, far enough to reach the middle distance.',
+    '  a *= smoothstep(0.7, 4.0, dist) * (1.0 - smoothstep(28.0, 52.0, dist));',
+    '  a *= uGain * (0.45 + 0.90 * aRand.z);',
+    '  vAlpha = a;',
+    '  vScroll = uScroll * aRand.w + aBase.w;',
+    '  vCol = uBaseCol + gbSampleLights(world) * 0.25;',
+    '}'
+  ].join('\n');
+
+  var DRIFT_FRAG = [
+    SOFT_PARS,
+    'uniform float uSoftDist;',
+    'uniform sampler2D uMap;',
+    'varying vec2 vUv;',
+    'varying vec3 vCol;',
+    'varying float vAlpha;',
+    'varying float vViewZ;',
+    'varying float vScroll;',
+    'void main() {',
+    '  // The card is a WINDOW on a streaming, horizontally-tiling texture. That',
+    '  // is what makes a tongue of blowing snow tear and reform instead of',
+    '  // sliding rigidly across the ground.',
+    '  float m = texture2D(uMap, vec2(vUv.x * 1.6 + vScroll, vUv.y)).r;',
+    '  // Dense at the surface, no hard top edge, and feathered ends so a card',
+    '  // never shows its own rectangle.',
+    '  float lift = 1.0 - smoothstep(0.04, 1.0, vUv.y);',
+    '  float ends = smoothstep(0.0, 0.20, vUv.x) * (1.0 - smoothstep(0.80, 1.0, vUv.x));',
+    '  float a = m * lift * ends * vAlpha;',
+    '  if (a < 0.003) discard;',
+    '  a *= gbSoft(vViewZ, uSoftDist);',
+    '  gl_FragColor = vec4(vCol, a);',
+    '}'
+  ].join('\n');
+
   var FS_VERT = [
     'varying vec2 vUv;',
     'void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }'
@@ -1039,6 +1456,52 @@
     return t;
   }
 
+  // Streaky, HORIZONTALLY TILING mask for the spindrift cards. It has to tile
+  // because the fragment shader scrolls the lookup forever; a clamped texture
+  // would smear its edge texel into a permanent stripe. fbm does not tile, so
+  // the field is cross-faded with a copy of itself one period along - the
+  // classic trick, and the ~15% contrast loss in the middle is invisible on a
+  // mask that is moving at 20 m/s.
+  function spindriftTexture(noise) {
+    var W = 256, H = 64;
+    var cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    var g2 = cv.getContext('2d');
+    var img = g2.createImageData(W, H);
+    var d = img.data;
+    function raw(x, y) {
+      // Compressed in x, stretched in y: wisps, not blobs.
+      var n = noise.fbm2(x * 0.024, y * 0.115, 4, 2.2, 0.55) * 0.5 + 0.5;
+      var f = noise.fbm2(x * 0.085 + 40.0, y * 0.30 + 12.0, 3, 2.3, 0.5) * 0.5 + 0.5;
+      return M.saturate((n * 0.72 + f * 0.34 - 0.40) / 0.44);
+    }
+    for (var y = 0; y < H; y++) {
+      var v = (y + 0.5) / H;
+      // Solid at the surface, torn and thinning upward.
+      var fall = M.saturate(1 - v);
+      fall = fall * fall * (0.35 + 0.65 * fall);
+      for (var x = 0; x < W; x++) {
+        var w = x / W;
+        var a1 = raw(x, y);
+        var a2 = raw(x - W, y);
+        var val = a1 * (1 - w) + a2 * w;
+        var a = Math.round(M.saturate(val * (0.28 + 1.05 * fall)) * 255);
+        var i = (y * W + x) * 4;
+        d[i] = a; d[i + 1] = a; d[i + 2] = a; d[i + 3] = 255;
+      }
+    }
+    g2.putImageData(img, 0, 0);
+    var t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.NoColorSpace;   // mask data, not colour
+    t.wrapS = THREE.RepeatWrapping;
+    t.wrapT = THREE.ClampToEdgeWrapping;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.generateMipmaps = true;
+    t.needsUpdate = true;
+    return t;
+  }
+
   // ==========================================================================
   // GAME.Weather
   // ==========================================================================
@@ -1056,6 +1519,12 @@
     // fork() derives from the current state without consuming it, and this runs
     // before the first draw, so the schedule is a pure function of the seed.
     this.lrng = this.rng.fork(0x71A5);
+    // Same reasoning as the lightning stream, and the same guarantee: fork()
+    // DERIVES from the current state without consuming it, so adding this line
+    // cannot move a single draw the harbor makes. Snow gets its own stream so
+    // that tuning a flake count can never shift a splash, a drip edge or a
+    // lightning bearing.
+    this.srng = this.rng.fork(0x53A0);
     this.noise = new GAME.Noise(0xC01D);
 
     // ---- the published contract --------------------------------------------
@@ -1070,6 +1539,14 @@
     this.fogUnits = 'extinction-per-metre';
     this.fogVisibility = visibilityFor(this.fogDensity);
     this.preset = 'clear';
+
+    // ---- the same contract, kind-agnostic ----------------------------------
+    // Published on every preset so a consumer that only wants to know "is
+    // anything falling and how hard" never has to know which preset is loaded.
+    // rainIntensity stays LIQUID-ONLY - see the header.
+    this.snowIntensity = 0;
+    this.precipIntensity = 0;
+    this.precipitation = 'none';
 
     // ---- optional extras; every consumer guards on its own side ------------
     this.lensWetness = 0;        // for postfx's lens-rain, if it wants it
@@ -1094,10 +1571,34 @@
     this.qp = typeof q.particles === 'number' ? M.clamp(q.particles, 0.25, 2.0) : 1.0;
 
     this._built = false;
+    this._roofBuilt = false;
+    this._inBuild = false;
     this._target = PRESETS.clear;
     this._rainCur = 0;
     this._mistCur = 0;
     this._sprayCur = 0;
+    this._snowCur = 0;
+    this._hazeCur = 0;
+    this._driftCur = 0;
+
+    // ---- per-preset LOOK. Every one of these is a multiplier whose default is
+    // the identity, and `storm` and `clear` carry no `look` block at all, so
+    // every expression they feed evaluates to exactly what it evaluated to
+    // before this existed. x * 1.0 is bit-exact in IEEE; that is the whole
+    // reason the knobs are multiplicative rather than additive.
+    this._look = null;
+    this._fallMul = 1.0;
+    this._dripGain = 1.0;
+    this._splashMul = 1.0;
+    this._mistGain = 0.15;      // the harbor's original inline constant
+    this._hazeGain = 0.30;
+    this._paletteAt = -1e9;
+    this._camGroundY = 0;
+    this._groundAt = -1e9;
+    this._snowCore = new THREE.Color(0.95, 1.00, 1.12);
+    this._snowRim = new THREE.Color(0.16, 0.18, 0.22);
+    this._hazeCol = new THREE.Color(0.60, 0.64, 0.72);
+    this._driftCol = new THREE.Color(0.70, 0.75, 0.84);
     this._windVec = new THREE.Vector2(0, 0);
     this._windAccum = new THREE.Vector2(0, 0);
     this._fallAccum = 0;
@@ -1172,6 +1673,15 @@
     this.mist = null;
     this.spray = null;
 
+    // ---- snow. Built ONLY by a snow preset; a rain level never allocates any
+    // of it and a snow level never allocates the rain machinery.
+    this.snowLayers = [];
+    this.viewSnow = null;
+    this.snowHaze = null;
+    this.spindrift = null;
+    this._driftMap = null;
+    this._viewSnowDrift = new THREE.Vector3();
+
     // Ground probes for splashes. Pre-allocated: they are refreshed two per
     // frame forever, so allocating one would be allocating one per frame.
     this._probes = [];
@@ -1203,6 +1713,7 @@
       uFlash: { value: 0 },
       uFlashCol: { value: new THREE.Color(0, 0, 0) },
       uRain: { value: 0 },
+      uSnow: { value: 0 },
       uDepth: { value: fb },
       uSoft: { value: 0 },
       uInvRes: { value: new THREE.Vector2(1 / 1280, 1 / 720) },
@@ -1233,24 +1744,39 @@
   Weather.prototype.build = async function (ctx) {
     ctx = ctx || this.ctx;
     this.ctx = ctx;
+    this._inBuild = true;
     try {
       var want = 'clear';
       if (ctx.levelId === 'harbor') want = 'storm';
       if (ctx.levelDef && PRESETS[ctx.levelDef.weather]) want = ctx.levelDef.weather;
 
       this._groundY = this._guessGroundY(ctx);
+      this._camGroundY = this._groundY;
 
       if (want !== 'clear') {
-        // Only a wet level pays for any of this.
+        // Only a level with weather pays for any of this, and it pays only for
+        // the phase it actually has. The rain block below is the harbor's
+        // original sequence untouched - same calls, same order, same two yield
+        // points - because this.rng is a single stream and reordering it would
+        // move every drip edge and every splash in a shipped level.
+        var wp = PRESETS[want];
         this._buildRoofMask(ctx);
-        this._buildRain();
-        if (!GAME.headless) await GAME.yieldFrame();
-        this._buildSplash();
-        this._buildDrips(ctx);
-        if (!GAME.headless) await GAME.yieldFrame();
-        this._buildMist();
-        this._buildRipples(ctx);
-        this._buildChannel();
+        this._roofBuilt = true;
+        if (wp.rain > 0.001) {
+          this._buildRain();
+          if (!GAME.headless) await GAME.yieldFrame();
+          this._buildSplash();
+          this._buildDrips(ctx);
+          if (!GAME.headless) await GAME.yieldFrame();
+          this._buildMist();
+          this._buildRipples(ctx);
+        }
+        if (wp.lightning > 0) this._buildChannel();
+        if ((wp.snow || 0) > 0.001) {
+          if (!GAME.headless) await GAME.yieldFrame();
+          this._buildSnow();
+          this._buildSnowAir();
+        }
         this._built = true;
       }
 
@@ -1281,18 +1807,30 @@
     } catch (e) {
       GAME.logError('weather.build', e);
     }
+    this._inBuild = false;
   };
 
-  Weather.prototype._buildResources = function (ctx) {
-    if (this._built) return;
+  // Lazy, PHASE-AWARE and idempotent. A level whose env profile arrives after
+  // the build pass (main.js applies `env` last, so every level except the two
+  // legacy ones reaches its preset through setPreset) builds here instead.
+  // Each block is guarded on what already exists, so switching preset at
+  // runtime tops up rather than rebuilding or leaking.
+  Weather.prototype._ensureResources = function (ctx, p) {
+    if (!p) return;
     try {
-      this._buildRoofMask(ctx);
-      this._buildRain();
-      this._buildSplash();
-      this._buildDrips(ctx);
-      this._buildMist();
-      this._buildRipples(ctx);
-      this._buildChannel();
+      if (!this._roofBuilt) { this._buildRoofMask(ctx); this._roofBuilt = true; }
+      if (p.rain > 0.001 && !this.layers.length) {
+        this._buildRain();
+        this._buildSplash();
+        this._buildDrips(ctx);
+        this._buildMist();
+        this._buildRipples(ctx);
+      }
+      if ((p.snow || 0) > 0.001 && !this.snowLayers.length) {
+        this._buildSnow();
+        this._buildSnowAir();
+      }
+      if (p.lightning > 0 && !this._channel) this._buildChannel();
       this._built = true;
     } catch (e) {
       GAME.logError('weather.buildResources', e);
@@ -1577,6 +2115,287 @@
     mesh.renderOrder = 4;
     mesh.name = 'lens-beads';
     this.beads = { mesh: mesh, mat: mat, count: count };
+  };
+
+  // --------------------------------------------------------------------------
+  // SNOW LAYERS
+  //
+  //  n    count  box (m)         fall  wind  size(m) minPx maxPx stretch flutter
+  //
+  // NESTED THE SAME WAY THE RAIN IS, and for the same reason: the screen area a
+  // depth shell paints goes as r^2, so equal density per cubic metre spends
+  // almost the whole budget in the far field. 1-12 / 12-34 / 34-80 m with the
+  // counts weighted toward the far layer equalises density * r^2, and it is the
+  // NEAR layer that survives an occluder - a half-buried dacha depth-tests mid
+  // and far away entirely, and without near flakes its wall photographs in
+  // clear air.
+  //
+  // `sz` * aRand.x (0.5-2.4) is 11-53 mm on the near layer down to 7-36 mm on
+  // the far one. Real wet aggregates in a warm blizzard reach 25 mm, so this
+  // flatters the biggest flakes about twice - which is the same allowance the
+  // rain streaks take, and for the same reason: a shape has to beat the resolve
+  // before it can beat the tone curve.
+  //
+  // `fl` is the tumble amplitude in metres. It GROWS with distance on purpose:
+  // the meander has to stay perceptible in SCREEN space, and a 30 cm excursion
+  // at 60 m is a third of a pixel.
+  // --------------------------------------------------------------------------
+  // `cr` is [body exponent, rim radius] - see SNOW_FRAG. `rim` is the dark
+  // edge's coverage: strongest on the near layer, which is the only one whose
+  // flakes are big enough to have an edge and the only one that crosses both
+  // the whiteout and the dark geometry in the same frame.
+  //
+  // `rim` WAS 0.90/0.62/0.25 AND IT WAS MEASURED WRONG. A/B'd by forcing the
+  // rim to zero and re-rendering the same frame: at 0.90 the field printed as
+  // hollow circles, and with the rim off entirely it printed as clean bright
+  // flakes that read perfectly well against BOTH the whiteout and a black
+  // wall. So the body was never failing - the edge was simply louder than it,
+  // because a thin dark ring on a light field is a far stronger signal to the
+  // eye than a diffuse light disc on it. The brief asks for a SUBTLE dark rim
+  // and 0.34 is subtle; 0.90 is an outline, and an outline is a cartoon.
+  //
+  // DENSITY WAS THE FIRST THING MEASURED AND THE FIRST THING WRONG. At
+  // 900/1500/1900 the mid volume held 0.054 flakes per cubic metre against the
+  // rain's 0.10 in the same box, and the test frame came back as a scatter of
+  // large isolated blobs - which is a snow globe, not a blizzard. Real snowfall
+  // runs 1-10 flakes/m3 and no particle budget reaches that, but the fix is the
+  // same either way: MORE and SMALLER, not fewer and bigger. The counts are up
+  // ~70% and every base size is down ~15%, which costs 5k triangles and buys a
+  // field that reads as a curtain instead of as a handful of objects.
+  var SNOW_LAYER_DEFS = [
+    { n: 'near', c: 2000, b: [12, 11, 12], f: 1.05, w: 1.00, sz: 0.019, mn: 2.00, mx: 18,
+      st: 0.55, fl: 0.30, cr: [1.15, 0.86], rim: 0.34, nf: 0.55, ff: 14, g: 0.85, ro: 13 },
+    { n: 'mid',  c: 3400, b: [34, 24, 34], f: 0.92, w: 0.95, sz: 0.015, mn: 1.55, mx: 14,
+      st: 0.34, fl: 0.75, cr: [1.05, 0.88], rim: 0.22, nf: 0.90, ff: 36, g: 0.72, ro: 12 },
+    { n: 'far',  c: 4000, b: [80, 46, 80], f: 0.78, w: 0.86, sz: 0.012, mn: 1.15, mx: 9,
+      st: 0.14, fl: 1.60, cr: [0.95, 0.90], rim: 0.09, nf: 2.00, ff: 88, g: 0.55, ro: 11 }
+  ];
+
+  // The fourth volume, in ctx.viewScene. Same reason the rain has one: postfx
+  // composites the viewmodel over the world with a cleared depth buffer, so
+  // nothing in ctx.scene can ever draw in front of the weapon and the player
+  // would otherwise be standing in a blizzard inside a dry bubble.
+  var VIEW_SNOW_DEF = {
+    n: 'view', c: 300, b: [2.6, 2.2, 2.6], f: 1.00, w: 1.00, sz: 0.013, mn: 1.60, mx: 16,
+    st: 0.45, fl: 0.10, cr: [1.15, 0.86], rim: 0.34, nf: 0.06, ff: 2.5, g: 0.90, ro: 3
+  };
+
+  Weather.prototype._buildSnow = function () {
+    for (var i = 0; i < SNOW_LAYER_DEFS.length; i++) {
+      this._makeSnowLayer(SNOW_LAYER_DEFS[i], false);
+    }
+    this._buildViewSnow();
+  };
+
+  Weather.prototype._makeSnowLayer = function (D, isView) {
+    var U = this.uniforms;
+    var rng = this.srng;
+    var count = Math.max(60, Math.round(D.c * this.qp));
+    var geo = instancedQuads(count);
+    var base = iattr(geo, 'aBase', 3, count);
+    var rand = iattr(geo, 'aRand', 4, count);
+    for (var i = 0; i < count; i++) {
+      base.array[i * 3] = rng.next();
+      base.array[i * 3 + 1] = rng.next();
+      base.array[i * 3 + 2] = rng.next();
+      // SIZE IS SKEWED HARD, not uniform. A snowfall is mostly small crystals
+      // with a scatter of big wet aggregates; a uniform spread reads as noise
+      // and, worse, as ONE size, because the eye reads the mode and not the
+      // range. ^2.2 puts the median near 0.75 and leaves a long tail out to 2.4.
+      var s = rng.next();
+      rand.array[i * 4] = 0.50 + 1.90 * Math.pow(s, 2.2);
+      // Fall speed correlates with size - a big aggregate falls faster AND is
+      // blown less far (see `ws` in SNOW_VERT) - but only loosely, because
+      // crystal habit matters as much as mass.
+      rand.array[i * 4 + 1] = M.clamp(0.62 + 0.55 * s + rng.range(-0.14, 0.14), 0.45, 1.55);
+      rand.array[i * 4 + 2] = rng.next();
+      rand.array[i * 4 + 3] = rng.next();
+    }
+    base.needsUpdate = true;
+    rand.needsUpdate = true;
+
+    var mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uCentre: { value: new THREE.Vector3() },
+        uBox: { value: new THREE.Vector3(D.b[0], D.b[1], D.b[2]) },
+        uDrift: { value: new THREE.Vector3() },
+        uVel: { value: new THREE.Vector3() },
+        uTime: U.uTime,
+        uSize: { value: D.sz },
+        uStretch: { value: D.st },
+        uFlutter: { value: D.fl },
+        uPixelScale: U.uPixelScale,
+        uMinPx: { value: D.mn },
+        uMaxPx: { value: D.mx },
+        uNearFade: { value: D.nf },
+        uFarFade: { value: D.ff },
+        uSnow: U.uSnow,
+        uGain: { value: D.g },
+        // The viewmodel volume is 2.6 m across; extinction over it is nothing,
+        // and there is no atmosphere in the viewmodel pass to hand it to.
+        uFogSigma: isView ? { value: 0 } : U.uFogSigma,
+        uCoreCol: { value: this._snowCore.clone() },
+        uRimCol: { value: this._snowRim.clone() },
+        uRim: { value: D.rim },
+        uCoreR: { value: new THREE.Vector2(D.cr[0], D.cr[1]) },
+        uSheetDir: U.uSheetDir,
+        uSheetPhase: U.uSheetPhase,
+        uRoofMap: U.uRoofMap,
+        uRoofRect: U.uRoofRect,
+        uRoofScale: U.uRoofScale,
+        uLightXf: { value: new THREE.Matrix4() },
+        uLightPos: U.uLightPos,
+        uLightDir: U.uLightDir,
+        uLightCol: U.uLightCol,
+        uDepth: U.uDepth,
+        // No depth copy exists for the viewmodel pass and it does not need one:
+        // the gun is the only thing in that scene and it is opaque.
+        uSoft: isView ? { value: 0 } : U.uSoft,
+        uInvRes: U.uInvRes,
+        uSoftDist: { value: 0.55 }
+      },
+      vertexShader: SNOW_VERT,
+      fragmentShader: SNOW_FRAG,
+      transparent: true,
+      depthWrite: false,
+      depthTest: true,
+      // ALWAYS an OVER composite, never additive, and that is the whole point:
+      // a flake has to be able to make the frame DARKER where its halo crosses
+      // the whiteout. Additive cannot subtract, which is exactly why rain's
+      // blending does not transfer to snow. premultipliedAlpha turns the pair
+      // (colour-already-weighted, coverage) into one correct blend on both the
+      // world scene and the viewmodel target.
+      blending: THREE.NormalBlending,
+      premultipliedAlpha: true,
+      side: THREE.DoubleSide,
+      fog: false
+    });
+
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.frustumCulled = false;
+    mesh.matrixAutoUpdate = false;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.renderOrder = D.ro;
+    mesh.name = 'snow-' + D.n;
+
+    var rec = {
+      def: D, mesh: mesh, mat: mat, count: count,
+      centre: mat.uniforms.uCentre.value,
+      drift: mat.uniforms.uDrift.value,
+      vel: mat.uniforms.uVel.value,
+      box: mat.uniforms.uBox.value,
+      xf: mat.uniforms.uLightXf.value
+    };
+    if (!isView) {
+      this.root.add(mesh);
+      this.snowLayers.push(rec);
+    }
+    return rec;
+  };
+
+  Weather.prototype._buildViewSnow = function () {
+    var ctx = this.ctx;
+    if (!ctx || !ctx.viewScene) return;
+    try {
+      this.viewSnow = this._makeSnowLayer(VIEW_SNOW_DEF, true);
+    } catch (e) {
+      GAME.logError('weather.viewSnow', e);
+      this.viewSnow = null;
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // The two SNOW-ONLY air layers: the whiteout deck and the ground spindrift.
+  //
+  // The whiteout reuses the mist card machinery verbatim - same shader, same
+  // soft-fade, same practical sampler - with a white-blue palette, a 130 m box
+  // and cards two to three times the size. It is deliberately NOT the whole
+  // whiteout: fogDensity 0.026 does the distance extinction, and these cards
+  // give that extinction some STRUCTURE so the far field is banked and moving
+  // instead of a flat grey lid. The harbor's own mist is untouched; this is a
+  // separate layer with its own handle, so a level can never end up with both.
+  // --------------------------------------------------------------------------
+  Weather.prototype._buildSnowAir = function () {
+    this.snowHaze = this._makeMistLayer('snowhaze',
+      Math.max(20, Math.round(72 * this.qp)),
+      [130, 34, 130], [16, 34], [7, 18],
+      this._hazeCol.clone(), 0.30, 4, 0.75);
+
+    this._driftMap = spindriftTexture(this.noise);
+    this._buildSpindrift();
+  };
+
+  Weather.prototype._buildSpindrift = function () {
+    var U = this.uniforms;
+    var rng = this.srng;
+    var count = Math.max(18, Math.round(72 * this.qp));
+    var geo = instancedQuads(count);
+    var base = iattr(geo, 'aBase', 4, count);
+    var rand = iattr(geo, 'aRand', 4, count);
+    for (var i = 0; i < count; i++) {
+      base.array[i * 4] = rng.next();
+      // Height fraction. Squared again in the shader, so the population is
+      // crushed into the first few centimetres of the 1.5 m box.
+      base.array[i * 4 + 1] = rng.next();
+      base.array[i * 4 + 2] = rng.next();
+      base.array[i * 4 + 3] = rng.next();
+      // WIDE AND LOW. 3-9 m long against 0.35-1.6 m tall is a 6:1 ribbon,
+      // which is what a tongue of blowing snow is; anything squarer reads as
+      // ground fog and this level already has a whiteout doing that job.
+      // The height came UP from 1.05 m after the first test frame: a sheet that
+      // tops out at knee height never crosses anything DARK, and crossing
+      // something dark is the only place spindrift has any contrast at all.
+      rand.array[i * 4] = rng.range(3.0, 9.0);
+      rand.array[i * 4 + 1] = rng.range(0.35, 1.60);
+      rand.array[i * 4 + 2] = rng.next();
+      // Loose surface snow OUTRUNS the mean flow in a gust, and the spread is
+      // what makes tongues overtake one another instead of the whole sheet
+      // translating as one object.
+      rand.array[i * 4 + 3] = rng.range(0.70, 1.45);
+    }
+    base.needsUpdate = true; rand.needsUpdate = true;
+
+    var mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uCentre: { value: new THREE.Vector3() },
+        uBox: { value: new THREE.Vector3(46, 1.8, 46) },
+        uDrift: { value: new THREE.Vector3() },
+        uGroundY: { value: 0 },
+        uTime: U.uTime,
+        uGain: { value: 0 },
+        uScroll: { value: 0 },
+        uBaseCol: { value: this._driftCol.clone() },
+        uLightPos: U.uLightPos,
+        uLightDir: U.uLightDir,
+        uLightCol: U.uLightCol,
+        uDepth: U.uDepth,
+        uSoft: U.uSoft,
+        uInvRes: U.uInvRes,
+        uSoftDist: { value: 0.9 },
+        uMap: { value: this._driftMap }
+      },
+      vertexShader: DRIFT_VERT,
+      fragmentShader: DRIFT_FRAG,
+      transparent: true,
+      depthWrite: false,
+      depthTest: true,
+      blending: THREE.NormalBlending,
+      side: THREE.DoubleSide,
+      fog: false
+    });
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.frustumCulled = false;
+    mesh.matrixAutoUpdate = false;
+    mesh.renderOrder = 7;
+    mesh.name = 'snow-spindrift';
+    this.root.add(mesh);
+    this.spindrift = {
+      mesh: mesh, mat: mat, count: count,
+      centre: mat.uniforms.uCentre.value,
+      drift: mat.uniforms.uDrift.value,
+      box: mat.uniforms.uBox.value
+    };
   };
 
   // --------------------------------------------------------------------------
@@ -2146,33 +2965,210 @@
   // --------------------------------------------------------------------------
   Weather.prototype.setPreset = function (name) {
     var p = PRESETS[name];
-    if (!p) return this.preset;
+    // AN UNKNOWN PRESET DEGRADES, IT DOES NOT FATAL AND IT DOES NOT GUESS.
+    // main.js applies every level's env profile through here and swallows
+    // nothing; returning the current preset leaves the level rendering in
+    // whatever condition it already had.
+    if (!p) {
+      GAME.logError('weather.setPreset', 'unknown preset "' + name + '" - keeping "' + this.preset + '"');
+      return this.preset;
+    }
+    var prev = this.preset;
     this.preset = name;
     this._target = p;
-    if (p.rain > 0.001 || p.mist > 0.001 || p.lightning > 0) this._activate();
-    else this._deactivate();
+    this.precipitation = p.kind || (p.rain > 0.001 ? 'rain' : 'none');
+    if (p.rain > 0.001 || (p.snow || 0) > 0.001 || p.mist > 0.001 ||
+        (p.haze || 0) > 0.001 || p.lightning > 0) {
+      this._activate();
+    } else {
+      this._deactivate();
+    }
+    this._applyPresetLook();
+    // A level whose condition arrives through the env profile gets it AFTER the
+    // build pass, so without this the first second and a half of every capture
+    // is the weather ramping in from nothing - and shoot.py photographs at 1.5.
+    // Gated on an actual CHANGE and on not being inside build(), so the harbor's
+    // path through here (build seeds it explicitly, and the harbor scenarios
+    // re-assert the preset it already has) cannot be moved by it.
+    if (this.ready && !this._inBuild && prev !== name && this.active) {
+      this._seedInstant();
+    }
     return this.preset;
+  };
+
+  // Snap the damped state onto the target. Used only when a preset ARRIVES
+  // late; never during build(), which does its own seeding inline.
+  Weather.prototype._seedInstant = function () {
+    var p = this._target;
+    this.wetness = p.wetness;
+    this._rainCur = p.rain;
+    this._snowCur = p.snow || 0;
+    this._mistCur = p.mist;
+    this._hazeCur = p.haze || 0;
+    this._driftCur = p.drift || 0;
+    this._sprayCur = p.spray;
+    this.rainIntensity = p.rain;
+    this.snowIntensity = M.saturate(p.snow || 0);
+    this.precipIntensity = Math.max(this.rainIntensity, this.snowIntensity);
+    this.fogDensity = p.fog;
+    this.fogVisibility = visibilityFor(p.fog);
+    this.windSpeed = p.wind;
+    this.lensWetness = p.rain * p.lens;
+    this.rippleStrength = p.rain * p.wetness;
+    this.uniforms.uRain.value = p.rain;
+    this.uniforms.uSnow.value = this.snowIntensity;
+    this.uniforms.uWetness.value = p.wetness;
+  };
+
+  // --------------------------------------------------------------------------
+  // The per-preset LOOK, applied as identity-default multipliers.
+  //
+  // Everything here is `base * mul` with mul === 1.0 for `clear` and `storm`,
+  // which carry no `look` block, so the two shipped levels get bit-identical
+  // uniforms to the ones they had before this function existed.
+  // --------------------------------------------------------------------------
+  Weather.prototype._applyPresetLook = function () {
+    var L = this._target.look || null;
+    this._look = L;
+    this._fallMul = (L && isFinite(L.fall)) ? L.fall : 1.0;
+    this._dripGain = (L && isFinite(L.dripGain)) ? L.dripGain : 1.0;
+    this._splashMul = (L && isFinite(L.splash)) ? L.splash : 1.0;
+    this._mistGain = (L && isFinite(L.mistGain)) ? L.mistGain : 0.15;
+    this._hazeGain = (L && isFinite(L.hazeGain)) ? L.hazeGain : 0.30;
+    this._paletteAt = -1e9;                 // force a palette solve next frame
+
+    var lm = (L && isFinite(L.streak)) ? L.streak : 1.0;
+    var wm = (L && isFinite(L.width)) ? L.width : 1.0;
+    var bm = (L && isFinite(L.blur)) ? L.blur : 1.0;
+    var gm = (L && isFinite(L.rainGain)) ? L.rainGain : 1.0;
+    var i, R, u;
+    for (i = 0; i < this.layers.length; i++) {
+      R = this.layers[i]; u = R.mat.uniforms;
+      u.uLen.value = R.def.l * lm;
+      u.uWidth.value = R.def.wd * wm;
+      u.uBlur.value = R.def.bl * bm;
+      u.uGain.value = R.def.g * gm;
+    }
+    if (this.viewRain) {
+      u = this.viewRain.mat.uniforms;
+      u.uLen.value = this.viewRain.def.l * lm;
+      u.uWidth.value = this.viewRain.def.wd * wm;
+      u.uBlur.value = this.viewRain.def.bl * bm;
+      u.uGain.value = this.viewRain.def.g * gm;
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // THE PALETTE IS MEASURED, NOT AUTHORED - for the adaptive presets only.
+  //
+  // A snowflake has to be brighter than its background against the whiteout and
+  // its halo darker than it, and "the background" is a number this module does
+  // not own: sky.js picks the overcast radiance, postfx picks the exposure and
+  // the grade, and both are in other agents' hands. A constant tuned blind here
+  // is a constant that is wrong the first time either of them moves.
+  //
+  // So the flake colours are derived from the frame's own aerial-perspective
+  // colour every 0.4 s: hue normalised to unit luminance, pushed cool (snow
+  // scatters bluer than the air it falls through), then scaled to a FIXED RATIO
+  // above and below the measured level. The contrast is then invariant under
+  // any exposure the grade lands on, which is the only way this survives a
+  // parallel build.
+  //
+  // `storm` and `clear` carry no look block, so this returns immediately on
+  // every frame of both shipped levels.
+  // --------------------------------------------------------------------------
+  var SNOW_TINT = [0.86, 0.94, 1.12];      // cool white, ~unit luminance
+
+  Weather.prototype._syncPalette = function (ctx) {
+    var L = this._look;
+    if (!L || !L.adaptive) return;
+    if (this.time - this._paletteAt < 0.4) return;
+    this._paletteAt = this.time;
+
+    var r = L.ref[0], g = L.ref[1], b = L.ref[2];
+    try {
+      var ref = null;
+      if (ctx && ctx.scene && ctx.scene.fog && ctx.scene.fog.color) ref = ctx.scene.fog.color;
+      else if (ctx && ctx.sky) ref = ctx.sky.fogColor || ctx.sky.horizonColor || ctx.sky.skyColor || null;
+      if (ref && isFinite(ref.r) && isFinite(ref.g) && isFinite(ref.b) &&
+          (ref.r + ref.g + ref.b) > 1e-5) {
+        r = ref.r; g = ref.g; b = ref.b;
+      }
+    } catch (e) { /* the authored reference is a perfectly good answer */ }
+
+    var lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    if (!isFinite(lum) || lum < 1e-5) lum = L.refFloor;
+    // Hue at unit luminance, so the clamp below moves the LEVEL without ever
+    // moving the colour. A floored luminance is what stops a sky that has not
+    // finished building from printing black snow.
+    var inv = 1 / lum;
+    _c1.setRGB(r * inv, g * inv, b * inv);
+    lum = M.clamp(lum, L.refFloor, L.refCeil);
+
+    if (isFinite(L.core)) {
+      _c2.setRGB(SNOW_TINT[0], SNOW_TINT[1], SNOW_TINT[2]);
+      _c1.lerp(_c2, 0.45);
+      this._snowCore.copy(_c1).multiplyScalar(lum * L.core);
+      this._snowRim.copy(_c1).multiplyScalar(lum * (isFinite(L.rim) ? L.rim : 0.28));
+      if (isFinite(L.haze)) this._hazeCol.copy(_c1).multiplyScalar(lum * L.haze);
+      if (isFinite(L.drift)) this._driftCol.copy(_c1).multiplyScalar(lum * L.drift);
+      return;
+    }
+
+    // ---- the liquid presets ------------------------------------------------
+    // Same idea, opposite job: these layers are ADDITIVE, so what matters is
+    // the fraction of the background a drop adds. A fixed linear value tuned
+    // for 02:00 is invisible at midday and a searchlight at night.
+    var i, dc, ac;
+    if (isFinite(L.drop)) {
+      dc = _c2.copy(_c1).multiplyScalar(lum * L.drop);
+      ac = _c3.copy(_c1).multiplyScalar(lum * (isFinite(L.air) ? L.air : L.drop * 0.5));
+      for (i = 0; i < this.layers.length; i++) {
+        this.layers[i].mat.uniforms.uBaseCol.value.copy(dc);
+        this.layers[i].mat.uniforms.uAirCol.value.copy(ac);
+      }
+      if (this.viewRain) {
+        this.viewRain.mat.uniforms.uBaseCol.value.copy(dc);
+        this.viewRain.mat.uniforms.uAirCol.value.copy(ac);
+      }
+      // The impact effects are keyed off the BACKGROUND, not off the falling
+      // drop, and deliberately: `drop` has to be large to make an additive
+      // streak beat a lit sky, while a splash ring already carries its own
+      // 1.55 gain and would print as a white flare at the same multiple.
+      if (this.splash) this.splash.mat.uniforms.uBaseCol.value.copy(_c1).multiplyScalar(lum * 0.85);
+      if (this.drops) this.drops.mat.uniforms.uBaseCol.value.copy(_c1).multiplyScalar(lum * 0.95);
+      if (this.drips) this.drips.mat.uniforms.uBaseCol.value.copy(_c1).multiplyScalar(lum * 0.75);
+    }
+    if (isFinite(L.mistCol) && this.mist) {
+      this.mist.mat.uniforms.uBaseCol.value.copy(_c1).multiplyScalar(lum * L.mistCol);
+    }
   };
 
   Weather.prototype._activate = function () {
     this.active = true;
     var ctx = this.ctx;
     if (!ctx || !ctx.scene) return;
-    if (!this._built) this._buildResources(ctx);
+    this._ensureResources(ctx, this._target);
     if (this.root.parent !== ctx.scene) ctx.scene.add(this.root);
     this.root.visible = this.enabled;
-    // The viewmodel-scene water is parented separately, because that scene is
-    // the only one that composites in front of the weapon.
+    // The viewmodel-scene precipitation is parented separately, because that
+    // scene is the only one that composites in front of the weapon.
     if (ctx.viewScene) {
-      if (!this.viewRain && !this.beads) this._buildViewRain();
+      if (this._target.rain > 0.001 && !this.viewRain && !this.beads) this._buildViewRain();
       if (this.viewRain && this.viewRain.mesh.parent !== ctx.viewScene) {
         ctx.viewScene.add(this.viewRain.mesh);
       }
       if (this.beads && this.beads.mesh.parent !== ctx.viewScene) {
         ctx.viewScene.add(this.beads.mesh);
       }
+      if (this.viewSnow && this.viewSnow.mesh.parent !== ctx.viewScene) {
+        ctx.viewScene.add(this.viewSnow.mesh);
+      }
     }
-    this._ensureLightning(ctx);
+    // The strike rig is a real shadow-casting SpotLight with a 2048 map. A
+    // preset with no lightning in it must not pay for one, and must not add a
+    // shadow caster that every material in the level then compiles against.
+    if (this._target.lightning > 0) this._ensureLightning(ctx);
   };
 
   Weather.prototype._deactivate = function () {
@@ -2192,6 +3188,14 @@
     }
     if (this.beads && this.beads.mesh.parent) {
       this.beads.mesh.parent.remove(this.beads.mesh);
+    }
+    // Appended, not interleaved: everything above is the shipped path and the
+    // three fields below only ever exist on a snow level.
+    this.snowIntensity = 0;
+    this.precipIntensity = 0;
+    this.uniforms.uSnow.value = 0;
+    if (this.viewSnow && this.viewSnow.mesh.parent) {
+      this.viewSnow.mesh.parent.remove(this.viewSnow.mesh);
     }
   };
 
@@ -2289,6 +3293,12 @@
   Weather.prototype.strike = function (opts) {
     try {
       if (!this.active) this._activate();
+      // strike() is part of the contract on EVERY preset, and _activate() now
+      // only builds the rig for a preset that schedules its own strikes. Both
+      // calls no-op on the harbor, where the rig and the channel already exist
+      // before setPreset is ever reached.
+      if (!this._channel) this._buildChannel();
+      if (!this._flashLight) this._ensureLightning(this.ctx);
       this._beginStrike(opts || null, true);
     } catch (e) {
       GAME.logError('weather.strike', e);
@@ -2903,7 +3913,14 @@
     this._rainCur = M.damp(this._rainCur, p.rain, 0.9, dt);
     this._mistCur = M.damp(this._mistCur, p.mist, 0.5, dt);
     this._sprayCur = M.damp(this._sprayCur, p.spray, 0.5, dt);
+    // damp(0, 0, r, dt) is exactly 0, so on a rain or clear preset these three
+    // are a no-op that never leaves zero.
+    this._snowCur = M.damp(this._snowCur, p.snow || 0, 0.9, dt);
+    this._hazeCur = M.damp(this._hazeCur, p.haze || 0, 0.5, dt);
+    this._driftCur = M.damp(this._driftCur, p.drift || 0, 0.5, dt);
     this.rainIntensity = M.saturate(this._rainCur);
+    this.snowIntensity = M.saturate(this._snowCur);
+    this.precipIntensity = Math.max(this.rainIntensity, this.snowIntensity);
     this.fogDensity = M.damp(this.fogDensity, p.fog, 0.5, dt);
     this.fogVisibility = visibilityFor(this.fogDensity);
     this.lensWetness = M.saturate(this._rainCur * (p.lens || 0));
@@ -2916,6 +3933,10 @@
     // both the more convincing half and the half that cannot make a whole
     // capture arrive thin because the noise happened to be in a lull.
     this.uniforms.uRain.value = this.rainIntensity * (0.72 + 0.42 * this.squall);
+    // Snow breathes wider than rain does. A blizzard genuinely arrives in
+    // waves you can watch cross a valley - the density between gusts halves -
+    // and the spatial sheet term in SNOW_VERT carries the local half of it.
+    this.uniforms.uSnow.value = this.snowIntensity * (0.66 + 0.52 * this.squall);
     this.uniforms.uWetness.value = this.wetness;
     this.uniforms.uFogSigma.value = this.fogDensity;
   };
@@ -2977,8 +3998,13 @@
         cam.position.x + this._fwd.x * b.x * 0.26,
         yc,
         cam.position.z + this._fwd.z * b.z * 0.26);
-      L.drift.set(this._windAccum.x * D.w, -this._fallAccum * D.f, this._windAccum.y * D.w);
-      L.vel.set(this._windVec.x * D.w, -D.f, this._windVec.y * D.w);
+      // `* this._fallMul` is 1.0 on every preset that carries no look block,
+      // and x * 1.0 is bit-exact - the harbor's fall vector is unchanged.
+      // Drizzle runs it at 0.55, which is the difference between 2 m/s drizzle
+      // and 10 m/s driving rain.
+      L.drift.set(this._windAccum.x * D.w, -this._fallAccum * D.f * this._fallMul,
+                  this._windAccum.y * D.w);
+      L.vel.set(this._windVec.x * D.w, -D.f * this._fallMul, this._windVec.y * D.w);
       L.mesh.visible = vis;
       if (i === 0) this.volumeCentre.copy(L.centre);
     }
@@ -3024,7 +4050,7 @@
         cam.getWorldQuaternion(this._viewQ);
         this._viewQ.invert();
         var D = V.def;
-        _v2.set(this._windVec.x * D.w, -D.f, this._windVec.y * D.w)
+        _v2.set(this._windVec.x * D.w, -D.f * this._fallMul, this._windVec.y * D.w)
           .applyQuaternion(this._viewQ);
         // Accumulated in the volume's OWN frame, so turning the head changes the
         // fall direction smoothly instead of teleporting every drop sideways.
@@ -3096,7 +4122,9 @@
     // life keeps about three quarters of a ring per square metre alive at all
     // times. Against the 0.46 s worst case that is 1435 live instances, inside
     // the 1900 the buffer holds, so the head never laps a slot still drawing.
-    var want = Math.round(52 * this.qp * this.rainIntensity * (0.7 + 0.5 * this.squall));
+    // The trailing `* this._splashMul` is 1.0 for storm and clear, and appending
+    // it leaves the whole preceding product bit-identical.
+    var want = Math.round(52 * this.qp * this.rainIntensity * (0.7 + 0.5 * this.squall) * this._splashMul);
     for (var k = 0; k < want; k++) {
       var pr = this._probes[Math.floor(rng.next() * PROBE_CAP) % PROBE_CAP];
       if (!pr.ok) continue;
@@ -3326,7 +4354,11 @@
     var D = this.drips;
     if (!D) return;
     D.mesh.visible = this.rainIntensity > 0.05 && D.count > 0;
-    D.mat.uniforms.uGain.value = 0.60 + 0.28 * this.squall;
+    // THE JUNGLE'S WATER IS ON THE LEAVES. drizzle runs _dripGain at 1.9 while
+    // its falling field runs at a third of the storm's - "heavy drips off
+    // foliage rather than driving streaks" is a redistribution of the budget,
+    // not a global dim. 1.0 everywhere else, so the harbor is unchanged.
+    D.mat.uniforms.uGain.value = (0.60 + 0.28 * this.squall) * this._dripGain;
   };
 
   // --------------------------------------------------------------------------
@@ -3339,7 +4371,10 @@
     // static in a storm.
     var sqm = 0.80 + 0.32 * this.squall;
     this.mist.mesh.visible = this._mistCur > 0.02;
-    this.mist.mat.uniforms.uGain.value = 0.15 * this._mistCur * sqm;
+    // _mistGain defaults to the harbor's original inline 0.15; drizzle runs it
+    // at 0.22, because "mist between the trunks" is most of what makes a humid
+    // jungle read as humid.
+    this.mist.mat.uniforms.uGain.value = this._mistGain * this._mistCur * sqm;
     this.mist.mat.uniforms.uGroundY.value = this._groundY - 0.15;
     this.mist.centre.set(cam.position.x, 0, cam.position.z);
     this.mist.drift.set(this._windAccum.x * 0.34, 0, this._windAccum.y * 0.34);
@@ -3433,6 +4468,164 @@
   };
 
   // --------------------------------------------------------------------------
+  // SNOW, per frame.
+  //
+  // Structurally the rain's volume update - three camera-relative boxes pushed
+  // forward down the look axis and pulled down over the ground from an elevated
+  // pose - because that part of the problem is identical and it took two rounds
+  // of captures to get right. Everything downstream of the volume placement is
+  // different.
+  //
+  // NOTE ON THE ACCUMULATORS. _fallAccum and _windAccum are advanced HERE for a
+  // snow preset and in _updateRain for a rain one. The two can never both run:
+  // the rain machinery is built only when p.rain > 0 and the snow machinery
+  // only when p.snow > 0, and no preset carries both, so exactly one of the two
+  // integrates the wind each frame. Double-integrating would double the drift
+  // speed of the haze cards, which is the visible symptom to look for if a
+  // future preset ever does carry both.
+  // --------------------------------------------------------------------------
+  Weather.prototype._updateSnow = function (dt, ctx) {
+    if (!this.snowLayers.length) return;
+    var cam = ctx.camera;
+    if (!cam) return;
+
+    cam.getWorldDirection(_v1);
+    if (_v1.lengthSq() < 1e-6) _v1.set(0, 0, -1);
+    _v1.normalize();
+    this._fwd.x = M.damp(this._fwd.x, _v1.x, 2.2, dt);
+    this._fwd.y = M.damp(this._fwd.y, _v1.y, 2.2, dt);
+    this._fwd.z = M.damp(this._fwd.z, _v1.z, 2.2, dt);
+
+    this._fallAccum += dt;
+    this._windAccum.x += this._windVec.x * dt;
+    this._windAccum.y += this._windVec.y * dt;
+
+    var U = this.uniforms;
+    var h = ctx.height || 720;
+    var f = cam.projectionMatrix.elements[5];
+    U.uPixelScale.value = 2.0 / (h * Math.max(0.05, f));
+
+    // THE TUMBLE SCALES WITH THE WIND, and that is not decoration. In still air
+    // a flake spirals gently; in a 13 m/s gust it is being thrown, and a
+    // constant flutter amplitude makes a blizzard look like a snow globe. The
+    // squall envelope therefore reaches the flakes three ways - density,
+    // trajectory and meander - so the whole field surges as one thing.
+    var gustK = 0.55 + 0.75 * M.saturate(this.windSpeed / 14.0);
+    var vis = this.snowIntensity > 0.01;
+    var camY = cam.position.y;
+    var high = M.saturate((camY - this._groundY - 4.0) / 14.0);
+    for (var i = 0; i < this.snowLayers.length; i++) {
+      var L = this.snowLayers[i];
+      var D = L.def;
+      var b = L.box;
+      var yc = camY + this._fwd.y * b.y * 0.30;
+      if (high > 0) {
+        var floorWant = this._groundY + b.y * 0.40;
+        if (floorWant < yc) yc = M.lerp(yc, Math.max(floorWant, camY - b.y * 0.34), high);
+      }
+      L.centre.set(
+        cam.position.x + this._fwd.x * b.x * 0.26,
+        yc,
+        cam.position.z + this._fwd.z * b.z * 0.26);
+      L.drift.set(this._windAccum.x * D.w, -this._fallAccum * D.f, this._windAccum.y * D.w);
+      L.vel.set(this._windVec.x * D.w, -D.f, this._windVec.y * D.w);
+      var u = L.mat.uniforms;
+      u.uCoreCol.value.copy(this._snowCore);
+      u.uRimCol.value.copy(this._snowRim);
+      u.uFlutter.value = D.fl * gustK;
+      L.mesh.visible = vis;
+      if (i === 0) this.volumeCentre.copy(L.centre);
+    }
+
+    var V = this.viewSnow;
+    if (V) {
+      V.mesh.visible = vis;
+      if (vis) {
+        cam.getWorldQuaternion(this._viewQ);
+        this._viewQ.invert();
+        var VD = V.def;
+        _v2.set(this._windVec.x * VD.w, -VD.f, this._windVec.y * VD.w)
+          .applyQuaternion(this._viewQ);
+        // Accumulated in the volume's OWN frame, so turning the head bends the
+        // fall direction smoothly instead of teleporting every flake sideways.
+        this._viewSnowDrift.x += _v2.x * dt;
+        this._viewSnowDrift.y += _v2.y * dt;
+        this._viewSnowDrift.z += _v2.z * dt;
+        V.drift.copy(this._viewSnowDrift);
+        V.vel.copy(_v2);
+        V.centre.set(0, 0, -0.95);
+        var vcam = ctx.viewCamera;
+        if (vcam && vcam.position) V.centre.add(vcam.position);
+        cam.updateMatrixWorld();
+        V.xf.copy(cam.matrixWorld);
+        var vu = V.mat.uniforms;
+        vu.uCoreCol.value.copy(this._snowCore);
+        vu.uRimCol.value.copy(this._snowRim);
+        vu.uFlutter.value = VD.fl * gustK;
+      }
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // The whiteout deck and the ground spindrift.
+  //
+  // The spindrift rides the TERRAIN, not a level-wide constant: Kirovsk Pass is
+  // a valley, and a sheet of blowing snow pinned to the spawn point's altitude
+  // would be buried at one end of the road and floating at the other. The level
+  // contract publishes sampleGround, so it is one guarded call every quarter
+  // second under the camera and a graceful fall back to the flat estimate.
+  // --------------------------------------------------------------------------
+  Weather.prototype._updateSnowAir = function (dt, ctx) {
+    var cam = ctx.camera;
+    if (!cam) return;
+
+    if (this.time - this._groundAt > 0.25) {
+      this._groundAt = this.time;
+      var gy = null;
+      try {
+        var lvl = ctx.level;
+        if (lvl && typeof lvl.sampleGround === 'function') {
+          gy = lvl.sampleGround(cam.position.x, cam.position.z);
+          if (gy && typeof gy === 'object' && isFinite(gy.y)) gy = gy.y;
+        }
+      } catch (e) { gy = null; }
+      this._camGroundY = (typeof gy === 'number' && isFinite(gy)) ? gy : this._groundY;
+    }
+
+    var sqm = 0.82 + 0.30 * this.squall;
+
+    var H = this.snowHaze;
+    if (H) {
+      H.mesh.visible = this._hazeCur > 0.02;
+      if (H.mesh.visible) {
+        H.mat.uniforms.uGain.value = this._hazeGain * this._hazeCur * sqm;
+        H.mat.uniforms.uGroundY.value = this._camGroundY - 4.0;
+        H.mat.uniforms.uBaseCol.value.copy(this._hazeCol);
+        H.centre.set(cam.position.x, 0, cam.position.z);
+        // The deck advects slowly - it is the bulk air, not the surface layer.
+        H.drift.set(this._windAccum.x * 0.22, 0, this._windAccum.y * 0.22);
+      }
+    }
+
+    var S = this.spindrift;
+    if (!S) return;
+    S.mesh.visible = this._driftCur > 0.02;
+    if (!S.mesh.visible) return;
+    var u = S.mat.uniforms;
+    // Spindrift is a GUST phenomenon: in a lull the surface is still and in a
+    // surge it is a river. A 0.35-1.45 swing is a much wider band than any
+    // other layer uses, and that is the point.
+    u.uGain.value = 0.85 * this._driftCur * (0.35 + 1.10 * this.squall);
+    u.uGroundY.value = this._camGroundY + 0.02;
+    u.uBaseCol.value.copy(this._driftCol);
+    // The texture streams faster than the cards translate, so a tongue tears
+    // and reforms as it crosses instead of sliding rigidly.
+    u.uScroll.value = this._sheetPhase * 3.1;
+    S.centre.set(cam.position.x, 0, cam.position.z);
+    S.drift.set(this._windAccum.x * 1.75, 0, this._windAccum.y * 1.75);
+  };
+
+  // --------------------------------------------------------------------------
   Weather.prototype.update = function (dt, ctx) {
     ctx = ctx || this.ctx;
     this.ctx = ctx;
@@ -3456,10 +4649,15 @@
       this._pumpThunder(ctx);
       this._updateLights(ctx);
       this._updateDepth(ctx);
+      this._syncPalette(ctx);
       this._updateRain(dt, ctx);
       this._updateSplash(dt, ctx);
       this._updateDrips();
       this._updateMist(dt, ctx);
+      // Both return on their first line unless a snow preset is loaded, so the
+      // harbor pays two function calls and a length check for them.
+      this._updateSnow(dt, ctx);
+      if (this.snowLayers.length) this._updateSnowAir(dt, ctx);
       if (this._ripples) {
         // Arrival rate rides the squall, so the puddles visibly react when a
         // gust front comes through instead of boiling at one fixed rate.
@@ -3504,8 +4702,13 @@
         this.layers[i].mesh.geometry.dispose();
         this.layers[i].mat.dispose();
       }
+      for (i = 0; i < this.snowLayers.length; i++) {
+        this.snowLayers[i].mesh.geometry.dispose();
+        this.snowLayers[i].mat.dispose();
+      }
       var parts = [this.splash, this.drops, this.drips, this.mist, this.spray,
-                   this.viewRain, this.beads, this._channel];
+                   this.viewRain, this.beads, this._channel,
+                   this.viewSnow, this.snowHaze, this.spindrift];
       for (i = 0; i < parts.length; i++) {
         if (!parts[i]) continue;
         parts[i].mesh.geometry.dispose();
@@ -3514,6 +4717,7 @@
       if (this._depth) this._depth.dispose();
       if (this._ripples) this._ripples.dispose();
       if (this._mistMap) this._mistMap.dispose();
+      if (this._driftMap) this._driftMap.dispose();
       if (this._roofTex) this._roofTex.dispose();
       if (this._roofFallback) this._roofFallback.dispose();
       if (this._fallbackDepth) this._fallbackDepth.dispose();

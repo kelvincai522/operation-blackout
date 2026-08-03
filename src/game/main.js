@@ -60,20 +60,125 @@
   // with ?level=<id> without any other system knowing which one is loaded.
   // Every level must satisfy the same Level/Props contract in ARCHITECTURE.md.
   // --------------------------------------------------------------------------
+  // `env` is a DECLARATIVE environment profile. main.js applies it through the
+  // shared systems' existing public APIs after the build pass, so adding a
+  // level requires NO edit to sky/lighting/postfx/weather. That is what makes
+  // ten levels tractable: without it, every new level serialises onto the same
+  // four shared files.
+  //
+  // market and harbor carry env:null deliberately. They predate this mechanism
+  // and configure themselves internally; leaving them on the legacy path means
+  // two shipped, frozen levels cannot be regressed by a profile change.
   var LEVELS = {
     market: {
       name: 'Al-Bakr Market District',
       level: 'Level', props: 'Props',
       weather: null,               // clear, hot, dusty - the sky default
-      defaultScenario: 'street'
+      defaultScenario: 'street',
+      env: null                    // legacy: level configures itself
     },
     harbor: {
       name: 'Cold Harbor Container Terminal',
       level: 'LevelHarbor', props: 'PropsHarbor',
       weather: 'storm',
-      defaultScenario: 'quay'
+      defaultScenario: 'quay',
+      env: null                    // legacy: level configures itself
+    },
+    snowbound: {
+      name: 'Kirovsk Pass',
+      level: 'LevelSnowbound', props: 'PropsSnowbound',
+      defaultScenario: 'lv_hero1',
+      env: {
+        timeOfDay: 0.30, sky: 'overcast', weather: 'blizzard', turbidity: 0.09,
+        grade: 'cold', exposure: 0.15, lightRig: 'sun', interior: false
+      }
+    },
+    metro: {
+      name: 'Line 4 — Zarechnaya',
+      level: 'LevelMetro', props: 'PropsMetro',
+      defaultScenario: 'lv_hero1',
+      env: {
+        timeOfDay: 0.0, sky: 'none', weather: 'clear', turbidity: 0.02,
+        grade: 'green', exposure: -0.10, lightRig: 'practicals', interior: true
+      }
+    },
+    highrise: {
+      name: 'Meridian Tower',
+      level: 'LevelHighrise', props: 'PropsHighrise',
+      defaultScenario: 'lv_hero1',
+      env: {
+        timeOfDay: 0.80, sky: 'clear', weather: 'clear', turbidity: 0.03,
+        grade: 'warm', exposure: 0.0, lightRig: 'mixed', interior: false
+      }
+    },
+    boneyard: {
+      name: 'AMARG Boneyard',
+      level: 'LevelBoneyard', props: 'PropsBoneyard',
+      defaultScenario: 'lv_hero1',
+      env: {
+        timeOfDay: 0.50, sky: 'clear', weather: 'clear', turbidity: 0.035,
+        grade: 'bleach', exposure: 0.0, lightRig: 'sun', interior: false
+      }
+    },
+    bunker: {
+      name: 'Facility K-17',
+      level: 'LevelBunker', props: 'PropsBunker',
+      defaultScenario: 'lv_hero1',
+      env: {
+        timeOfDay: 0.0, sky: 'none', weather: 'clear', turbidity: 0.02,
+        grade: 'alarm', exposure: -0.05, lightRig: 'practicals', interior: true
+      }
+    },
+    jungle: {
+      name: 'Mekong Delta',
+      level: 'LevelJungle', props: 'PropsJungle',
+      defaultScenario: 'lv_hero1',
+      env: {
+        timeOfDay: 0.42, sky: 'overcast', weather: 'drizzle', turbidity: 0.07,
+        grade: 'verdant', exposure: 0.05, lightRig: 'sun', interior: false
+      }
+    },
+    refinery: {
+      name: 'Zubair Refinery',
+      level: 'LevelRefinery', props: 'PropsRefinery',
+      defaultScenario: 'lv_hero1',
+      env: {
+        timeOfDay: 0.88, sky: 'clear', weather: 'clear', turbidity: 0.05,
+        grade: 'sodium', exposure: -0.05, lightRig: 'mixed', interior: false
+      }
+    },
+    ruins: {
+      name: 'Bayon Ruins',
+      level: 'LevelRuins', props: 'PropsRuins',
+      defaultScenario: 'lv_hero1',
+      env: {
+        timeOfDay: 0.22, sky: 'clear', weather: 'clear', turbidity: 0.06,
+        grade: 'dawn', exposure: 0.05, lightRig: 'sun', interior: false
+      }
     }
   };
+
+  // Apply a level's declarative environment through the shared systems' public
+  // APIs. Every call is guarded: a system that has not implemented a preset
+  // yet simply does not receive it, and the level still renders.
+  function applyEnv(ctx, def) {
+    var env = def && def.env;
+    if (!env) return;                       // legacy level, configures itself
+    function tryCall(obj, method, arg, label) {
+      if (!obj || typeof obj[method] !== 'function') return false;
+      try { obj[method](arg); return true; }
+      catch (e) { GAME.logError('applyEnv:' + label, e); return false; }
+    }
+    if (env.turbidity != null) tryCall(ctx.sky, 'setTurbidity', env.turbidity, 'turbidity');
+    if (env.sky) tryCall(ctx.sky, 'setWeather', env.sky, 'sky');
+    if (env.timeOfDay != null) tryCall(ctx.sky, 'setTimeOfDay', env.timeOfDay, 'timeOfDay');
+    if (env.weather) tryCall(ctx.weather, 'setPreset', env.weather, 'weather');
+    if (env.grade) tryCall(ctx.postfx, 'setGradePreset', env.grade, 'grade');
+    if (env.exposure != null) tryCall(ctx.postfx, 'setExposureBias', env.exposure, 'exposure');
+    if (env.lightRig) tryCall(ctx.lighting, 'setRig', env.lightRig, 'lightRig');
+    if (env.interior) tryCall(ctx.lighting, 'setInterior', true, 'interior');
+    ctx.env = env;
+  }
 
   // Falls back to the market level if an unknown id is requested, or if the
   // requested level's module failed to load - a missing level must not blank
@@ -245,6 +350,9 @@
       }
     }
     this.built = built;
+    // Environment last: every system it configures now exists, and the level
+    // it describes has already built its geometry.
+    applyEnv(ctx, levelDef);
     progress(1, 'Ready');
 
     // Fallback so a build with no lighting system still shows something.
@@ -257,7 +365,9 @@
 
     window.addEventListener('resize', function () { self.resize(); });
 
-    if (CAPTURE) {
+    if (P.record) {
+      await this.runRecord();
+    } else if (CAPTURE) {
       await this.runCapture();
     } else {
       this.startInteractive();
@@ -359,6 +469,52 @@
   // --------------------------------------------------------------------------
   // Deterministic capture for the visual-critic loop.
   // --------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
+  // Frame recording. Chrome's --screenshot only yields a single still, so
+  // motion (rain, muzzle flash, animation, weather) cannot be reviewed from
+  // captures alone. In record mode the page steps the simulation at a fixed
+  // timestep and POSTs each rendered frame back to tools/record.py, which
+  // assembles them into an animation. Same deterministic path as capture.
+  // --------------------------------------------------------------------------
+  Engine.prototype.runRecord = async function () {
+    var ctx = this.ctx;
+    var name = P.scenario || 'street';
+    var frames = Math.max(1, Math.min(240, parseInt(P.record, 10) || 48));
+    var step = parseFloat(P.recordStep || '0.05');
+    var warm = parseFloat(P.t || '1.2');
+
+    try { GAME.Scenarios.apply(name, ctx); }
+    catch (e) { GAME.logError('scenario:' + name, e); }
+
+    // Warm up to the same state a still capture would reach.
+    var dt = 1 / 60;
+    var warmSteps = Math.max(1, Math.round(warm / dt));
+    for (var w = 0; w < warmSteps; w++) {
+      try { GAME.Scenarios.tick(name, ctx, w * dt, w); } catch (e) { GAME.logError('rec.tick', e); }
+      this.step(dt);
+    }
+    this.render();
+
+    var subSteps = Math.max(1, Math.round(step / dt));
+    for (var f = 0; f < frames; f++) {
+      for (var s = 0; s < subSteps; s++) {
+        try { GAME.Scenarios.tick(name, ctx, warm + (f * subSteps + s) * dt, f); }
+        catch (e) { GAME.logError('rec.tick', e); }
+        this.step(dt);
+      }
+      this.render();
+      var data = ctx.canvas.toDataURL('image/jpeg', 0.82);
+      try {
+        await fetch('/_frame?i=' + f, { method: 'POST', body: data });
+      } catch (e) {
+        GAME.logError('rec.post', e);
+        break;
+      }
+    }
+    window.__READY__ = true;
+    document.title = 'RECORDED ' + frames;
+  };
+
   Engine.prototype.runCapture = async function () {
     var ctx = this.ctx;
     var name = P.scenario;

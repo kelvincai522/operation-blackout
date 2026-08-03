@@ -28,7 +28,14 @@ SHOTS = ROOT / "shots"
 
 # Scenario sets per level. --all renders the set matching --level, because a
 # market framing pointed at the harbor (or vice versa) just photographs a wall.
+GENERIC = [
+    "lv_overview", "lv_hero1", "lv_hero2", "lv_hero3", "lv_interior",
+    "lv_ads", "lv_muzzleflash", "lv_firefight", "lv_explosion",
+    "weapon_closeup", "enemy_closeup",
+]
+
 SCENARIOS_BY_LEVEL = {
+    # Levels 1 and 2 predate the generic framing keys and keep bespoke names.
     "market": [
         "overview", "street", "interior", "alley", "rooftop",
         "ads", "weapon_closeup", "muzzleflash", "firefight",
@@ -41,6 +48,12 @@ SCENARIOS_BY_LEVEL = {
         "enemy_closeup", "explosion",
     ],
 }
+# Levels 3-10 publish the standard pose keys, so they all share one set and a
+# new level becomes capturable without touching this file.
+for _lv in ("snowbound", "metro", "highrise", "boneyard",
+            "bunker", "jungle", "refinery", "ruins"):
+    SCENARIOS_BY_LEVEL[_lv] = list(GENERIC)
+
 SCENARIOS = SCENARIOS_BY_LEVEL["market"]
 
 CHROME_CANDIDATES = [
@@ -71,7 +84,13 @@ def capture(chrome, base, scenario, out_path, w, h, t, seed, hud, quality, extra
     )
     if extra:
         url += "&" + extra
-    profile = pathlib.Path(tempfile.gettempdir()) / ("blackout-prof-%s" % scenario)
+    # The profile directory must be unique per concurrent capture. Keying it on
+    # scenario alone collided once levels 3-10 started sharing generic scenario
+    # names: two agents capturing lv_hero1 on different levels fought over the
+    # same Chrome profile lock and the page never signalled READY. Include the
+    # level and the pid so parallel agents never contend.
+    profile = pathlib.Path(tempfile.gettempdir()) / (
+        "blackout-prof-%s-%s-%d" % (level, scenario, os.getpid()))
     if out_path.exists():
         out_path.unlink()
 

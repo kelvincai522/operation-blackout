@@ -2,6 +2,36 @@
 // OPERATION BLACKOUT - lighting rig + cascaded shadow maps
 // Owner: src/render/lighting.js  ->  GAME.Lighting
 //
+// PUBLIC API
+//   lighting.sun                THREE.DirectionalLight (the CSM caster)
+//   lighting.update(dt, ctx)
+//   lighting.resize(w, h, ctx)
+//   lighting.setShadowDistance(m) / setShadowsEnabled(on)
+//   lighting.addPractical(opts)
+//   lighting.setRig(name)       'sun' | 'practicals' | 'mixed'
+//   lighting.setInterior(flag)  the level is fully enclosed
+//   lighting.dispose()
+//
+// WHAT A LEVEL PUBLISHES AND THIS MODULE CONSUMES, GENERICALLY
+//   level.practicalLights  [ {name, kind, pos:[x,y,z], kelvin|color, intensity,
+//                             distance, dayBase, cone, penumbra, aimPos,
+//                             anchor, spread, haloScale, haloMax, haloGain,
+//                             bulbR, bulbFlat, bulbAxis, bulbGain, fixed} ]
+//                          Full override of the built-in lamp table. Every
+//                          entry gets an emissive bulb and an additive halo for
+//                          free (_buildLampVisuals) - a light with no visible
+//                          source is not a light.
+//   level.lightShafts      [ {origin, dir, width, length, strength, kind} ]
+//                          plus, for a shaft that is a FIXTURE rather than a
+//                          hole in a roof: {always, color|kelvin, lux}.
+//   level.litWindows       [ {x,y,z,w,h,kelvin,gain, yaw, scale, tint, ...} ]
+//                          Additive glow cards on apertures the level knows
+//                          about (the market finds its own; nobody else can).
+//   level.cameraPoses      used to anchor `anchor`-tagged practicals and to
+//                          probe the sky-visibility reference.
+//   level.spawnPoints      same.
+// Adding a level should require ZERO edits to this file.
+//
 // ---------------------------------------------------------------------------
 // HOW THE CSM WORKS HERE (read this before changing anything)
 // ---------------------------------------------------------------------------
@@ -628,6 +658,7 @@
   var _c1 = new THREE.Color(), _c2 = new THREE.Color();
   var _c3 = new THREE.Color(), _c4 = new THREE.Color();
   var _c5 = new THREE.Color();
+  var _c6 = new THREE.Color();   // declarative-rig meter only (see _rigMeter)
   var _WHITE = new THREE.Color(1, 1, 1);
   var MOON_BASE = new THREE.Color(0x5f7db8);   // fallback when sky has no moon
   var _upY = new THREE.Vector3(0, 1, 0);
@@ -1384,6 +1415,133 @@
   var MAX_PRACTICALS = 10;
 
   // ==========================================================================
+  // DECLARATIVE LIGHT RIGS  -  setRig(name) / setInterior(flag)
+  //
+  // main.js gives every level built after level 2 an `env` profile and applies
+  // it, after every system has built, through these two setters. LEVELS 1 AND 2
+  // CARRY `env: null`, SO NEITHER SETTER IS EVER CALLED ON THEM: the market and
+  // the harbor run with rig === 'sun' and interior === false, which is the
+  // legacy path bit for bit. Every branch added for the rigs is gated a SECOND
+  // time on `this._declarative`, which is false for both of those ids. The
+  // double gate is deliberate - this is the file that can silently regress two
+  // frozen levels, and "the setter is never called" is a weaker guarantee than
+  // "the code is unreachable".
+  //
+  // What a profile actually decides:
+  //
+  //   key       scales the key AFTER _readSky has finished computing it, so
+  //             everything downstream - the cascade colour/intensity, the
+  //             ground and facade bounce, the solar shafts, the viewmodel -
+  //             follows without forming a second opinion about the hour.
+  //   sun       false -> every cascade DirectionalLight is made INVISIBLE.
+  //             three only uploads visible lights, so that drops them out of
+  //             NUM_DIR_LIGHTS *and* NUM_DIR_LIGHT_SHADOWS: no shadow map is
+  //             rendered, no PCSS kernel is evaluated, and the per-fragment
+  //             directional loop shrinks. Setting intensity to 0 would have
+  //             done none of that - the maps still render, every frame, for a
+  //             light contributing nothing.
+  //   fills     false -> the three BOUNCE DIRECTIONALS go invisible too. They
+  //             model sunlight bouncing off ground and facades and there is no
+  //             sun to bounce; but the real reason is the defect Cold Harbor
+  //             paid for (see the HB block): a DirectionalLight is a
+  //             zero-solid-angle specular source, and on the wet or
+  //             high-frequency normals a flooded metro and a rained-on refinery
+  //             are made of, it prints a coherent sub-pixel vertical barcode
+  //             that chromatic aberration then splits into colour fringes. The
+  //             HemisphereLight left carrying the fill cannot alias: three's
+  //             hemisphere path never reaches RE_Direct or RE_IndirectSpecular.
+  //   sky/amb/env  multipliers on the hemisphere, the ambient floor and the
+  //             PMREM environment.
+  //   bnc       multiplier on the bounce directionals when they DO survive.
+  //   lampFloor the minimum value of the day/night lamp gate. A level with no
+  //             sun has no day state at all, so its practicals are simply on.
+  //
+  // Note what is NOT in the table: any attempt to light a level by raising a
+  // global constant. Metering in postfx hands that lift straight back, so `amb`
+  // is not a brightness control - it is the guarantee that nothing crushes to
+  // detail-free black, and (with _rigMeter below) that the ratio between a lit
+  // pool and the dark between pools stays inside roughly 50:1, which is all any
+  // tone curve holds. What changes an image is a source near the camera, so
+  // every rig here leans on the level's published practicals, and every one of
+  // those gets emissive bulb + halo geometry from _buildLampVisuals: a light
+  // with no visible source is not a light.
+  // ==========================================================================
+  var RIGS = {
+    // Level 1's rig, named. Selecting it explicitly must be indistinguishable
+    // from never calling setRig at all, so every multiplier here is exactly 1.
+    sun: {
+      key: 1.00, sun: true, fills: true,
+      sky: 1.00, amb: 1.00, env: 1.00, bnc: 1.00, lampFloor: 0.00
+    },
+    // No sun at all: the scene is lit entirely by placed lights. This is the
+    // harbor's strategy expressed declaratively (the harbor itself still runs
+    // its own hand-built rig), and what metro and bunker need.
+    practicals: {
+      key: 0.00, sun: false, fills: false,
+      sky: 0.85, amb: 1.35, env: 0.55, bnc: 0.00, lampFloor: 1.00
+    },
+    // A weak, low sun PLUS significant practicals - highrise (sunset through
+    // open floor plates over interior lighting) and refinery (dusk sky, flare
+    // stacks, sodium floods). The sun is trimmed rather than removed: it is
+    // still what rakes the columns, it just stops being the only thing in the
+    // frame with any output.
+    mixed: {
+      key: 0.62, sun: true, fills: true,
+      sky: 0.80, amb: 1.25, env: 0.85, bnc: 0.70, lampFloor: 0.85
+    }
+  };
+  var DEFAULT_RIG = 'sun';
+
+  // ---- setInterior(true) ---------------------------------------------------
+  // A fully enclosed level. The sun and the sky contribute nothing, so both are
+  // switched off outright rather than turned down, and the hemisphere stops
+  // taking its colour from an atmosphere that is not visible from anywhere in
+  // the level.
+  //
+  // INT_SV_FLOOR is the interesting one. The sky-visibility volume exists to
+  // stop unshadowed skylight leaking through roofs; underground there is no
+  // skylight to leak, so at its normal 0.055 floor it would simply delete ~95%
+  // of the only indirect term an enclosed level has. Zeroing the volume instead
+  // would throw away the one thing it is still good for down here - creases,
+  // alcoves and the backs of rooms measurably darker than open floor. So the
+  // floor is RAISED, which converts it from a skylight mask into a soft
+  // corner-darkening ambient occlusion term, and the compensation is dropped to
+  // 1 to match (see _updateFill).
+  var INT_SV_FLOOR = 0.45;
+  var INT_HEMI = 0.55;           // nominal; the volume takes 0.45-1.0 of it
+  var INT_AMB = 0.42;            // ungated - this IS the anti-crush floor
+  var INT_ENV = 0.25;            // enough specular for metal to stop reading as plastic
+  // Deliberately near-neutral and low chroma. Each interior level's hue comes
+  // from its own practicals and its postfx grade preset ('green' for the metro,
+  // 'alarm' for the bunker); a strongly tinted global fill would fight both.
+  var INT_SKY_COL = new THREE.Color(0x3d4552);   // cool, from above
+  var INT_GND_COL = new THREE.Color(0x40382e);   // warm, from underfoot
+  var INT_AMB_COL = new THREE.Color(0x39404a);
+
+  // The harbor rendered black because its masts put ~10 lux on the apron while
+  // the fill put ~0.02 lux everywhere else. 500:1 is far past what any tone
+  // curve holds, and the frame that came back was not "moody", it was empty.
+  // _rigMeter re-derives the floor from whatever the level actually published,
+  // so a level carrying a 400-candela flare stack gets a matching floor without
+  // anyone editing this file.
+  var LIT_DARK_RATIO = 50;
+  // A declarative level places its own lights, and an industrial or underground
+  // one needs many more than a market street. Still well under the harbor's 28.
+  var MAX_PRACTICALS_RIG = 24;
+  // Same idea for the glow cards: a level that publishes its own apertures is
+  // not guessing where they are, and every card is one more instance in a mesh
+  // that is drawn anyway - the ceiling is the instance buffer, not a draw call.
+  var MAX_WINDOWS_RIG = 20;
+
+  // The second gate. True only for a level that carries an `env` profile, which
+  // by construction excludes market and harbor.
+  function isDeclarativeCtx(ctx) {
+    if (!ctx) return false;
+    if (ctx.levelId === 'market' || ctx.levelId === 'harbor') return false;
+    return !!(ctx.levelDef && ctx.levelDef.env);
+  }
+
+  // ==========================================================================
   // GAME.Lighting
   // ==========================================================================
   function Lighting(ctx) {
@@ -1488,6 +1646,21 @@
     // Published for a probing critic: "how many real sources are in this rig".
     this.harborDiag = null;
 
+    // ---- declarative rig state (levels 3-10) --------------------------------
+    // Inert for market and harbor: _declarative is false for both ids, the rig
+    // stays 'sun', and neither setter is ever called on them.
+    this.rig = DEFAULT_RIG;
+    this.interior = false;
+    this._rigP = RIGS[DEFAULT_RIG];
+    this._declarative = isDeclarativeCtx(ctx);
+    this._rigFloor = 0;                          // ambient the 50:1 rule wants
+    this._localCol = new THREE.Color(1, 0.92, 0.82);  // colour of the pool the eye is in
+    this._localE = 0;                            // its rough irradiance at the eye
+    this._rigWarned = false;
+    // Published for a probing critic, mutated in place so the frame loop never
+    // allocates. Null until a declarative level has run one update.
+    this.rigDiag = null;
+
     var seed = (ctx.seed || 20260801) ^ 0x5A17C0DE;
     this.noise = new GAME.Noise(seed);
     this.rng = ctx.rng && ctx.rng.fork ? ctx.rng.fork(0x10C17) : new GAME.RNG(seed);
@@ -1500,6 +1673,7 @@
     ctx = ctx || this.ctx;
     this.ctx = ctx;
     this.isHarbor = isHarborCtx(ctx);
+    this._declarative = isDeclarativeCtx(ctx);
     try {
       this._configureRenderer(ctx);
       this._buildCascades(ctx);
@@ -1509,7 +1683,13 @@
       // so its rig is assembled on the first update instead - see
       // _buildHarborRig. Building the market set here first would put nine
       // street lamps in a container terminal for one frame.
-      if (!this.isHarbor) this._buildPracticals(ctx);
+      //
+      // A declarative level is in the same position for the same reason: it
+      // publishes level.practicalLights and level.js has not built yet, so its
+      // rig is adopted on the first update (_adoptLevelPracticals). Building
+      // the market table here would stand nine Al-Bakr street lamps in a metro
+      // tunnel - and leave them there permanently if the level published none.
+      if (!this.isHarbor && !this._declarative) this._buildPracticals(ctx);
       if (ctx.scene && ctx.scene.isScene) ctx.scene.add(this.root);
       this._adoptEnvironment(ctx);
     } catch (e) {
@@ -1733,8 +1913,83 @@
     this.root.add(this.ambient);
   };
 
+  // ==========================================================================
+  // Declarative rig selection - the two public setters main.js calls
+  // ==========================================================================
+
+  // Select a lighting strategy by name. Unknown names are IGNORED rather than
+  // fatal (main.js guards the call, but a preset that half-applies is worse
+  // than one that does not apply at all), and the previous rig survives.
+  // Returns the rig actually in force, so a caller can tell.
+  Lighting.prototype.setRig = function (name) {
+    try {
+      var n = (typeof name === 'string') ? name.toLowerCase().replace(/\s+/g, '') : '';
+      if (n && RIGS[n]) {
+        this.rig = n;
+        this._rigP = RIGS[n];
+      } else if (n && !this._rigWarned) {
+        this._rigWarned = true;
+        GAME.logError('lighting.setRig', 'unknown rig "' + name +
+          '" - keeping "' + this.rig + '"');
+      }
+    } catch (e) {
+      GAME.logError('lighting.setRig', e);
+    }
+    return this.rig;
+  };
+
+  // Declare the level fully enclosed. Sun and sky are switched off entirely,
+  // the ambient floor comes up, the sky-visibility volume is re-purposed as a
+  // corner-darkening AO term, and the cascades stop rendering shadow maps for a
+  // directional light that contributes nothing. Reversible.
+  Lighting.prototype.setInterior = function (flag) {
+    try {
+      this.interior = (flag === undefined) ? true : !!flag;
+    } catch (e) {
+      GAME.logError('lighting.setInterior', e);
+    }
+    return this.interior;
+  };
+
+  // True only where a declarative profile is in force AND it asks for something
+  // other than level 1's behaviour. Market and harbor can never reach it.
+  Lighting.prototype._rigActive = function () {
+    if (!this._declarative) return false;
+    return this.interior || this.rig !== DEFAULT_RIG;
+  };
+
+  // Applies the parts of a profile that are about which LIGHT OBJECTS exist,
+  // as opposed to how bright they are. Runs at the top of _updateFill, every
+  // frame, so setRig/setInterior can be called at any time and take effect on
+  // the next frame without any rebuild. Returns the profile, or null when the
+  // legacy path is in force.
+  Lighting.prototype._applyRigLights = function (ctx) {
+    if (!this._declarative) return null;
+    var P = this._rigP || RIGS[DEFAULT_RIG];
+    var wantSun = !this.interior && P.sun !== false;
+    var wantFills = !this.interior && P.fills !== false;
+    var i;
+    // Invisible, not intensity 0: three skips invisible lights entirely, so
+    // this is what actually stops the CSM depth passes from being rendered for
+    // a light that puts nothing in the frame. `this.sun` still points at
+    // cascades[0].light, so the documented API is unchanged.
+    for (i = 0; i < this.cascades.length; i++) this.cascades[i].light.visible = wantSun;
+    if (this.bounce) this.bounce.visible = wantFills;
+    if (this.fillA) this.fillA.visible = wantFills;
+    if (this.fillB) this.fillB.visible = wantFills;
+    // Re-purpose (interior) or leave alone (everything else) the volume's floor.
+    // SV_PARAMS is the shared uniform payload every material in the build reads
+    // by reference, so this one store reaches shaders compiled hours ago.
+    if (SV_PARAMS) SV_PARAMS[0] = this.interior ? INT_SV_FLOOR : SV_FLOOR;
+    return P;
+  };
+
   Lighting.prototype._maxPracticals = function () {
-    return this.isHarbor ? MAX_PRACTICALS_HARBOR : MAX_PRACTICALS;
+    if (this.isHarbor) return MAX_PRACTICALS_HARBOR;
+    // A declarative level places its own lights against its own geometry, and
+    // an underground or industrial one needs far more of them than a market
+    // street does. The market keeps its own cap exactly.
+    return this._declarative ? MAX_PRACTICALS_RIG : MAX_PRACTICALS;
   };
 
   Lighting.prototype._buildPracticals = function (ctx, defs) {
@@ -1866,7 +2121,21 @@
     if (!lvl) return;                       // level failed to build - keep ours
     this._levelLampsChecked = true;
     var defs = lvl.practicalLights;
-    if (!Array.isArray(defs) || !defs.length) return;
+    if (!Array.isArray(defs) || !defs.length) {
+      // A declarative level built no practicals of its own AND never got the
+      // market's table (build() skips it there), so on a 'practicals' rig it
+      // has literally no sources. That is an authoring error in the level, not
+      // something this module can invent geometry to fix - but it is exactly
+      // the class of defect that is invisible in a thumbnail, so say so once.
+      if (this._declarative && this._rigP && this._rigP.lampFloor > 0 &&
+          !this.practicals.length && !this._rigWarned) {
+        this._rigWarned = true;
+        GAME.logError('lighting.rig', 'level "' + (ctx.levelId || '?') +
+          '" selected rig "' + this.rig +
+          '" but published no level.practicalLights - nothing lights it');
+      }
+      return;
+    }
     for (var i = 0; i < this.practicals.length; i++) {
       var old = this.practicals[i].light;
       if (old.target && old.target.parent === this.root) this.root.remove(old.target);
@@ -2466,6 +2735,33 @@
       }
       return hn ? (hsum / hn) : 0.72;   // an open quay is mostly open sky
     }
+    // Every level after the harbor has the same problem the harbor had: the
+    // station list below is the MARKET's carriageway and means nothing in a
+    // subway tunnel or an aircraft boneyard. So a declarative level is probed
+    // the way the harbor is - at its own spawn point and its own published
+    // framings, which is by definition where the player and the camera are.
+    if (this._declarative) {
+      var dsum = 0, dn = 0, dv;
+      var dsp = lvl && lvl.spawnPoints && lvl.spawnPoints[0];
+      if (dsp && dsp.position) {
+        _v1.set(dsp.position.x, dsp.position.y + 1.6, dsp.position.z);
+        dv = this.skyVisibilityAt(_v1);
+        if (isFinite(dv) && dv > 0.08) { dsum += dv * 2; dn += 2; }
+      }
+      var dp = lvl && lvl.cameraPoses;
+      if (dp) {
+        for (var dk in dp) {
+          var dq = dp[dk] && dp[dk].position;
+          if (!dq || !isFinite(dq.x)) continue;
+          dv = this.skyVisibilityAt(dq);
+          if (isFinite(dv) && dv > 0.08) { dsum += dv; dn++; }
+        }
+      }
+      // Nothing read above the floor => the level is enclosed, and the whole
+      // compensation idea (redistribute light rather than dim the game) has no
+      // fixed point to hang off. SV_REF then leaves comp at its neutral value.
+      return dn ? (dsum / dn) : SV_REF;
+    }
     var zs = [8, 2, -6, -14, -22, -30];
     var sum = 0, n = 0;
     var poses = lvl && lvl.cameraPoses;
@@ -2561,6 +2857,42 @@
     // published poses, so the street-facade march below - which assumes a
     // 7-25 m wide canyon centred on x = 0 - must not run there.
     if (this.isHarbor) return this._harborWindows || out;
+    // Same reasoning for every declarative level: the march below assumes a
+    // 7-25 m canyon centred on x = 0 with plaster facades either side, which is
+    // one level's floor plan and nobody else's. A level that wants lit apertures
+    // publishes them as `level.litWindows` - entries of
+    // {x, y, z, w, h, kelvin, gain} plus the optional {yaw, scale, tint,
+    // tintAmt, haloSize, hox/hoy/hoz, flick} that _buildLampVisuals already
+    // understands - and gets glow cards plus halos for free.
+    if (this._declarative) {
+      var lw = this.ctx && this.ctx.level && this.ctx.level.litWindows;
+      if (!Array.isArray(lw)) return out;
+      // The market's cap of 6 was a search budget for a heuristic that had to
+      // guess where the windows were. A level that KNOWS is not guessing, and
+      // every card is one more instance in a mesh that is already being drawn,
+      // so the ceiling is the instance buffer's, not a draw call's.
+      for (var q = 0; q < lw.length && out.length < MAX_WINDOWS_RIG; q++) {
+        var e = lw[q];
+        if (!e || !isFinite(e.x) || !isFinite(e.y) || !isFinite(e.z)) continue;
+        out.push({
+          x: e.x, y: e.y, z: e.z,
+          sign: isFinite(e.sign) ? e.sign : 0,
+          yaw: isFinite(e.yaw) ? e.yaw : 0,
+          w: isFinite(e.w) ? e.w : 0.9, h: isFinite(e.h) ? e.h : 1.2,
+          scale: isFinite(e.scale) ? e.scale : 2.2,
+          kelvin: isFinite(e.kelvin) ? e.kelvin : 2900,
+          gain: isFinite(e.gain) ? e.gain : 1.0,
+          tint: (e.tint && e.tint.isColor) ? e.tint : null,
+          tintAmt: isFinite(e.tintAmt) ? e.tintAmt : 0.5,
+          haloSize: isFinite(e.haloSize) ? e.haloSize : null,
+          hox: isFinite(e.hox) ? e.hox : 0,
+          hoy: isFinite(e.hoy) ? e.hoy : 0,
+          hoz: isFinite(e.hoz) ? e.hoz : 0,
+          flick: isFinite(e.flick) ? e.flick : 1
+        });
+      }
+      return out;
+    }
     if (!G || !G.occ) return out;
     var rng = this.rng;
     // Alternating sides, receding down the street. A line of warm windows going
@@ -2821,7 +3153,11 @@
       // cap of 2 was written when the market published exactly one shaft; a
       // level that publishes three real apertures should not silently lose one.
       // Only the first casts a shadow - that is the whole shaft shadow budget.
-      var cap2 = this.isHarbor ? 4 : 2;
+      // A declarative level gets the harbor's allowance rather than the
+      // market's: a refinery flare stack, a metro platform and a temple gallery
+      // all publish several real apertures and losing three of four silently is
+      // exactly the sort of thing nobody notices until the level looks empty.
+      var cap2 = (this.isHarbor || this._declarative) ? 4 : 2;
       for (var i = 0; i < defs.length && this._shafts.length < cap2; i++) {
         // An entry the harbor rig already turned into a mast lamp must not also
         // become a shaft - it would stand a second cone inside the first.
@@ -2871,8 +3207,16 @@
     // is the answer and moving it would take the beam off the machine it is
     // bolted to. A container terminal is also vertical: a 10.5 m ceiling on the
     // run is a market constraint, not a physical one.
-    var LEN_MAX = this.isHarbor ? 22.0 : 10.5;
-    if (this.isHarbor) { pose = null; pp = null; }
+    //
+    // A declarative level is treated like the harbor, and for the same reason:
+    // it publishes an aperture it built geometry around (a hole in a platform
+    // ceiling, a gap between two distillation columns, a gallery window in a
+    // temple), so its origin is the answer and re-solving it against a camera
+    // pose would slide the beam off the hole it comes through. It also gets the
+    // taller run - a 10.5 m ceiling is a market constraint, not a physical one.
+    var authoredShaft = this.isHarbor || this._declarative;
+    var LEN_MAX = authoredShaft ? 22.0 : 10.5;
+    if (authoredShaft) { pose = null; pp = null; }
 
     if (pp && isFinite(pose.yaw)) {
       // forward for yaw t is ( -sin t, 0, -cos t ) - the same convention the
@@ -2927,7 +3271,7 @@
     if (!best) {
       // No usable pose: fall back to the published aperture and just trace down.
       var hit = svTrace(G, ex, ey, ez, bx, by, bz,
-        this.isHarbor ? LEN_MAX + 12.0 : 22.0);
+        authoredShaft ? LEN_MAX + 12.0 : 22.0);
       if (hit < 0) return null;
       best = {
         fx: ex + bx * hit, fy: ey + by * hit + 0.03, fz: ez + bz * hit,
@@ -2946,11 +3290,29 @@
       len -= 0.7;
       if (len < 3.0) return null;
     }
+    // Three OPTIONAL fields a level may add to a shaft. They are independent on
+    // purpose - a dawn temple wants a warm SOLAR shaft (colour only, still gated
+    // on the sun), a metro tunnel wants a worklight beam that has no opinion
+    // about the hour (lux), and both are different from "tint the sun".
+    //
+    //   color | kelvin   tint. Never implies anything about when it is on.
+    //   lux              fixed irradiance in the pool -> this is a FIXTURE, so
+    //                    it stops tracking the sun.
+    //   always           same, without pinning the level.
+    //
+    // Levels 1 and 2 publish none of them, so both keep the solar path exactly.
+    var scol = null;
+    if (def.color && def.color.isColor) scol = def.color.clone();
+    else if (typeof def.color === 'number') scol = new THREE.Color(def.color);
+    else if (isFinite(def.kelvin)) scol = GAME.Color.kelvin(def.kelvin, new THREE.Color());
     return {
       kind: def.kind || 'shaft',
       strength: isFinite(def.strength) ? M.clamp(def.strength, 0, 2) : 1,
       width: width,
       len: len,
+      color: scol,
+      lux: isFinite(def.lux) ? M.clamp(def.lux, 0, 60) : null,
+      always: !!def.always || isFinite(def.lux),
       floor: new THREE.Vector3(best.fx, best.fy, best.fz),
       pos: new THREE.Vector3(best.fx - bx * len, best.fy - by * len, best.fz - bz * len)
     };
@@ -3103,12 +3465,64 @@
       if (hw && isFinite(hw.rainIntensity)) hRain = M.clamp(hw.rainIntensity, 0, 1);
       _c1.copy(HPAL.mercury).lerp(HPAL.lightning, 0.55 * this.flash);
     }
+    // ---- declarative levels ------------------------------------------------
+    // Two corrections, both gated so neither level 1 nor level 2 can see them.
+    //
+    // First: on a 'practicals' or interior rig there is no sun, so `amt` is 0
+    // and every published shaft would be switched off - which is the whole
+    // atmosphere of a metro tunnel or a bunker gallery deleted by a day/night
+    // test that has no meaning underground.
+    //
+    // Second: on a 'mixed' rig the sun is low by design, and gating a shaft on
+    // dayFactor would fade out precisely the raking beams the level exists for.
+    // A shaft there tracks the key it is actually made of, floored so a dusk
+    // preset still throws one.
+    var decl = this._declarative;
+    var declKey = decl ? ((this._rigP && isFinite(this._rigP.key)) ? this._rigP.key : 1) : 1;
+    if (decl && declKey > 0 && declKey < 1) {
+      amt = Math.max(amt, 0.55 * M.saturate(this.dayFactor + this.duskFactor));
+    }
     for (var i = 0; i < list.length; i++) {
       var sh = list[i];
       var d = sh.def;
       var on = amt * d.strength;
-      // Spot intensity is candela, so the budget has to carry the r-squared the
-      // inverse-square falloff is about to take back out.
+      // A shaft that declared itself a FIXTURE - a worklight down a tunnel, a
+      // flare stack, a flood through steam - has no opinion about the hour, and
+      // carries its own irradiance budget instead of a share of the sun's.
+      // Spot intensity is candela, so the budget still has to carry the
+      // r-squared the inverse-square falloff is about to take back out.
+      if (decl && d.always) {
+        on = d.strength;
+        _c2.copy(d.color || this.keyColor);
+        // Without an explicit `lux`, fall back to the key at a solar shaft's own
+        // gain, floored so a fixture shaft on a sunless level still exists.
+        var dlux = (d.lux != null) ? d.lux
+          : Math.max(1.6, this.keyIntensity * SHAFT_GAIN);
+        sh.light.intensity = dlux * d.len * d.len * on;
+        sh.light.color.copy(_c2);
+        sh.light.visible = on > 0.02;
+        if (sh.haze) {
+          sh.haze.visible = on > 0.02;
+          sh.haze.material.uniforms.uColor.value.copy(_c2);
+          sh.haze.material.uniforms.uAmt.value =
+            M.clamp(dlux * SHAFT_HAZE, 0, 1.1) * on;
+        }
+        continue;
+      }
+      // A solar shaft may still carry a tint - a dawn temple wants a warm beam
+      // that is nevertheless still gated on the sun being up.
+      if (decl && d.color) {
+        sh.light.intensity = this.keyIntensity * d.len * d.len * SHAFT_GAIN * on;
+        sh.light.color.copy(d.color);
+        sh.light.visible = on > 0.02;
+        if (sh.haze) {
+          sh.haze.visible = on > 0.02;
+          sh.haze.material.uniforms.uColor.value.copy(d.color);
+          sh.haze.material.uniforms.uAmt.value =
+            M.clamp(this.keyIntensity * SHAFT_HAZE, 0, 1.1) * on;
+        }
+        continue;
+      }
       if (harbor) {
         sh.light.intensity = HB.shaftLux * d.len * d.len * on;
         sh.light.color.copy(_c1);
@@ -5346,6 +5760,16 @@
       0, 40);
     this.keyColor.copy(this._sunColor).lerp(this._moonColor, moonMix);
 
+    // ---- declarative rig: trim (or delete) the key -------------------------
+    // Applied here, to the FINISHED key, rather than in each consumer, so the
+    // cascades, the ground/facade bounce, the solar shafts and the viewmodel
+    // all follow from one number instead of forming three separate opinions
+    // about what time it is. Unreachable on market and harbor.
+    if (this._declarative) {
+      var kmul = this.interior ? 0 : (this._rigP ? this._rigP.key : 1);
+      if (kmul !== 1) this.keyIntensity = M.clamp(this.keyIntensity * kmul, 0, 40);
+    }
+
     // COLD HARBOR: there is no sun and no moon. Everything computed above is
     // discarded and the key becomes the lightning strike, driven off
     // ctx.weather. Level 1 never enters this branch.
@@ -5411,6 +5835,15 @@
     // alley from a shadowed slot into a warm-lit corridor in one step.
     var compD = (isFinite(this.skyCompDir) && this.skyCompDir > 0) ? this.skyCompDir : 1;
 
+    // ---- declarative rig ----------------------------------------------------
+    // P is null on market and harbor, and every use of it below is guarded, so
+    // the legacy path runs untouched. Inside an interior the compensation is
+    // dropped to 1: the volume's floor has been raised to INT_SV_FLOOR, so it
+    // is barely attenuating anything and compensating for an occlusion that is
+    // not being applied would simply over-brighten the level.
+    var P = this._applyRigLights(ctx);
+    if (P && this.interior) { comp = 1; compD = 1; }
+
     // sky.js publishes the atmosphere's own hemisphere terms (ARCHITECTURE
     // section 5 + Sky._integrateAmbient): skyColor / groundColor are hue
     // normalised and ambientIntensity carries the magnitude. Use them - the old
@@ -5460,6 +5893,21 @@
       // carries the rest, so a mild scale up is correct; the clamp keeps it in
       // ART_DIRECTION's 0.35-0.8 band by day and lets it collapse at night.
       this.hemi.intensity = this._skyFill(ctx) * comp;
+      if (P) {
+        if (this.interior) {
+          // Nothing above this level is sky, so the hemisphere stops sampling
+          // an atmosphere the player can never see and becomes what it really
+          // is down here: a low, near-neutral, cool-over-warm ambient with a
+          // vertical gradient. A gradient, not a constant - a flat ambient is
+          // the "no shape anywhere" failure, and a HemisphereLight is the one
+          // fill in three that gives shape without a specular lobe to alias.
+          this.hemi.color.copy(INT_SKY_COL);
+          this.hemi.groundColor.copy(INT_GND_COL);
+          this.hemi.intensity = INT_HEMI;
+        } else {
+          this.hemi.intensity *= P.sky;
+        }
+      }
     }
 
     // The PMREM environment is the last unshadowed infinite term in the build.
@@ -5468,6 +5916,16 @@
     // after-dark dome from lighting the street like an overcast afternoon.
     if (ctx.scene && ctx.scene.isScene) {
       ctx.scene.environmentIntensity = comp * M.lerp(1.0, NIGHT_ENV_SCALE, night);
+      // Buried levels see no sky, so the PMREM dome must not light them - but
+      // it is not taken to zero either. Without SOMETHING in the environment
+      // slot every metal surface in the build reads as flat plastic
+      // (ARCHITECTURE section 7.4), and a control room of dead CRTs and cable
+      // trays is nearly all metal. This is the "enough for a specular response,
+      // far too little to be daylight" setting.
+      if (P) {
+        ctx.scene.environmentIntensity = this.interior
+          ? INT_ENV : ctx.scene.environmentIntensity * P.env;
+      }
     }
 
     if (this.bounce) {
@@ -5548,6 +6006,26 @@
       this.ambient.intensity = M.lerp(0.55, 0.20, day) * M.lerp(1.0, 0.78, night);
       _c4.copy(PAL.ambNight).lerp(PAL.ambDay, day);
       this.ambient.color.copy(_c4);
+      if (P) {
+        var abase = this.interior ? INT_AMB : this.ambient.intensity * P.amb;
+        // ...and then the 50:1 guard on top. _rigFloor is measured off the
+        // brightest practical the level actually published (see _rigMeter), so
+        // this is the one place in the build where the shadow floor is derived
+        // from the level's own key rather than from a constant. Capped at 2.2x
+        // so a single absurd fixture cannot flood the whole level with ambient.
+        this.ambient.intensity = M.clamp(this._rigFloor, abase, abase * 2.2);
+        if (this.interior) this.ambient.color.copy(INT_AMB_COL);
+      }
+    }
+
+    // The bounce pair survives on a 'mixed' rig (there IS a sun to bounce) but
+    // at a reduced share, because the practicals are now carrying part of the
+    // job the bounce used to do alone. On a 'practicals' or interior rig they
+    // were already made invisible by _applyRigLights.
+    if (P && P.bnc !== 1) {
+      if (this.bounce) this.bounce.intensity *= P.bnc;
+      if (this.fillA) this.fillA.intensity *= P.bnc;
+      if (this.fillB) this.fillB.intensity *= P.bnc;
     }
 
     // COLD HARBOR overrides every term above. It runs LAST rather than as an
@@ -5575,6 +6053,16 @@
     // lighting is on, permanently, and the only thing that modulates it is the
     // per-fixture failure behaviour below.
     var lampOn = this.isHarbor ? 1 : M.smoothstep(0.12, -0.22, this.solarDirection.y);
+    // A declarative rig sets a FLOOR under that gate rather than replacing it.
+    // An interior and a 'practicals' level have no day state at all, so their
+    // floor is 1; a 'mixed' level does have one - a sunset still moves - but
+    // its interior lighting is on regardless, which is the entire idea of the
+    // rig. Levels on the 'sun' rig have a floor of 0 and behave exactly as the
+    // market does.
+    if (this._declarative) {
+      var lFloor = this.interior ? 1 : (this._rigP ? this._rigP.lampFloor : 0);
+      if (lFloor > lampOn) lampOn = lFloor;
+    }
     this._lampOn = lampOn;
 
     for (var i = 0; i < this.practicals.length; i++) {
@@ -5670,6 +6158,88 @@
       L.intensity = Math.max(0, p.intensity * level * mul * (p.boost || 1));
       L.visible = L.intensity > 0.001;
     }
+
+    if (this._declarative) this._rigMeter(ctx);
+  };
+
+  // ==========================================================================
+  // The declarative rig's meter.
+  //
+  // Two numbers, both MEASURED off the live rig rather than authored, so a new
+  // level gets them right without this file being edited for it:
+  //
+  //   _rigFloor  the ambient floor the 50:1 lit-to-unlit rule is asking for.
+  //              Cold Harbor rendered black because its masts put ~10 lux on
+  //              the apron while the fill put ~0.02 lux everywhere else, and
+  //              nothing in a tone curve holds 500:1 - what came back was not a
+  //              moody frame, it was an empty one. So the brightest practical
+  //              in the level sets a minimum for the shadow floor.
+  //   _localCol  the colour and rough strength of the lamp pool the eye is
+  //              standing in. On a sunless level the world key is zero, so
+  //              mirroring it into the viewmodel scene prints a silhouette;
+  //              the gun is really lit by whatever lamp is nearest, and this
+  //              is that lamp.
+  //
+  // Costs one pass over at most MAX_PRACTICALS_RIG lights and allocates
+  // nothing. Never called on market or harbor.
+  // ==========================================================================
+  Lighting.prototype._rigMeter = function (ctx) {
+    var peak = 0, wsum = 0, i, p, L;
+    var cam = ctx && ctx.camera;
+    var cx = 0, cy = 0, cz = 0;
+    if (cam) {
+      cam.updateMatrixWorld();
+      var e = cam.matrixWorld.elements;
+      cx = e[12]; cy = e[13]; cz = e[14];
+    }
+    _c6.setRGB(0, 0, 0);
+    for (i = 0; i < this.practicals.length; i++) {
+      p = this.practicals[i];
+      L = p.light;
+      if (!L.visible || !(L.intensity > 0)) continue;
+      // Characteristic receiver distance. A lamp with a 15 m reach is really
+      // lighting ground about 5 m away, not its own filament, so measuring the
+      // irradiance at 1 m would report a number no surface in the level ever
+      // sees and drag the floor up by two orders of magnitude.
+      var rd = Math.max(2.0, (p.distance || 10) * 0.35);
+      var eLamp = L.intensity / (rd * rd);
+      if (eLamp > peak) peak = eLamp;
+      if (cam) {
+        var dx = L.position.x - cx, dy = L.position.y - cy, dz = L.position.z - cz;
+        var w = L.intensity / Math.max(1.0, dx * dx + dy * dy + dz * dz);
+        _c1.copy(L.color).multiplyScalar(w);
+        _c6.add(_c1);
+        wsum += w;
+      }
+    }
+    if (wsum > 1e-5) {
+      this._localCol.copy(_c6).multiplyScalar(1 / wsum);
+      // Guard against a fully saturated pool dyeing the weapon: a viewmodel key
+      // is allowed to be tinted, not monochromatic.
+      this._localCol.lerp(_WHITE, 0.22);
+      this._localE = wsum;
+    } else {
+      this._localE = 0;
+    }
+    var want = peak / LIT_DARK_RATIO;
+    this._rigFloor = isFinite(want) ? M.clamp(want, 0, 3.0) : 0;
+
+    // Published for a probing critic. Mutated in place - the frame loop must
+    // not allocate.
+    var D = this.rigDiag;
+    if (!D) D = this.rigDiag = {};
+    D.rig = this.rig;
+    D.interior = this.interior;
+    D.practicals = this.practicals.length;
+    D.shafts = this._shafts ? this._shafts.length : 0;
+    D.sunOn = !!(this.cascades.length && this.cascades[0].light.visible);
+    D.key = Math.round(this.keyIntensity * 1000) / 1000;
+    D.peakLampE = Math.round(peak * 100) / 100;
+    D.ambient = this.ambient ? Math.round(this.ambient.intensity * 1000) / 1000 : 0;
+    D.hemi = this.hemi ? Math.round(this.hemi.intensity * 1000) / 1000 : 0;
+    // The number the 50:1 rule is really about: brightest lamp pool over the
+    // unconditional floor. Above ~50 the dark half of the frame is gone.
+    D.ratio = D.ambient > 1e-4 ? Math.round(peak / D.ambient) : -1;
   };
 
   // --------------------------------------------------------------------------
@@ -5895,7 +6465,14 @@
     }
 
     var force = !!ctx.capture || this._frame < 8 || this._sunMoved;
-    for (var i = 0; i < this.cascades.length; i++) {
+    // A rig with no sun has already made the cascades invisible, so three never
+    // renders their maps - but raising needsUpdate every frame anyway would fire
+    // a full four-pass CSM refresh on whatever frame setInterior(false) is
+    // called. Leave the flag where it is instead; _applyRigLights turning the
+    // lights back on is what should trigger the refresh, and force covers it.
+    var noSun = this._declarative &&
+      (this.interior || (this._rigP && this._rigP.sun === false));
+    for (var i = 0; !noSun && i < this.cascades.length; i++) {
       var period = i <= 1 ? 1 : (i === 2 ? 2 : 3);
       if (force || (this._frame % period) === (i % period)) {
         this.cascades[i].light.shadow.needsUpdate = true;
@@ -5981,6 +6558,38 @@
         rig.hemi.color.copy(HPAL.stormSky);
         rig.hemi.groundColor.copy(HPAL.sodium);
         rig.hemi.intensity = 0.20 + 0.9 * hf;
+      }
+      rig.group.updateMatrixWorld(true);
+      return;
+    }
+
+    // ---- declarative rig with no usable sun --------------------------------
+    // Same failure as the harbor's, arrived at from a different direction: on a
+    // 'practicals' or interior rig the world key is exactly zero, so mirroring
+    // it into view space hands the weapon nothing and prints a silhouette. What
+    // is really lighting the gun is the lamp pool the player is standing in, so
+    // that is what it gets - _rigMeter measures its colour and rough strength
+    // every frame, and the key swings with it as the player walks from a red
+    // alarm beacon into a green fluorescent bay.
+    if (this._declarative && (this.interior || (this._rigP && this._rigP.key < 0.25))) {
+      // Up, forward and slightly to the weapon side: a ceiling fitting, which
+      // is what nearly every practical in an enclosed level is.
+      rig.key.position.set(0.48, 1.40, 0.80).multiplyScalar(6);
+      rig.key.target.position.set(0, 0, 0);
+      rig.key.color.copy(this._localCol);
+      // Floored well above zero for the same reason the market's is: a
+      // silhouetted weapon is a worse defect than a slightly over-lit one.
+      rig.key.intensity = M.clamp(0.85 + this._localE * 0.30, 0.75, 3.2);
+      // A cold rim from behind so the receiver's top edge separates from a dark
+      // corridor instead of merging into it.
+      rig.fill.position.set(-0.75, 0.55, -1.15).multiplyScalar(5);
+      rig.fill.target.position.set(0, 0, 0);
+      rig.fill.color.copy(_c5.copy(this._localCol).lerp(_WHITE, 0.55));
+      rig.fill.intensity = 0.30;
+      if (rig.hemi) {
+        rig.hemi.color.copy(this.interior ? INT_SKY_COL : (this.hemi ? this.hemi.color : INT_SKY_COL));
+        rig.hemi.groundColor.copy(this.interior ? INT_GND_COL : (this.hemi ? this.hemi.groundColor : INT_GND_COL));
+        rig.hemi.intensity = 0.22;
       }
       rig.group.updateMatrixWorld(true);
       return;
@@ -6133,6 +6742,11 @@
       if (pl.shadow && pl.shadow.map) { pl.shadow.map.dispose(); pl.shadow.map = null; }
     }
     this._harborHero.length = 0;
+    // SV_PARAMS is MODULE state shared by every material in the build, and an
+    // interior rig raises its floor. Put it back: if the next level is a legacy
+    // one, _applyRigLights never runs and would never restore it, and a market
+    // rebuilt after a bunker would silently render with a 0.45 occlusion floor.
+    if (SV_PARAMS) SV_PARAMS[0] = SV_FLOOR;
     if (this.root.parent) this.root.parent.remove(this.root);
     if (this._viewRig && this._viewRig.group.parent) {
       this._viewRig.group.parent.remove(this._viewRig.group);

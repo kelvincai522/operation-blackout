@@ -15,11 +15,31 @@
 //     material in the game gets exponential *height* fog with sun-direction
 //     dependent inscattering and aerial perspective. See "FOG" below.
 //   * sky.dustParticles - a cheap additive mote field that thickens the air.
-//   * sky.setWeather(preset) - 'clear' (the default and every prior behaviour)
-//                     or 'storm' / 'overcast' / 'drizzle', which paint a
-//                     procedural nimbostratus deck over the atmosphere for
-//                     LEVEL 2. See the STORM WEATHER section below. Level 1
-//                     never calls it and never reaches a line of it.
+//   * sky.setWeather(preset) - the atmospheric condition. FOUR distinct skies:
+//                       'clear'    the default and every prior behaviour of
+//                                  this module, unchanged. market, highrise,
+//                                  boneyard, refinery and ruins, at five
+//                                  different times of day.
+//                       'storm'    LEVEL 2's night nimbostratus deck, lit from
+//                                  below by sodium. See the STORM WEATHER
+//                                  section. Unchanged.
+//                       'overcast' a full DAYLIGHT deck, lit from above, whose
+//                                  level, hue and picture compression all track
+//                                  the ground albedo - so one preset gives
+//                                  snowbound a whiteout and jungle a humid
+//                                  haze. 'drizzle' is the same deck, thinner.
+//                                  See the DAYLIGHT OVERCAST section.
+//                       'none'     NO SKY. metro and bunker are sealed; the
+//                                  dome leaves the scene, the sun and moon are
+//                                  switched off, and all that remains is a very
+//                                  dim neutral IBL so their metals and standing
+//                                  water have something to reflect.
+//                     Level 1 resolves to 'clear' and never reaches a line of
+//                     any of the others.
+//   * sky.setGroundAlbedo(v) - what the level is standing on. Feeds the LUT's
+//                     ground-bounce integral, the fog's downward inscatter and
+//                     the overcast deck's whole energy budget. Defaults to the
+//                     market's sand, so the default path cannot move.
 //
 // THE ATMOSPHERE MODEL
 //   Single-scattering Rayleigh + Mie + ozone through a spherical, exponentially
@@ -857,6 +877,268 @@
   var STORM_ZENITH_HUE = [0.480, 0.700, 1.000];
   var STORM_GND_HUE = [1.000, 0.660, 0.400];
 
+  // ==========================================================================
+  // DAYLIGHT OVERCAST  ('overcast', 'drizzle')  and  ENCLOSED  ('none')
+  //
+  // EVERYTHING IN THIS SECTION IS INERT UNTIL _overcastF IS NON-ZERO, which
+  // only setWeather('overcast'|'drizzle'|'none') or a levelDef declaring one
+  // can do. market and harbor never reach a line of it: market resolves to
+  // 'clear' and harbor to 'storm', and every added branch tests _overcastF
+  // first and falls through to the untouched path when it is zero.
+  //
+  // WHY THIS IS NOT "THE STORM DECK, BRIGHTER"
+  //
+  //   The storm deck above is a NIGHT sky. Every one of its radiances is an
+  //   absolute in the 0.006-0.05 band, it is lit almost entirely FROM BELOW by
+  //   the terminal's sodium, and its brightness runs on THICKNESS because the
+  //   only light entering it comes off the ground. Scaling that up does not
+  //   produce an overcast day; it produces a night sky with the gain turned up,
+  //   which is a flat grey card - the exact instant-fail this file exists to
+  //   avoid.
+  //
+  //   A daylight overcast is the opposite object in three separate ways:
+  //
+  //   1. IT IS LIT FROM ABOVE. Thin cloud is BRIGHT (sunlight leaks through
+  //      it), thick cloud is the darker blue-grey mass beside it. That is the
+  //      same stTrans field the storm uses, read with the opposite sign, which
+  //      is why the two decks can share one noise texture and one projection
+  //      and still look nothing like each other.
+  //   2. ITS LEVEL IS SET BY THE GROUND, NOT BY A CONSTANT. The deck, the snow
+  //      under it and the haze between them are all the same photons; author
+  //      any one of them independently of the other two and you get either a
+  //      blown white lid over a grey field or a grey lid over a blown field.
+  //      So the whole thing is derived from ONE number - the irradiance the
+  //      deck delivers - and everything else is a ratio to it. See
+  //      _overcastEnergy.
+  //   3. GROUND ALBEDO IS A FIRST-ORDER TERM. Snow at 0.87 under a cloud base
+  //      of reflectance 0.58 is a resonator: 1/(1 - 0.87*0.58) = 1.99, i.e. a
+  //      snowfield very nearly DOUBLES the light under the same cloud, and the
+  //      extra arrives from below and from the base overhead rather than from
+  //      the sun. That single term is the difference between "a grey day with
+  //      white paint on the floor" and a whiteout. Desert hardstanding (0.32)
+  //      buys 1.23 of the same effect and it arrives warm.
+  //
+  // THE SUN IS A REGION, NOT A DISC. clearAmt is zeroed by the deck exactly as
+  // it is under storm, so no disc, no moon, no stars survive. What replaces it
+  // is a broad forward-scattering lobe about the solar direction that is
+  // brightest where the deck is THINNEST - so it drifts with the cloud instead
+  // of being a painted gradient, and it disappears entirely in a whiteout where
+  // the deck never thins.
+  //
+  // THE PICTURE / LIGHT SPLIT is the same one DAY_GAIN describes, and for the
+  // same reason - except that here the compression has to be referenced to the
+  // GROUND ALBEDO rather than to a fixed gain. Measured on the model: under a
+  // deck delivering irradiance E, a surface of albedo a has radiance a*E/pi and
+  // the sky has E/pi, so the sky-to-ground ratio is 1/a. Over snow that is 1.15
+  // and the sky needs no compression at all; over wet jungle floor it is 10 and
+  // an uncompressed sky clips to white between every leaf. One shoulder, whose
+  // asymptote is a multiple of a*E/pi, gets both right - and _regenerateEnvironment
+  // switches it off while it captures the probe, so the LIGHT is never touched.
+  // ==========================================================================
+
+  // Fraction of the clear-sky reference irradiance a full deck still delivers.
+  //
+  // NOT the physical 0.15-0.25 of clear global, and the reason is worth stating
+  // because it is the same trap DAY_GAIN documents. AN OVERCAST DAY IS A DAY.
+  // In real illuminance an overcast noon (15-25 klux) is comparable to, and
+  // often brighter than, the clear GOLDEN HOUR (10-20 klux) this engine is
+  // calibrated on - the two-stop figure everyone remembers is overcast against
+  // clear NOON, which is not a condition anything in this roster is in. Author
+  // it at the physical fraction of a low-sun reference and snowbound - which
+  // ART_DIRECTION calls the brightest scene in the roster - prints a stop and a
+  // half under the market. 0.62 lands it slightly OVER the market's own global
+  // horizontal, which is where a snowfield under a bright deck belongs.
+  var OVER_TRANSMIT = 0.62;
+  // How much more a THIN deck ('drizzle') passes, per unit of thinness.
+  var OVER_THIN_GAIN = 0.55;
+  // Effective solar elevation floor for the deck's budget, as sin(elevation).
+  // A deck is a DIFFUSER: what leaves its underside is scattered out of the
+  // whole slab, so the downwelling is far less sensitive to where the sun is
+  // than a direct beam's cosine law makes it. Without this floor the model
+  // inherits the beam's cosine twice - once in the clear reference and once in
+  // the fact that a low sun is also a long, dim slant path - and snowbound (11
+  // degrees, turbidity 0.09) comes out darker than harbor at 02:00.
+  var OVER_SUN_Y_FLOOR = 0.38;
+  // Reflectance of the cloud base, for the ground <-> base multiple bounce.
+  // Capped so a hypothetical albedo-1 ground cannot make the series diverge.
+  var OVER_CLOUD_R = 0.58;
+  var OVER_BOUNCE_MAX = 0.72;
+  // Floor on the clear-sky reference. A deck under a sun three degrees up is
+  // still a sky; without this the whole model would collapse to black at dawn.
+  var OVER_MIN_E = 0.34;
+
+  // ---- deck shape (all RELATIVE; the level is set by _overcastEnergy) -------
+  // Radiance multiplier where the cloud is thickest, and the extra where it is
+  // thinnest. Deliberately a much NARROWER spread than the storm's 0.18/0.98:
+  // an overcast is an even ceiling whose interest is in hue and relief, and a
+  // 6x luminance spread reads as broken cumulus however grey you make it.
+  // 0.66..1.28 is a factor of 1.94 - enough that the masses read, little enough
+  // that it stays a ceiling.
+  var OVER_DECK_MIN = 0.66;
+  var OVER_DECK_RANGE = 0.62;
+  // Horizon radiance as a fraction of the zenith. A real overcast is brightest
+  // overhead (shortest path up through the deck) and falls toward the skyline;
+  // 0.66 is about the measured 1.5:1 of a stratus day. Its own e-folding is the
+  // exp(-elev*3.2) the storm deck already computes.
+  var OVER_HORIZON_K = 0.66;
+  // Two independent mean-1 structure fields. Both average to exactly 1.0 by
+  // construction (the noise channels average 0.5), so they buy internal
+  // structure at zero cost to the deck's level, the frame mean or the meter -
+  // which is the only way to add depth to something that must stay even.
+  var OVER_BAND = 0.22;            // mid-frequency rolls and rifts
+  var OVER_CELL = 0.18;            // sagging cells of the base
+  // Ground bounce onto the cloud base, as a fraction of the zenith radiance PER
+  // UNIT of ground albedo. This is the term that makes snow a whiteout: at
+  // albedo 0.87 it contributes 0.37 of the zenith back onto the base, arriving
+  // from BELOW and therefore flattening the whole dome; at 0.10 (wet jungle
+  // floor) it contributes 0.04 and the deck stays top-lit, which is what leaves
+  // room for canopy shafts.
+  var OVER_BOUNCE_K = 0.42;
+  // The sun as a diffuse region. Lobe exponent (higher = tighter) and peak
+  // radiance as a fraction of the zenith. A thin deck gives a tighter, brighter
+  // region; a thick one a broad barely-there brightening.
+  var OVER_SUN_P = 6.0, OVER_SUN_P_THIN = 11.0;
+  var OVER_SUN_REL = 0.55, OVER_SUN_REL_THIN = 0.94;
+  // Coverage THRESHOLD on the deck fbm. Far lower than the storm's 0.06: this
+  // is a TOTAL deck. Any hole at all would show the clear atmosphere behind it,
+  // and at snowbound's turbidity 0.09 that atmosphere is an ochre horizon band -
+  // i.e. a hole in a blizzard would print as a patch of desert.
+  var OVER_COVER = -0.40;
+  var OVER_DETAIL = 0.55;
+  // ---- the picture shoulder (see the header) -------------------------------
+  //
+  // The asymptote is a multiple of the DECK'S OWN MEAN, modulated by the ground
+  // albedo - not a multiple of the ground radiance, which is the version that
+  // was tried first and measured: over the market's 0.24-albedo sand it put the
+  // asymptote at 0.37x the deck's mean, so the whole deck sat four times over a
+  // knee whose remaining span was 0.06, and a 1.9x luminance spread printed as
+  // a 3.7% one. A flat card - the exact failure this preset exists to avoid,
+  // arrived at by the term that was supposed to prevent the opposite one.
+  //
+  // A shoulder can only preserve structure if it sits ABOVE what it is
+  // compressing. So the mean is the reference, and the albedo decides how much
+  // headroom there is over it: over snow (which is nearly as bright as the sky)
+  // almost none is needed and the deck passes through untouched, over a dark
+  // jungle floor the deck is compressed AND pre-scaled down, because there the
+  // sky really is ten times the ground and something has to give.
+  var OVER_PIC_SHOULDER_LO = 1.25; // asymptote, x deck mean, at a black ground
+  var OVER_PIC_SHOULDER_HI = 2.40; // ...and at a white one
+  var OVER_PIC_GAIN_LO = 0.72;     // pre-gain at a black ground (1.0 at a white one)
+  var OVER_PIC_KNEE = 0.42;        // knee as a fraction of the asymptote
+  // Ground albedo remapped to 0..1 across the useful range, and a floor for the
+  // fog levels - without which a 0.10-albedo jungle floor would ask for a haze
+  // half as bright as the foliage it is supposed to be veiling.
+  var OVER_ALBEDO_LO = 0.10, OVER_ALBEDO_SPAN = 0.70;
+  var OVER_ALBEDO_FLOOR = 0.22;
+  // ---- what the key light does ---------------------------------------------
+  // How much of the clear-sky key survives the deck.
+  //
+  // 0.55 rather than the 0.20 the physics of a thick nimbostratus would ask
+  // for, and this is a measured cross-module constraint rather than a taste
+  // call. postfx sets its ABSOLUTE print level from sky.sunIntensity
+  // (todBias = floor + (1-floor) * saturate(sunI / 3)) precisely so that dusk
+  // is low-key and night is dark. An overcast noon is neither, but a key cut to
+  // a fifth is indistinguishable from twilight through that expression, and the
+  // whole level prints half a stop down - measured on the market under
+  // weather=overcast: todBias fell from 1.00 to 0.57.
+  //
+  // The overcast READ does not come from a dim key anyway, it comes from the
+  // RATIO: at 0.55 the direct term is about 17% of the global under a deck
+  // delivering OVER_TRANSMIT, i.e. the shadows are one soft stop deep instead
+  // of four hard ones. That is what an overcast looks like, and it leaves
+  // lighting.js a key with enough energy to still give form to a face.
+  var OVER_KEY_K = 0.55, OVER_KEY_K_THIN = 0.72;
+  var OVER_MOON_K = 0.30;
+  // Horizon haze blend on the visible dome. Raised hard from the clear-sky
+  // 0.12 because this is the one preset where the sky and the far field SHOULD
+  // converge: it ties the last degree or two above the skyline to the haze
+  // colour so the narrow window where the deck fades out (see stCov) cannot
+  // reveal a strip of clear atmosphere under a total overcast.
+  var OVER_HAZE_MIX = 0.55;
+  var OVER_HAZE_GAIN = 2.2;
+  var OVER_HAZE_ALBEDO = 0.90;     // water droplets / ice crystals
+  // Inscatter luminance, as a multiple of (effective albedo x deck mean). Over
+  // snow this lands the haze within a few per cent of the snow itself, so
+  // distance dissolves geometry into white with no value step at all - the
+  // whiteout the brief asks for. Over dark jungle floor the same expressions
+  // land it at ~2.3x the foliage: mist between trunks, not a white wall.
+  var OVER_FOG_K = 1.05;
+  var OVER_FOG_SUN_K = 1.20;
+  var OVER_FOG_GND_K = 1.00;       // x TRUE ground albedo, not the floored one
+  // How far the haze blends toward the ground's own hue. Snow tints it cool,
+  // a jungle floor tints it green - which is most of what stops two levels
+  // sharing a preset from sharing a look.
+  var OVER_FOG_GND_MIX = 0.34;
+  var OVER_FOG_DENS_K = 2.2;       // x the AUTHORED base density, so setFog works
+  var OVER_HUE = [0.965, 0.985, 1.000];
+  // Rain/snow fills the whole column rather than hugging the ground, scatters
+  // near-isotropically (there is no disc to forward-scatter from) and eats
+  // chroma at distance far harder than dry air.
+  var OVER_FOG = {
+    heightScale: 34.0,
+    maxOpacity: 0.93,
+    mieG: 0.30,
+    startDistance: 1.4,
+    desaturate: 0.30
+  };
+
+  // ---- 'none': fully enclosed levels (metro, bunker) -----------------------
+  //
+  // There is no sky. The dome is removed from the scene and the sun and moon
+  // are switched off outright - every photon in those levels comes from
+  // lighting.js's practicals.
+  //
+  // But the environment must NOT be null, and this is the whole reason the
+  // preset exists rather than just skipping the module: scene.environment is
+  // what every metal, every wet tile and every pool of standing water gets
+  // nearly all of its visible value from. An enclosed level with no probe
+  // renders its steel as black holes and its water as flat matte paint, which
+  // reads as a rendering bug rather than as darkness. So the deck machinery
+  // still runs, at a very dim, very flat, strictly neutral level: enough for a
+  // rail head to catch something and for a wet platform to have a gradient in
+  // it, far too little to light anything.
+  //
+  // 0.020 of irradiance is about 1.3% of the market's global horizontal, i.e.
+  // 6.3 stops down - present in a reflection, invisible as illumination.
+  var VOID_E = 0.020;
+  var VOID_HORIZON_K = 0.55;
+  var VOID_HUE = [0.940, 0.970, 1.000];
+  var VOID_FOG_K = 0.55;
+  var VOID_FOG_DENS_K = 1.15;
+  var VOID_HAZE_GAIN = 2.6;
+  var VOID_HAZE_ALBEDO = 0.82;
+  // Interiors are not height-stratified: a corridor's air is the same all the
+  // way to the ceiling, so the height term is pushed effectively flat.
+  var VOID_FOG = {
+    heightScale: 48.0,
+    maxOpacity: 0.82,
+    mieG: 0.24,
+    startDistance: 1.2,
+    desaturate: 0.34
+  };
+
+  // ---- ground albedo, per level --------------------------------------------
+  //
+  // The IBL's lower hemisphere, the LUT's own ground-bounce integral, the fog's
+  // downward inscatter and (under overcast) the deck's level are all functions
+  // of what the level is standing on. GROUND_ALBEDO above is the market's
+  // sun-baked sand and stays the default for every caller that does not say
+  // otherwise, so market and harbor cannot move.
+  //
+  // Applied ONLY to levels that carry a declarative env profile, which market
+  // and harbor deliberately do not. A level can override at any time with
+  // sky.setGroundAlbedo(), and a profile can carry env.groundAlbedo.
+  var GROUND_ALBEDO_BY_LEVEL = {
+    snowbound: [0.860, 0.890, 0.940],   // fresh snow, blue-shifted
+    jungle:    [0.085, 0.120, 0.062],   // wet leaf litter and mud
+    boneyard:  [0.350, 0.310, 0.240],   // bleached desert hardstanding - warm
+    highrise:  [0.200, 0.200, 0.210],   // city concrete, neutral
+    refinery:  [0.160, 0.150, 0.135],   // oil-stained hardstanding
+    ruins:     [0.230, 0.215, 0.165],   // grey-gold stone with moss
+    metro:     [0.060, 0.062, 0.058],
+    bunker:    [0.070, 0.068, 0.062]
+  };
+
   // --------------------------------------------------------------------------
   // HAZE SCHEDULE (see _scheduleHaze)
   //
@@ -1051,6 +1333,15 @@
     'uniform vec4 uStormBase;',      // x base height, y 1/patchRadius^2, zw centre XZ
     'uniform vec4 uFlash;',          // xyz in-cloud flash radiance, w lobe tightness
     'uniform vec3 uFlashDir;',       // unit, points TOWARD the strike
+    // ---- daylight overcast / enclosed. All zero / unused when uOver.x == 0. -
+    // Shares the storm deck's noise field, projection and parallax and nothing
+    // else: see the DAYLIGHT OVERCAST header for why the two cannot be the same
+    // object with different constants.
+    'uniform vec4 uOver;',           // x strength, y deckMin, z deckRange, w band amount
+    'uniform vec4 uOverB;',          // x cell amount, y solar lobe exponent, z bounce gain, w unused
+    'uniform vec4 uOverPic;',        // x picture gain, y knee, z asymptote, w tint amount
+    'uniform vec3 uOverSun;',        // peak radiance of the diffuse solar region
+    'uniform vec3 uOverGnd;',        // ground bounce landing on the cloud base
     'varying vec3 vDir;',
     GLSL_NOISE,
 
@@ -1299,6 +1590,68 @@
     // WEATHER rather than as a grey ramp. A deck that varies only in brightness
     // is a gradient; one that varies in colour is cloud.
     '    vec3 stTint = mix( vec3( 0.88, 0.99, 1.17 ), vec3( 1.08, 1.00, 0.90 ), stThick );',
+    // ======================================================================
+    // Which deck is this? The storm composition below is left EXACTLY as it
+    // shipped, inside the else branch, so level 2 executes the identical
+    // sequence of operations on the identical values. The overcast branch is a
+    // separate object that happens to share the density field.
+    // ======================================================================
+    '    vec3 stDeck = vec3( 0.0 );',
+    '    if ( uOver.x > 0.0 ) {',
+    // A DAYLIGHT deck is lit from ABOVE, so the sign of the thickness term is
+    // the opposite of the storm's: THIN cloud is bright (sunlight leaks
+    // through it), thick cloud is the darker mass beside it. Same stTrans
+    // field, read the other way round.
+    '      vec3 oD = stAmb * ( uOver.y + uOver.z * stTrans );',
+    // Hue structure rather than luminance structure, exactly as the storm deck
+    // does it and for the same reason: a deck that varies only in brightness is
+    // a gradient, one that varies in colour is cloud. Thin patches are showing
+    // warm transmitted sunlight, thick ones cold multiply-scattered light, and
+    // the two ends are luminance-matched to within 2% so this costs the deck
+    // nothing in level. uOverPic.w is 0 for the enclosed profile, which has to
+    // stay strictly neutral.
+    '      vec3 oT = mix( vec3( 1.05, 1.01, 0.96 ), vec3( 0.92, 0.96, 1.08 ), stThick );',
+    '      oD *= mix( vec3( 1.0 ), oT, uOverPic.w );',
+    // Two independent mean-1 relief fields - the sagging cells of the base and
+    // the mid-frequency rolls inside the deck. Because both noise channels
+    // average 0.5 these average to exactly 1.0, so they buy internal structure
+    // at zero cost to the level, the vertical balance or the meter. Without
+    // them an even deck is a flat card, which is the whole failure mode.
+    '      oD *= ( 1.0 - uOverB.x ) + uOverB.x * 2.0 * stCell;',
+    '      oD *= ( 1.0 - uOver.w ) + uOver.w * 2.0 * stB.g;',
+    // GROUND BOUNCE onto the cloud base. Under snow this is not a detail, it is
+    // the effect: an 0.87-albedo field under an 0.58-reflectance base very
+    // nearly doubles the light, and it arrives from BELOW, which is what
+    // flattens the dome into a whiteout. Thick cloud returns more of it (the
+    // same saturating back-scatter the storm deck uses), and the sagging cells
+    // hang lower and catch more still.
+    '      float oRf = stThick * ( 1.30 - 0.40 * stThick );',
+    '      oD += uOverGnd * oRf * ( 0.60 + 0.40 * stCell ) * uOverB.z;',
+    // THE SUN AS A REGION, NOT A DISC. The disc itself is killed by clearAmt
+    // below, exactly as under storm. What replaces it is a broad
+    // forward-scattering lobe about the solar direction that is brightest where
+    // the deck is THINNEST - so it moves with the cloud instead of being a
+    // painted gradient, and it vanishes entirely in a whiteout where the deck
+    // never thins.
+    '      float oS = pow( max( cosT * 0.5 + 0.5, 0.0 ), max( uOverB.y, 1.0 ) );',
+    '      oD += uOverSun * oS * ( 0.30 + 0.70 * stTrans );',
+    // PICTURE-ONLY SHOULDER. Same split as DAY_GAIN, referenced to the ground
+    // albedo rather than to a fixed gain (see the header).
+    // _regenerateEnvironment pushes the asymptote out of range for the duration
+    // of the probe capture, so the LIGHT the scene receives never sees this.
+    // Hue is preserved exactly: the roll is applied to luminance and scaled
+    // back onto the triple.
+    '      if ( uOverPic.z < 1.0e8 ) {',
+    '        oD *= uOverPic.x;',
+    '        float oL = dot( oD, vec3( 0.2126, 0.7152, 0.0722 ) );',
+    '        float oSpan = uOverPic.z - uOverPic.y;',
+    '        if ( oL > uOverPic.y && oSpan > 1e-6 ) {',
+    '          float oRl = uOverPic.y + oSpan * ( 1.0 - exp( - ( oL - uOverPic.y ) / oSpan ) );',
+    '          oD *= oRl / max( oL, 1e-6 );',
+    '        }',
+    '      }',
+    '      stDeck = oD;',
+    '    } else {',
     // STORM_DECK_MIN is a FLOOR, not a taste call: the darkest place in this
     // sky is thick cloud high up, where there is neither transmission from
     // above nor underglow from below, and ARCHITECTURE 7.6 and the harbor art
@@ -1307,7 +1660,7 @@
     // The RANGE around it is deliberately wider than the mean is high (0.18 to
     // 1.16 about a mean of 0.37): the deck's depth is the spread, not the
     // level.
-    '    vec3 stDeck = stAmb * stTint',
+    '    stDeck = stAmb * stTint',
     '               * ( ' + STORM_DECK_MIN.toFixed(3) + ' + ' + STORM_DECK_RANGE.toFixed(3) + ' * stTrans );',
     // Back-scatter saturates: past a few hundred metres of cloud the base
     // stops getting any better at returning light.
@@ -1389,7 +1742,11 @@
     // exactly 1.0 against a cell channel whose mean is 0.5 it buys that
     // structure at zero cost to the level, the vertical balance or the meter.
     '    stDeck *= 0.74 + 0.52 * stCell;',
+    '    }',
     // ---- sheet lightning INSIDE the deck ----------------------------------
+    // Common to both decks, and a no-op for the overcast one: nothing writes
+    // uFlash unless _stormF is non-zero, so uFlash.xyz is exactly (0,0,0) and
+    // the branch below is never entered.
     // The strike is inside the cloud, so the cloud is the emitter: thick cloud
     // near uFlashDir glows, thin cloud barely lifts, and the far side of the
     // sky picks up only the broad lobe. That difference is what separates a
@@ -1854,6 +2211,36 @@
     this._stormF = 0;
     this._stormTex = null;
     this._pendingWeather = null;
+    // ---- daylight overcast / enclosed (levels 3-10) ------------------------
+    // _overcastF is to the overcast deck exactly what _stormF is to the storm
+    // one: the single gate every added branch tests, zero for market, harbor
+    // and every clear-sky level. _voidF additionally marks the 'none' profile,
+    // where there is no sky at all and the deck exists only to give the IBL
+    // something dim and neutral to be.
+    this._overcastF = 0;
+    this._voidF = 0;
+    this._overThick = 1.0;           // 1 = full deck, <1 = a thinner 'drizzle' one
+    this.enclosed = false;           // published: "this level has no sky"
+    // Ground albedo. Starts as an exact copy of the market's sun-baked sand, so
+    // the default path is bit-identical; setGroundAlbedo() or a level profile
+    // moves it. Feeds the LUT's ground-bounce integral, the fog's downward
+    // inscatter and (under overcast) the deck's own level.
+    this.groundAlbedo = [GROUND_ALBEDO[0], GROUND_ALBEDO[1], GROUND_ALBEDO[2]];
+    // Solved once per LUT generation by _applyOvercastAmbient; read back by
+    // _pushUniforms. Defaults are inert.
+    this._overScale = 0;
+    this._overE = 0;
+    this._overGLum = 0;
+    this._overSunUp = 0;
+    this._overBounceRel = 0;
+    this._overSunRel = 0;
+    this._overSunP = OVER_SUN_P;
+    this._overHue = [1, 1, 1];
+    this._overGndHue = [1, 1, 1];
+    this._overSunHue = [1, 1, 1];
+    this._clearFill = 0.10;
+    this._sunIntensityClear = 5.2;
+    this._voidBg = null;
     // Wind-integrated deck drift. Integrated rather than time * speed so the
     // deck does not jump when weather.js ramps its wind.
     this._driftNear = new THREE.Vector2(0, 0);
@@ -2250,6 +2637,43 @@
       this.moonIntensity *= M.lerp(1.0, STORM_MOON_K, M.saturate(this._stormF));
     }
 
+    // ---- daylight overcast / enclosed --------------------------------------
+    // The CLEAR-sky key is stashed before anything below touches it. The
+    // overcast energy budget is expressed as a fraction of the clear-sky global
+    // horizontal irradiance (see _overcastEnergy), so it needs the
+    // un-attenuated number - reading the attenuated one would make the deck
+    // chase its own tail every time this ran and converge on black.
+    this._sunIntensityClear = this.sunIntensity;
+    var ovf = M.saturate(this._overcastF);
+    if (ovf > 0) {
+      if (this._voidF > 0) {
+        // Buried. No sun, no moon; lighting.js's practical rig owns every
+        // photon in the level. The DIRECTION is lifted to a plausible overhead
+        // rather than left pointing up through the floor from a -55 degree
+        // solar midnight, because several modules copy sky.sunDirection without
+        // first checking that the intensity is zero (weapons' viewmodel key,
+        // vfx's impact lighting, ai's wrap term) and a key arriving from under
+        // the ground reads as a bug in all three.
+        this.sunIntensity = 0.0;
+        this.moonIntensity = 0.0;
+        this.sunColor.setRGB(0.86, 0.90, 1.00);
+        this.sunDirection.set(0.18, 0.96, -0.22).normalize();
+      } else {
+        // Not zero. lighting.js needs a key direction every frame, an overcast
+        // really does have a bright side, and a level with NO directional
+        // component loses every contact and form cue - the flat, dead lighting
+        // on the instant-fail list. At 0.20 of a low winter sun the shadows are
+        // barely readable, which is what a blizzard looks like.
+        var okk = M.lerp(OVER_KEY_K_THIN, OVER_KEY_K, M.saturate(this._overThick));
+        this.sunIntensity *= M.lerp(1.0, okk, ovf);
+        this.moonIntensity *= M.lerp(1.0, OVER_MOON_K, ovf);
+        // A deck diffuses the sun's own colour out of the key: what reaches the
+        // ground under stratus is the deck's near-white, not a 4200 K disc.
+        _kelvinRef.setRGB(1.0, 0.985, 0.965);
+        this.sunColor.lerp(_kelvinRef, 0.62 * ovf);
+      }
+    }
+
     // Guarantee the whole build always has a key light with a direction, even
     // at midnight, whatever lighting.js chooses to do with it.
     this.keyIsMoon = false;
@@ -2313,6 +2737,35 @@
       albedo = M.lerp(HAZE_ALBEDO, STORM_HAZE_ALBEDO, sf);
     }
 
+    // ---- overcast / enclosed ------------------------------------------------
+    // Mutually exclusive with the storm above (one preset sets one gate), but
+    // written as a second, separate branch anyway so neither can ever modify
+    // the other's numbers. The night/afterglow multipliers computed above are
+    // deliberately replaced rather than stacked on: they model dew and
+    // inversion under a CLEAR sky, and a blizzard is neither.
+    //
+    // The density is a MULTIPLE of the authored base rather than an absolute,
+    // so a level that calls setFog({density}) still scales its own weather -
+    // which the storm path, tuned against one specific terminal, does not need
+    // to do and this one does (snowbound and jungle share the preset).
+    var of = M.saturate(this._overcastF);
+    if (of > 0 && !(sf > 0)) {
+      var vo = this._voidF > 0;
+      var od = vo ? base * VOID_FOG_DENS_K
+                  : base * OVER_FOG_DENS_K * M.lerp(0.60, 1.0, M.saturate(this._overThick));
+      // weather.js owns the blizzard/drizzle contract and knows far more about
+      // what is falling than this module does, so its density wins when it is
+      // publishing a real one. Taken as a MAX rather than read straight
+      // through: an inert 'clear' weather module publishes a near-zero density
+      // and would otherwise thin a whiteout down to nothing.
+      var wd = this._wxFog;
+      if (isFinite(wd) && wd > 0) od = Math.max(od, M.clamp(wd, 0.004, 0.075));
+      d = M.lerp(d, od, of);
+      this.nightHazeGain = M.lerp(this.nightHazeGain,
+        vo ? VOID_HAZE_GAIN : OVER_HAZE_GAIN, of);
+      albedo = M.lerp(albedo, vo ? VOID_HAZE_ALBEDO : OVER_HAZE_ALBEDO, of);
+    }
+
     this.fogDensityEffective = d;
     this.scatterRadiance = albedo * d / (4.0 * PI);
 
@@ -2330,6 +2783,9 @@
     if (sf > 0) {
       this.fogStartEffective = M.lerp(this.fogStartEffective,
         STORM_FOG.startDistance, sf);
+    } else if (of > 0) {
+      this.fogStartEffective = M.lerp(this.fogStartEffective,
+        (this._voidF > 0 ? VOID_FOG : OVER_FOG).startDistance, of);
     }
   };
 
@@ -2352,10 +2808,20 @@
   Sky.prototype._fogParam = function (key) {
     var base = this.fog[key];
     var sf = M.saturate(this._stormF);
-    if (!(sf > 0)) return base;
-    var storm = STORM_FOG[key];
-    if (!isFinite(storm)) return base;
-    return M.lerp(base, storm, sf);
+    if (sf > 0) {
+      var storm = STORM_FOG[key];
+      if (!isFinite(storm)) return base;
+      return M.lerp(base, storm, sf);
+    }
+    // Same contract for the daylight decks: the authored value EXACTLY when
+    // neither gate is up, so market and every clear-sky level are untouched.
+    var of = M.saturate(this._overcastF);
+    if (of > 0) {
+      var alt = (this._voidF > 0 ? VOID_FOG : OVER_FOG)[key];
+      if (!isFinite(alt)) return base;
+      return M.lerp(base, alt, of);
+    }
+    return base;
   };
 
   // --------------------------------------------------------------------------
@@ -2442,7 +2908,13 @@
     // wherever the deck thinned it revealed something four times BRIGHTER
     // behind it - a hot white band along the skyline, under a dark lid, which
     // is the one place in the frame the eye goes first.
-    var stormK = 1.0 - 0.90 * M.saturate(this._stormF);
+    //
+    // The daylight overcast deck is just as opaque to them, and for 'none'
+    // (buried, t = 0, i.e. deep night by the solar arc) suppressing the warm
+    // city skyglow matters more than anywhere else: a sodium glow leaking into
+    // the fog colours of a sealed bunker is the one thing that would give the
+    // whole illusion away. Exactly _stormF for level 2, exactly 0 for level 1.
+    var stormK = 1.0 - 0.90 * M.saturate(Math.max(this._stormF, this._overcastF));
 
     // Shoulder target for the physical daylight terms, in the same HDR units as
     // everything else. keyRef is the radiance of a mid-grey horizontal surface
@@ -2546,9 +3018,15 @@
           var e0 = betaR[0] * odR + betaMe[0] * odM + betaDe[0] * odD + betaO[0] * odO;
           var e1 = betaR[1] * odR + betaMe[1] * odM + betaDe[1] * odD + betaO[1] * odO;
           var e2 = betaR[2] * odR + betaMe[2] * odM + betaDe[2] * odD + betaO[2] * odO;
-          iso0 += Math.exp(-Math.min(e0, 50)) * GROUND_ALBEDO[0] * Ts[0] * kg;
-          iso1 += Math.exp(-Math.min(e1, 50)) * GROUND_ALBEDO[1] * Ts[1] * kg;
-          iso2 += Math.exp(-Math.min(e2, 50)) * GROUND_ALBEDO[2] * Ts[2] * kg;
+          // this.groundAlbedo, not the module constant: it IS the module
+          // constant for market and harbor and for every caller that has not
+          // called setGroundAlbedo(), so the default path is bit-identical -
+          // but a boneyard hardstanding and a snowfield bounce very different
+          // amounts of very differently coloured light back into the dome.
+          var gA = this.groundAlbedo;
+          iso0 += Math.exp(-Math.min(e0, 50)) * gA[0] * Ts[0] * kg;
+          iso1 += Math.exp(-Math.min(e1, 50)) * gA[1] * Ts[1] * kg;
+          iso2 += Math.exp(-Math.min(e2, 50)) * gA[2] * Ts[2] * kg;
         }
 
         iso0 *= SKY_SCALE; iso1 *= SKY_SCALE; iso2 *= SKY_SCALE;
@@ -2767,6 +3245,11 @@
     var gmx = Math.max(dnR, Math.max(dnG, dnB)) || 1;
     this.groundColor.setRGB(dnR / gmx, dnG / gmx, dnB / gmx);
     this.fillRadiance = lum;
+    // The CLEAR-sky fill, kept separately because _applyOvercastAmbient
+    // overwrites fillRadiance with the deck's own and _overcastEnergy is a
+    // fraction of the CLEAR-sky budget. Reading the overwritten value back
+    // would close a positive feedback loop through the deck's own light.
+    this._clearFill = lum;
 
     // The zenith is sampled on its own: at 85 degrees the azimuth is
     // irrelevant, so this is the one direction that is pure sky colour with no
@@ -2824,9 +3307,10 @@
     this._sampleAE(0.35, -13.0 * M.DEG, _c3);
     var eGnd = this.sunIntensity * Math.max(this.sunWorldDirection.y, 0.0) + lum * PI;
     var bk = 0.45 * eGnd / PI;
-    this._fogGnd[0] = _c3.r * 0.55 + GROUND_ALBEDO[0] * bk;
-    this._fogGnd[1] = _c3.g * 0.55 + GROUND_ALBEDO[1] * bk;
-    this._fogGnd[2] = _c3.b * 0.55 + GROUND_ALBEDO[2] * bk;
+    var gAlb = this.groundAlbedo;
+    this._fogGnd[0] = _c3.r * 0.55 + gAlb[0] * bk;
+    this._fogGnd[1] = _c3.g * 0.55 + gAlb[1] * bk;
+    this._fogGnd[2] = _c3.b * 0.55 + gAlb[2] * bk;
 
     // The cap is against the key by DAY and against the key times
     // nightHazeGain after dark. keyRef is the radiance of a mid-grey card in
@@ -2857,6 +3341,9 @@
     // Last, so it can override everything above with values that came from the
     // deck instead of from a clear column. No-op without a storm.
     this._applyStormAmbient();
+    // ...and its daylight counterpart. Mutually exclusive with the above, and
+    // an immediate return when _overcastF is 0.
+    this._applyOvercastAmbient();
   };
 
   // --------------------------------------------------------------------------
@@ -3032,6 +3519,285 @@
   };
 
   // ==========================================================================
+  // DAYLIGHT OVERCAST / ENCLOSED  -  the CPU side
+  //
+  // Three pieces, in the order they run:
+  //
+  //   _overcastEnergy()   how much light the deck delivers to the ground. ONE
+  //                       number; everything else in the preset is a ratio to
+  //                       it, which is what stops the sky, the ground and the
+  //                       haze between them from being authored independently
+  //                       and disagreeing.
+  //   _overcastShape()    the deck's RELATIVE radiance at one elevation, in its
+  //                       mean noise state. Mirrors the shader exactly, the same
+  //                       contract _stormDeckRadiance honours and for the same
+  //                       reason: _deriveAmbient integrates a CLEAR LUT that
+  //                       knows nothing about the deck, so without this the
+  //                       level would be LIT by a sky it is not being SHOWN.
+  //   _applyOvercastAmbient()  normalises that shape to the energy, replaces
+  //                       every derived light term, and hands _pushUniforms the
+  //                       scale it needs.
+  // ==========================================================================
+
+  // Total downwelling irradiance under the deck, in the same units as
+  // sunIntensity (an irradiance) rather than as a radiance. See the header for
+  // the ground <-> cloud-base multiple bounce, which is the term that makes
+  // snow a whiteout and desert hardstanding warm.
+  Sky.prototype._overcastEnergy = function () {
+    if (this._voidF > 0) return VOID_E;
+    var sy = Math.max(this.sunWorldDirection.y, 0.0);
+    var si = isFinite(this._sunIntensityClear) ? this._sunIntensityClear : this.sunIntensity;
+    var cf = isFinite(this._clearFill) ? this._clearFill : this.fillRadiance;
+    // Clear-sky reference: direct on a flat surface plus the sky's own
+    // hemispherical contribution (E = pi * L for a Lambertian receiver), with
+    // the solar cosine floored - see OVER_SUN_Y_FLOOR.
+    var ec = Math.max(si * Math.max(sy, OVER_SUN_Y_FLOOR) + Math.max(cf, 0) * PI,
+      OVER_MIN_E);
+    var tr = OVER_TRANSMIT * (1.0 + OVER_THIN_GAIN * (1.0 - M.saturate(this._overThick)));
+    var ga = this.groundAlbedo;
+    var gl = 0.2126 * ga[0] + 0.7152 * ga[1] + 0.0722 * ga[2];
+    var boost = 1.0 / (1.0 - M.clamp(gl * OVER_CLOUD_R, 0.0, OVER_BOUNCE_MAX));
+    var e = ec * tr * boost;
+    return (isFinite(e) && e > 0) ? e : OVER_MIN_E * 0.4;
+  };
+
+  // Relative per-channel radiance of the overcast deck at sin(elevation), with
+  // every noise channel replaced by its mean. Multiply by this._overScale for
+  // absolute HDR radiance.
+  Sky.prototype._overcastShape = function (elevSin, out) {
+    var vo = this._voidF > 0;
+    var up = Math.max(elevSin, 0.0);
+    // The same exp(-elev * 3.2) the shader's stHor uses, so the two ramps agree.
+    var horiz = Math.exp(-up * 3.2);
+    var hk = vo ? VOID_HORIZON_K : OVER_HORIZON_K;
+    var ramp = 1.0 + (hk - 1.0) * horiz;
+    var dMin = vo ? 1.0 : OVER_DECK_MIN;
+    var dRng = vo ? 0.0 : OVER_DECK_RANGE;
+    var k = dMin + dRng * STORM_MEAN_TRANS;
+    // Mean of the shader's thin/thick hue mix at the mean thickness. Its
+    // luminance is 0.984, i.e. essentially 1, but carrying it keeps the mirror
+    // honest rather than approximately honest.
+    var tw = vo ? 0.0 : 1.0;
+    var refl = STORM_MEAN_THICK * (STORM_REFL_A - STORM_REFL_B * STORM_MEAN_THICK);
+    var bounce = vo ? 0.0 : this._overBounceRel * refl * (0.60 + 0.40 * 0.5);
+    // Mean of pow((cosT + 1)/2, p) over the sphere is exactly 1/(p+1).
+    var sunLobe = vo ? 0.0 : this._overSunRel / (this._overSunP + 1.0) *
+      (0.30 + 0.70 * STORM_MEAN_TRANS) * this._overSunUp;
+    var hue = this._overHue, gh = this._overGndHue, sh = this._overSunHue;
+    for (var c = 0; c < 3; c++) {
+      var tint = 1.0 + tw * (OVER_TINT_MEAN[c] - 1.0);
+      out[c] = hue[c] * ramp * k * tint + gh[c] * bounce + sh[c] * sunLobe;
+    }
+    return out;
+  };
+  // Mean of mix( (1.05,1.01,0.96), (0.92,0.96,1.08), STORM_MEAN_THICK ), i.e.
+  // the shader literal evaluated at the mean thickness. Kept here rather than
+  // recomputed so the two cannot drift.
+  var OVER_TINT_MEAN = [
+    1.05 + (0.92 - 1.05) * STORM_MEAN_THICK,
+    1.01 + (0.96 - 1.01) * STORM_MEAN_THICK,
+    0.96 + (1.08 - 0.96) * STORM_MEAN_THICK
+  ];
+
+  var _ovRad = [0, 0, 0];
+  var _ovTmp = [0, 0, 0];
+  Sky.prototype._applyOvercastAmbient = function () {
+    var of = M.saturate(this._overcastF);
+    if (!(of > 0.001)) return;
+    var vo = this._voidF > 0;
+    var c, j;
+
+    // ---- hues ---------------------------------------------------------------
+    var ga = this.groundAlbedo;
+    var gLum = 0.2126 * ga[0] + 0.7152 * ga[1] + 0.0722 * ga[2];
+    var gMax = Math.max(ga[0], Math.max(ga[1], ga[2])) || 1;
+    for (c = 0; c < 3; c++) this._overGndHue[c] = ga[c] / gMax;
+    if (vo) {
+      for (c = 0; c < 3; c++) { this._overHue[c] = VOID_HUE[c]; this._overSunHue[c] = VOID_HUE[c]; }
+    } else {
+      // The deck is a very slightly cool neutral pulled a sixth of the way
+      // toward the hue of whatever it is sitting over. That single blend is
+      // most of what stops snowbound and jungle - which share this preset -
+      // from sharing a look: the same white ceiling reads faintly blue over a
+      // snowfield and faintly green over wet canopy, exactly as it does in the
+      // reference material, without either level needing its own constant.
+      var hmx = 0;
+      for (c = 0; c < 3; c++) {
+        _ovTmp[c] = OVER_HUE[c] + (this._overGndHue[c] - OVER_HUE[c]) * 0.16;
+        if (_ovTmp[c] > hmx) hmx = _ovTmp[c];
+      }
+      if (!(hmx > 1e-5)) hmx = 1;
+      for (c = 0; c < 3; c++) this._overHue[c] = _ovTmp[c] / hmx;
+      // The solar region keeps some of the sun's own colour but a deck is a
+      // very effective diffuser, so it arrives most of the way to white.
+      var T = transmittanceRaw(0.0, Math.max(this.sunWorldDirection.y, 0.02), _ovTmp);
+      var tmx = Math.max(T[0], Math.max(T[1], T[2])) || 1;
+      for (c = 0; c < 3; c++) {
+        this._overSunHue[c] = M.lerp(T[c] / tmx, 1.0, 0.55);
+      }
+    }
+    // Shape coefficients the mirror and the shader both consume.
+    this._overSunUp = vo ? 0 : M.saturate(this.sunWorldDirection.y / 0.10);
+    this._overBounceRel = vo ? 0 : OVER_BOUNCE_K * gLum;
+    this._overSunP = M.lerp(OVER_SUN_P_THIN, OVER_SUN_P, M.saturate(this._overThick));
+    this._overSunRel = vo ? 0
+      : M.lerp(OVER_SUN_REL_THIN, OVER_SUN_REL, M.saturate(this._overThick));
+
+    // ---- level --------------------------------------------------------------
+    // Normalise the SHAPE so its cosine-weighted hemispherical mean lands
+    // exactly on E/pi, whatever the shape constants happen to be. Solved
+    // numerically rather than algebraically on purpose: the shape now has four
+    // terms, two of them functions of the ground albedo, and a closed form
+    // would silently stop being true the first time one of them was retuned.
+    var E = this._overcastEnergy();
+    var EL = 28, mean = 0, w = 0, s, el, cw;
+    for (j = 0; j < EL; j++) {
+      el = (PI * 0.5) * (j + 0.5) / EL;
+      s = Math.sin(el); cw = Math.cos(el) * s;
+      this._overcastShape(s, _ovRad);
+      mean += (0.2126 * _ovRad[0] + 0.7152 * _ovRad[1] + 0.0722 * _ovRad[2]) * cw;
+      w += cw;
+    }
+    if (w > 0) mean /= w;
+    var scale = (mean > 1e-6) ? (E / PI) / mean : 0;
+    if (!isFinite(scale) || scale < 0) scale = 0;
+    this._overScale = scale;
+    this._overE = E;
+    this._overGLum = gLum;
+
+    // ---- what the scene is lit BY -------------------------------------------
+    // Two integrals of the same deck: the cosine-weighted hemispherical mean
+    // (the irradiance it delivers) and a zenith-weighted one (the strip of sky
+    // a surface down between trunks or dachas actually sees). Identical
+    // weighting to the clear-sky and storm paths, so the three cannot disagree
+    // about what "fill" means.
+    var ambR = 0, ambG = 0, ambB = 0, ambW = 0;
+    var fillR = 0, fillG = 0, fillB = 0, fillW = 0;
+    for (j = 0; j < EL; j++) {
+      el = (PI * 0.5) * (j + 0.5) / EL;
+      s = Math.sin(el); cw = Math.cos(el) * s;
+      this._overcastShape(s, _ovRad);
+      ambR += _ovRad[0] * cw; ambG += _ovRad[1] * cw; ambB += _ovRad[2] * cw;
+      ambW += cw;
+      var fw = Math.cos(el) * Math.pow(s, 3.0);
+      fillR += _ovRad[0] * fw; fillG += _ovRad[1] * fw; fillB += _ovRad[2] * fw;
+      fillW += fw;
+    }
+    if (ambW > 0) { ambR /= ambW; ambG /= ambW; ambB /= ambW; }
+    if (fillW > 0) { fillR /= fillW; fillG /= fillW; fillB /= fillW; }
+    ambR *= scale; ambG *= scale; ambB *= scale;
+    fillR *= scale; fillG *= scale; fillB *= scale;
+    var lum = 0.2126 * fillR + 0.7152 * fillG + 0.0722 * fillB;
+
+    this.ambientColor.setRGB(
+      M.lerp(this.ambientColor.r, ambR, of),
+      M.lerp(this.ambientColor.g, ambG, of),
+      M.lerp(this.ambientColor.b, ambB, of));
+
+    var fmx = Math.max(fillR, Math.max(fillG, fillB)) || 1;
+    this.skyColor.setRGB(
+      M.lerp(this.skyColor.r, fillR / fmx, of),
+      M.lerp(this.skyColor.g, fillG / fmx, of),
+      M.lerp(this.skyColor.b, fillB / fmx, of));
+
+    this._overcastShape(1.0, _ovRad);
+    var zmx = Math.max(_ovRad[0], Math.max(_ovRad[1], _ovRad[2])) || 1;
+    this.zenithColor.setRGB(
+      M.lerp(this.zenithColor.r, _ovRad[0] / zmx, of),
+      M.lerp(this.zenithColor.g, _ovRad[1] / zmx, of),
+      M.lerp(this.zenithColor.b, _ovRad[2] / zmx, of));
+
+    // The lower hemisphere of the hemisphere light is the GROUND, and under an
+    // overcast that is the only place a hue can come from at all - the deck
+    // itself is neutral by construction. Snow bounces near-white, a jungle
+    // floor bounces green, desert hardstanding bounces warm.
+    this.groundColor.setRGB(
+      M.lerp(this.groundColor.r, this._overGndHue[0], of),
+      M.lerp(this.groundColor.g, this._overGndHue[1], of),
+      M.lerp(this.groundColor.b, this._overGndHue[2], of));
+
+    this.fillRadiance = M.lerp(this.fillRadiance, lum, of);
+    this.ambientIntensity = M.clamp(this.fillRadiance * PI * 1.36, 0.035, 0.95);
+
+    this._overcastShape(0.02, _ovRad);
+    this.horizonColor.setRGB(
+      M.lerp(this.horizonColor.r, _ovRad[0] * scale, of),
+      M.lerp(this.horizonColor.g, _ovRad[1] * scale, of),
+      M.lerp(this.horizonColor.b, _ovRad[2] * scale, of));
+
+    // ---- inscatter ----------------------------------------------------------
+    // Authored against the GROUND, not against keyRef, and the caps upstream
+    // are deliberately overridden rather than respected. keyRef measures a
+    // mid-grey card in the KEY, and under a full deck the key is 20% of a low
+    // sun - so capping the haze against it would drive the far field to black
+    // in the one preset whose whole point is that the far field dissolves.
+    //
+    // Over snow (albedo 0.87) these land the haze within a few per cent of the
+    // snow itself, so distance dissolves geometry into white with no value step
+    // at all. Over a 0.10-albedo jungle floor the identical expressions land it
+    // at ~2.3x the foliage: mist between trunks rather than a white wall. The
+    // floored albedo is what makes one set of numbers do both.
+    var l0 = E / PI;
+    var aEff = M.clamp(gLum, OVER_ALBEDO_FLOOR, 1.0);
+    var mistLum = vo ? VOID_FOG_K * l0 : OVER_FOG_K * aEff * l0;
+    var sunLum = vo ? VOID_FOG_K * l0 : OVER_FOG_SUN_K * aEff * l0;
+    var gndLum = vo ? VOID_FOG_K * 0.80 * l0 : OVER_FOG_GND_K * gLum * l0;
+    var mix = vo ? 0.0 : OVER_FOG_GND_MIX;
+    for (c = 0; c < 3; c++) {
+      _ovTmp[c] = this._overHue[c] + (this._overGndHue[c] - this._overHue[c]) * mix;
+    }
+    this._overFogColor(this._fogSky, _ovTmp, mistLum, of);
+    this._overFogColor(this._fogSun, _ovTmp, sunLum, of);
+    this._overFogColor(this._fogGnd, this._overGndHue, gndLum, of);
+  };
+
+  // Blend one inscatter triple toward `hue` at the given luminance. Same job as
+  // _stormFogColor without the sodium warming, which has no meaning by day.
+  Sky.prototype._overFogColor = function (dst, hue, targetLum, f) {
+    var l = 0.2126 * hue[0] + 0.7152 * hue[1] + 0.0722 * hue[2];
+    var k = Math.max(targetLum, 0) / Math.max(l, 1e-6);
+    if (!isFinite(k)) return;
+    for (var c = 0; c < 3; c++) dst[c] = dst[c] + (hue[c] * k - dst[c]) * f;
+  };
+
+  // --------------------------------------------------------------------------
+  // Ground albedo. Feeds the LUT's own ground-bounce integral, the fog's
+  // downward inscatter and, under overcast, the deck's level, its hue and how
+  // hard the picture is compressed.
+  //
+  // Accepts a scalar (grey), an [r,g,b] array, or anything with .r/.g/.b
+  // (THREE.Color included). Values are LINEAR reflectances, not sRGB: fresh
+  // snow is ~0.87, dry concrete ~0.30, wet asphalt ~0.06.
+  // --------------------------------------------------------------------------
+  Sky.prototype.setGroundAlbedo = function (v) {
+    try {
+      if (v == null) return;
+      var a = this.groundAlbedo, n0, n1, n2;
+      if (typeof v === 'number') {
+        if (!isFinite(v)) return;
+        n0 = n1 = n2 = v;
+      } else if (typeof v.length === 'number' && v.length >= 3) {
+        n0 = +v[0]; n1 = +v[1]; n2 = +v[2];
+      } else if (isFinite(v.r) && isFinite(v.g) && isFinite(v.b)) {
+        n0 = v.r; n1 = v.g; n2 = v.b;
+      } else { return; }
+      if (!isFinite(n0) || !isFinite(n1) || !isFinite(n2)) return;
+      // 0.98 rather than 1.0: an albedo of exactly 1 makes the ground <-> cloud
+      // bounce series in _overcastEnergy diverge, and nothing real is white.
+      n0 = M.clamp(n0, 0.005, 0.98);
+      n1 = M.clamp(n1, 0.005, 0.98);
+      n2 = M.clamp(n2, 0.005, 0.98);
+      if (a[0] === n0 && a[1] === n1 && a[2] === n2) return;
+      a[0] = n0; a[1] = n1; a[2] = n2;
+      if (this._built) {
+        this._buildLut();
+        this._pushUniforms();
+        this._regenerateEnvironment();
+      }
+    } catch (e) { GAME.logError('sky.setGroundAlbedo', e); }
+  };
+
+  // ==========================================================================
   // Build
   // ==========================================================================
   Sky.prototype.build = async function (ctx) {
@@ -3052,6 +3818,11 @@
 
       this._makeDust(ctx);
       this._installScene(ctx);
+      // 'none' only: pulls the dome out of the scene and puts the same dim
+      // neutral behind it as a background, so an opening onto nothing prints a
+      // void rather than the renderer's black clear colour. A no-op for every
+      // other preset.
+      this._applyVoidVisibility();
       this._built = true;
 
       this._regenerateEnvironment();
@@ -3121,7 +3892,16 @@
           STORM_BOUNCE_CTR[0], STORM_BOUNCE_CTR[1])
       },
       uFlash: { value: new THREE.Vector4(0, 0, 0, STORM_FLASH_TIGHT) },
-      uFlashDir: { value: new THREE.Vector3(0.42, 0.62, -0.66).normalize() }
+      uFlashDir: { value: new THREE.Vector3(0.42, 0.62, -0.66).normalize() },
+      // ---- overcast / enclosed. uOver.x = 0 makes the whole block dead code.
+      // The picture shoulder defaults to the identity (asymptote out of range),
+      // which is also what _regenerateEnvironment forces while it captures the
+      // probe - see uDay for the same split and the measurements behind it.
+      uOver: { value: new THREE.Vector4(0, 1, 0, 0) },
+      uOverB: { value: new THREE.Vector4(0, OVER_SUN_P, 1, 0) },
+      uOverPic: { value: new THREE.Vector4(1.0, 1e9, 2e9, 1.0) },
+      uOverSun: { value: new THREE.Vector3(0, 0, 0) },
+      uOverGnd: { value: new THREE.Vector3(0, 0, 0) }
     };
 
     var mat = this._skyMaterial = new THREE.ShaderMaterial({
@@ -3461,6 +4241,14 @@
         M.saturate(this.moonDirection.y / 0.06), u.uN.value.w);
       u.uP.value.set(MIE_G, 0.0088, 0.0075, SKY_SCALE);
       u.uMode.value.z = M.clamp(f.mieG, 0.0, 0.92);
+      // Horizon haze blend. 0.12 is the constructed value and what every
+      // clear-sky and storm caller has always run, so this line is an exact
+      // no-op for market and harbor. It is raised only under a daylight
+      // overcast, where the narrow window in which the deck fades out at the
+      // skyline (see stCov) would otherwise reveal a strip of clear atmosphere
+      // under a total cloud cover - and at turbidity 0.09 that strip is an
+      // ochre band, i.e. a patch of desert in a blizzard.
+      u.uMode.value.y = (this._overcastF > 0 && !(this._voidF > 0)) ? OVER_HAZE_MIX : 0.12;
       u.uMode.value.w = MILKYWAY_LUM * SKY_SCALE;
       u.uHazeSun.value.set(this._fogSun[0], this._fogSun[1], this._fogSun[2]);
       u.uHazeSky.value.set(this._fogSky[0], this._fogSky[1], this._fogSky[2]);
@@ -3488,15 +4276,29 @@
         // The clear sky's broken cirrus band has no business under a storm
         // deck, and leaving it on would put a second, differently-lit cloud
         // layer inside the first. Exactly CLOUD_AMOUNT when _stormF is 0.
-        u.uCloud.value.y = CLOUD_AMOUNT * (1.0 - M.saturate(this._stormF));
+        u.uCloud.value.y = CLOUD_AMOUNT *
+          (1.0 - M.saturate(Math.max(this._stormF, this._overcastF)));
         u.uCloud.value.z = CLOUD_BEER;
       }
 
       // ---- storm deck ------------------------------------------------------
       if (u.uStorm) {
         var sf = M.saturate(this._stormF);
-        u.uStorm.value.set(sf, STORM_COVER, STORM_DETAIL, this._windAngle);
-        if (sf > 0 && this._stormTex && u.uStormTex) {
+        var ovf = M.saturate(this._overcastF);
+        if (ovf > 0) {
+          // Same deck geometry, a totally different coverage regime: an
+          // overcast is TOTAL. Any hole at all would show the clear atmosphere
+          // behind it, so the threshold goes well below the noise field's floor
+          // rather than merely low. Written as its own branch so the harbor
+          // line below is untouched.
+          u.uStorm.value.set(ovf,
+            this._voidF > 0 ? OVER_COVER : OVER_COVER,
+            this._voidF > 0 ? 0.0 : OVER_DETAIL,
+            this._windAngle);
+        } else {
+          u.uStorm.value.set(sf, STORM_COVER, STORM_DETAIL, this._windAngle);
+        }
+        if ((sf > 0 || ovf > 0) && this._stormTex && u.uStormTex) {
           u.uStormTex.value = this._stormTex;
         }
         u.uStormLow.value.set(STORM_HORIZON[0], STORM_HORIZON[1], STORM_HORIZON[2]);
@@ -3515,6 +4317,10 @@
         u.uFlash.value.set(this._flashRGB.x, this._flashRGB.y, this._flashRGB.z,
           STORM_FLASH_TIGHT);
         u.uFlashDir.value.copy(this._flashDir);
+        // Last, so it can overwrite the two deck-ramp uniforms the storm block
+        // above always writes. Returns immediately with no overcast, which is
+        // every frame of levels 1 and 2.
+        this._pushOvercast(u);
       }
     }
 
@@ -3541,6 +4347,96 @@
     if (this.ctx && this.ctx.scene) this._syncSceneFog(this.ctx.scene);
   };
 
+  // --------------------------------------------------------------------------
+  // Publish the solved overcast deck. Everything here was computed once, in
+  // _applyOvercastAmbient, off the same shape the CPU mirror integrates - so
+  // the deck the player is shown and the deck the scene is lit by are the same
+  // object by construction rather than by two agreeing sets of constants. That
+  // is the failure the storm deck's CPU mirror was rewritten to fix (it had
+  // drifted 1.74x), and this path is built not to be able to have it.
+  // --------------------------------------------------------------------------
+  Sky.prototype._pushOvercast = function (u) {
+    var of = M.saturate(this._overcastF);
+    if (!(of > 0)) return;
+    var vo = this._voidF > 0;
+    var sc = this._overScale;
+    if (!isFinite(sc) || sc < 0) sc = 0;
+    var h = this._overHue;
+    var hk = vo ? VOID_HORIZON_K : OVER_HORIZON_K;
+    u.uStormHigh.value.set(h[0] * sc, h[1] * sc, h[2] * sc);
+    u.uStormLow.value.set(h[0] * sc * hk, h[1] * sc * hk, h[2] * sc * hk);
+    if (u.uOver) {
+      u.uOver.value.set(of,
+        vo ? 1.0 : OVER_DECK_MIN,
+        vo ? 0.0 : OVER_DECK_RANGE,
+        vo ? 0.0 : OVER_BAND);
+    }
+    if (u.uOverB) {
+      u.uOverB.value.set(vo ? 0.0 : OVER_CELL, this._overSunP || OVER_SUN_P, 1.0, 0.0);
+    }
+    if (u.uOverGnd) {
+      var gb = vo ? 0 : this._overBounceRel * sc;
+      var gh = this._overGndHue;
+      u.uOverGnd.value.set(gh[0] * gb, gh[1] * gb, gh[2] * gb);
+    }
+    if (u.uOverSun) {
+      var sb = vo ? 0 : (this._overSunRel || 0) * sc * (this._overSunUp || 0);
+      var sh = this._overSunHue;
+      u.uOverSun.value.set(sh[0] * sb, sh[1] * sb, sh[2] * sb);
+    }
+    if (u.uOverPic) {
+      // Asymptote as a multiple of the radiance a mid-albedo ground reaches
+      // under the SAME deck, which is the only reference that gets both a
+      // snowfield and a jungle floor right with one number - see the header.
+      // The floor on the albedo is what stops a very dark ground asking for a
+      // shoulder six times under the deck's own mean and crushing the sky to
+      // mud. Void gets the identity: at 0.006 radiance there is nothing to
+      // compress and a shoulder would only flatten the one gradient a metal in
+      // a dark tunnel has to work with.
+      if (vo) {
+        u.uOverPic.value.set(1.0, 1e9, 2e9, 0.0);
+      } else {
+        var l0 = Math.max(this._overE, 0) / PI;
+        var at = M.saturate((this._overGLum - OVER_ALBEDO_LO) / OVER_ALBEDO_SPAN);
+        var gn = M.lerp(OVER_PIC_GAIN_LO, 1.0, at);
+        var asym = M.lerp(OVER_PIC_SHOULDER_LO, OVER_PIC_SHOULDER_HI, at) * l0 * gn;
+        if (!(asym > 1e-6)) { u.uOverPic.value.set(1.0, 1e9, 2e9, 1.0); }
+        else { u.uOverPic.value.set(gn, OVER_PIC_KNEE * asym, asym, 1.0); }
+      }
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // 'none': there is no sky, so the dome comes out of the scene entirely.
+  //
+  // The scene background takes its place at the SAME dim neutral the probe is
+  // built from, which matters more than it looks: with the dome gone, any pixel
+  // with no geometry behind it would otherwise print the renderer's clear
+  // colour, which is pure black - both an ARCHITECTURE 7.6 violation and, in a
+  // level where a ventilation shaft or a collapsed ceiling can legitimately see
+  // "nothing", indistinguishable from a hole in the render.
+  //
+  // Fully reversible, and it only ever touches a background this module set
+  // itself, so a level that installs its own is left alone.
+  // --------------------------------------------------------------------------
+  Sky.prototype._applyVoidVisibility = function () {
+    try {
+      var vo = this._voidF > 0;
+      if (this.mesh) this.mesh.visible = !vo;
+      var scn = this.ctx && this.ctx.scene;
+      if (!scn) return;
+      if (vo) {
+        if (!this._voidBg) this._voidBg = new THREE.Color();
+        this._voidBg.setRGB(
+          Math.max(this._fogSky[0], 0), Math.max(this._fogSky[1], 0),
+          Math.max(this._fogSky[2], 0));
+        scn.background = this._voidBg;
+      } else if (this._voidBg && scn.background === this._voidBg) {
+        scn.background = null;
+      }
+    } catch (e) { GAME.logError('sky.voidVisibility', e); }
+  };
+
   // ==========================================================================
   // IBL: sky -> cube render target -> PMREM
   // ==========================================================================
@@ -3561,11 +4457,22 @@
     // scene loses a stop and a half of skylight fill as a side effect of a
     // change that was only ever about what the sky prints as. See DAY_GAIN.
     var oldDay = this._skyUniforms ? this._skyUniforms.uDay.value.clone() : null;
+    // Same argument, same fix, for the overcast deck's own shoulder. The deck
+    // is applied AFTER uDay in the shader (it replaces the dome rather than
+    // being blended under it), so it never sees uDay at all and needs its own
+    // switch - without which an overcast level would lose a stop and a half of
+    // skylight fill as a side effect of a change that was only ever about what
+    // the sky prints as.
+    var oldPic = (this._skyUniforms && this._skyUniforms.uOverPic)
+      ? this._skyUniforms.uOverPic.value.clone() : null;
 
     try {
       if (this._skyUniforms) {
         this._skyUniforms.uMode.value.x = 0.0;
         this._skyUniforms.uDay.value.set(1.0, 1e9, 2e9, this._skyUniforms.uDay.value.w);
+        if (oldPic) {
+          this._skyUniforms.uOverPic.value.set(1.0, 1e9, 2e9, oldPic.w);
+        }
       }
       renderer.autoClear = true;
 
@@ -3620,6 +4527,7 @@
       if (this._skyUniforms) {
         this._skyUniforms.uMode.value.x = oldMode;
         if (oldDay) this._skyUniforms.uDay.value.copy(oldDay);
+        if (oldPic) this._skyUniforms.uOverPic.value.copy(oldPic);
       }
       renderer.autoClear = oldAutoClear;
       try { renderer.setRenderTarget(oldTarget); } catch (e3) { /* ignore */ }
@@ -3688,30 +4596,60 @@
    *                              cold rain haze, and an IBL regenerated from
    *                              that dome so wet surfaces and metal reflect an
    *                              overcast instead of a night sky.
-   *   sky.setWeather('drizzle')  the same deck at 55% - thinner, some sky
-   *                              still showing through, lighter haze.
-   *   sky.setWeather('overcast') the deck without the rain fog levels.
+   *   sky.setWeather('overcast') a FULL DAYLIGHT CLOUD DECK - even, bright but
+   *                              not blown, soft and directionless, with real
+   *                              internal structure. The sun becomes a diffuse
+   *                              region rather than a disc. Its level, its hue
+   *                              and how hard it is compressed for the picture
+   *                              all track the ground albedo, so the same
+   *                              preset gives snowbound a whiteout and jungle a
+   *                              humid haze. See the DAYLIGHT OVERCAST header.
+   *   sky.setWeather('drizzle')  the same deck, thinner: more light through it,
+   *                              a tighter and brighter solar region, less haze.
+   *   sky.setWeather('none')     NO SKY AT ALL, for fully enclosed levels. The
+   *                              dome is removed from the scene and the sun and
+   *                              moon are switched off outright, but the IBL is
+   *                              NOT null - it is a very dim, flat, neutral
+   *                              probe, because an enclosed level with no
+   *                              environment renders every metal as a black
+   *                              hole and every wet floor as matte paint.
+   *
+   * An unrecognised preset degrades to 'clear' rather than throwing.
    *
    * Safe to call before build() (the state is applied and build() picks it up)
    * and safe to call repeatedly with the same value (it returns immediately
    * rather than regenerating the environment). Never throws.
    *
-   * This is the ONLY door into the storm path. Nothing in this module changes
-   * behaviour without it, which is why level 1 is guaranteed unchanged.
+   * This is the ONLY door into any of the deck paths. Nothing in this module
+   * changes behaviour without it, which is why level 1 is guaranteed unchanged
+   * and why level 2 - which asks for 'storm', a name no other preset touches -
+   * cannot be moved by anything added here.
    */
   Sky.prototype.setWeather = function (preset) {
     try {
       var name = (typeof preset === 'string') ? preset.toLowerCase() : 'clear';
-      var f = 0;
+      var f = 0, ov = 0, vd = 0, thick = 1.0;
       if (name === 'storm') f = 1.0;
-      else if (name === 'overcast') f = 0.85;
-      else if (name === 'drizzle') f = 0.55;
-      else name = 'clear';
+      else if (name === 'overcast') { ov = 1.0; thick = 1.0; }
+      else if (name === 'drizzle') { ov = 1.0; thick = 0.62; }
+      else if (name === 'none' || name === 'void' || name === 'enclosed' ||
+               name === 'interior' || name === 'underground') {
+        name = 'none'; ov = 1.0; vd = 1.0; thick = 1.0;
+      } else name = 'clear';
 
       if (this.weatherPreset === name && this._built) return;
       this.weatherPreset = name;
       this._stormF = f;
-      if (f > 0) this._makeStormTexture();
+      this._overcastF = ov;
+      this._voidF = vd;
+      this._overThick = thick;
+      this.enclosed = vd > 0;
+      // The void deck is flat, textureless and structure-free by construction
+      // (deckRange, band, cell and detail are all zero, and the coverage
+      // threshold sits below the field's floor), so it never reads the noise
+      // texture in a way that could change its output - which is worth half a
+      // second of load time to metro and bunker.
+      if (f > 0 || (ov > 0 && vd <= 0)) this._makeStormTexture();
 
       // Cheap: sun/moon geometry has not moved, only what the deck does to it.
       this._computeLightingTerms();
@@ -3728,6 +4666,8 @@
       // _buildLut is also what re-runs the haze schedule the caps depend on.
       this._buildLut();
       this._pushUniforms();
+      // Depends on _fogSky, which _buildLut -> _deriveAmbient has just written.
+      this._applyVoidVisibility();
       // The whole point of the exercise: metals and wet concrete get nearly all
       // their visible value from what they reflect, so a storm sky that is not
       // in the probe is a storm sky that does not exist as far as every wet
@@ -3746,9 +4686,23 @@
    *
    * The market's levelDef declares weather: null, so this resolves to 'clear'
    * and every line of the storm path stays dead for level 1.
+   *
+   * Levels 3-10 additionally carry a DECLARATIVE env profile
+   * (levelDef.env = {timeOfDay, sky, turbidity, ...}) which main.js applies
+   * through the public API after every system has built. Reading it here as
+   * well is not a duplicate: main.js's pass necessarily happens after
+   * lighting.js has already built against whatever sun this module happened to
+   * be holding, and after build() has already generated a LUT, an ambient set
+   * and a PMREM probe for the wrong condition. Resolving it BEFORE the first
+   * LUT means the level's very first frame is correct and nothing downstream
+   * has to be regenerated - and because setWeather()/setTurbidity()/
+   * setTimeOfDay() all no-op when handed a value they already hold, main.js's
+   * later pass costs nothing. market and harbor carry env:null, so not one line
+   * of this executes for them.
    */
   Sky.prototype._resolveWeather = function (ctx) {
     try {
+      this._resolveEnvProfile(ctx);
       var want = this._pendingWeather;
       // ?weather=storm on the capture URL. A QA hook, not a default: it exists
       // so the dome, the IBL and the haze can be photographed and graded on
@@ -3761,6 +4715,10 @@
       if (!want && ctx && ctx.levelDef && typeof ctx.levelDef.weather === 'string') {
         want = ctx.levelDef.weather;
       }
+      if (!want && ctx && ctx.levelDef && ctx.levelDef.env &&
+          typeof ctx.levelDef.env.sky === 'string') {
+        want = ctx.levelDef.env.sky;
+      }
       if (!want && ctx && ctx.levelId === 'harbor') want = 'storm';
       if (!want) return;
       this._pendingWeather = null;
@@ -3769,15 +4727,66 @@
       // pick it up. Calling the public method here would work but would
       // regenerate the PMREM twice.
       var name = String(want).toLowerCase();
-      var f = name === 'storm' ? 1.0
-            : name === 'overcast' ? 0.85
-            : name === 'drizzle' ? 0.55 : 0.0;
-      if (f <= 0) return;
+      var f = 0, ov = 0, vd = 0, thick = 1.0;
+      if (name === 'storm') f = 1.0;
+      else if (name === 'overcast') ov = 1.0;
+      else if (name === 'drizzle') { ov = 1.0; thick = 0.62; }
+      else if (name === 'none' || name === 'void' || name === 'enclosed' ||
+               name === 'interior' || name === 'underground') {
+        name = 'none'; ov = 1.0; vd = 1.0;
+      }
+      if (f <= 0 && ov <= 0) return;
       this.weatherPreset = name;
       this._stormF = f;
-      this._makeStormTexture();
+      this._overcastF = ov;
+      this._voidF = vd;
+      this._overThick = thick;
+      this.enclosed = vd > 0;
+      if (f > 0 || (ov > 0 && vd <= 0)) this._makeStormTexture();
       this._computeLightingTerms();
     } catch (e) { GAME.logError('sky.resolveWeather', e); }
+  };
+
+  // --------------------------------------------------------------------------
+  // Land the non-weather half of a level's declarative env profile before the
+  // first LUT is built: turbidity, time of day and ground albedo.
+  //
+  // All three are also applied by main.js after the build pass, and all three
+  // are idempotent - so this is purely about getting the FIRST generation
+  // right rather than generating a market sky and throwing it away. It is also
+  // what lets lighting.js build against the sun the level actually has.
+  //
+  // Guarded field by field and gated on the presence of an env profile, which
+  // market and harbor deliberately do not have.
+  // --------------------------------------------------------------------------
+  Sky.prototype._resolveEnvProfile = function (ctx) {
+    try {
+      var def = ctx && ctx.levelDef;
+      var env = def && def.env;
+      if (!env) return;
+
+      if (isFinite(env.turbidity) && env.turbidity > 0) {
+        // _built is false here, so this only re-tabulates transmittance; the
+        // LUT that consumes it has not been generated yet.
+        this.setTurbidity(env.turbidity);
+      }
+
+      // Ground albedo: an explicit profile value wins, otherwise the roster
+      // table. Everything downstream of this - the LUT's ground-bounce
+      // integral, the fog's downward inscatter, the overcast deck's level, its
+      // hue and its picture compression - depends on it, so it has to land
+      // before the first _buildLut.
+      if (env.groundAlbedo != null) this.setGroundAlbedo(env.groundAlbedo);
+      else if (ctx.levelId && GROUND_ALBEDO_BY_LEVEL[ctx.levelId]) {
+        this.setGroundAlbedo(GROUND_ALBEDO_BY_LEVEL[ctx.levelId]);
+      }
+
+      if (isFinite(env.timeOfDay)) {
+        // setTimeOfDay short-circuits to _solar + _computeLightingTerms while
+        // _built is false, which is exactly the pre-build behaviour wanted.
+        this.setTimeOfDay(env.timeOfDay);
+      }
+    } catch (e) { GAME.logError('sky.resolveEnvProfile', e); }
   };
 
   // --------------------------------------------------------------------------
@@ -3902,7 +4911,14 @@
   };
 
   Sky.prototype._syncWeather = function (dt, ctx) {
-    if (!(this._stormF > 0)) return;
+    // The daylight overcast deck rides the same wind-driven drift and reads the
+    // same published fog density, so it wants this loop too. The enclosed
+    // profile does not: its deck is flat and textureless, there is no wind
+    // inside a bunker, and weather.js is inert there. Exactly the original gate
+    // for levels 1 and 2.
+    var deck = (this._stormF > 0) ||
+      (this._overcastF > 0 && !(this._voidF > 0));
+    if (!deck) return;
     var w = ctx && ctx.weather;
     var t = (ctx && ctx.time) || 0;
 
@@ -3926,8 +4942,16 @@
     this._driftFar.y += wy * step * 0.38;
 
     // ---- lightning ----------------------------------------------------------
+    // Storm only. A blizzard and a humid drizzle have no sheet lightning in
+    // them, and the fallback strike schedule below exists purely so a level 2
+    // build with no fx/weather.js is not a dead grey lid - firing it under an
+    // overcast would put strobes in a snowstorm. Under overcast _flashRGB is
+    // never written and stays exactly (0,0,0), which is what makes the shader's
+    // flash branch unreachable there.
     var flash = 0;
-    if (w && isFinite(w.flash)) {
+    if (!(this._stormF > 0)) {
+      // fall through with no strike
+    } else if (w && isFinite(w.flash)) {
       flash = M.saturate(w.flash);
       if (w.flashDir && isFinite(w.flashDir.x)) {
         this._flashDir.set(w.flashDir.x, w.flashDir.y, w.flashDir.z);
@@ -3949,14 +4973,19 @@
     // so the deck's radiance is fixed by the irradiance lighting.js is actually
     // spending (E = pi * L for a uniform emitter) rather than by a constant in
     // this file that nothing keeps in step with it.
-    var keyI = this._strikeKey(ctx, flash);
-    var em = STORM_FLASH_Q * keyI / PI;
-    if (!isFinite(em) || em < 0) em = 0;
-    this._flashPrevRead = flash;
-    this._wxFlash = flash;
-    this._flashRGB.set(STORM_FLASH_HUE[0] * em, STORM_FLASH_HUE[1] * em,
-      STORM_FLASH_HUE[2] * em);
-    this._syncBounceCentre(ctx);
+    if (this._stormF > 0) {
+      var keyI = this._strikeKey(ctx, flash);
+      var em = STORM_FLASH_Q * keyI / PI;
+      if (!isFinite(em) || em < 0) em = 0;
+      this._flashPrevRead = flash;
+      this._wxFlash = flash;
+      this._flashRGB.set(STORM_FLASH_HUE[0] * em, STORM_FLASH_HUE[1] * em,
+        STORM_FLASH_HUE[2] * em);
+      // The ground-bounce dome is a survey of the TERMINAL's sodium masts.
+      // There is no equivalent under a daylight deck (its bounce is the whole
+      // ground plane, and it is solved from the albedo, not from a lamp list).
+      this._syncBounceCentre(ctx);
+    }
 
     // ---- fog density --------------------------------------------------------
     // Only re-derive when weather.js actually moves it; _scheduleHaze feeds the
@@ -4032,7 +5061,15 @@
    */
   Sky.prototype.setTurbidity = function (aod) {
     try {
-      setTurbidity(M.clamp(aod, 0.004, 0.25));
+      if (!isFinite(aod)) return;
+      var v = M.clamp(aod, 0.004, 0.25);
+      // Idempotent. main.js's declarative env pass re-applies the profile after
+      // every system has built, and _resolveEnvProfile has usually already
+      // landed the same number before the first LUT - without this the second
+      // call would rebuild the LUT and re-run the PMREM for nothing, which on
+      // the capture harness is most of a second per level.
+      if (v === MIE_AOD && this._built) return;
+      setTurbidity(v);
       buildTransmittanceTable();
       if (this._built) {
         this._buildLut();
@@ -4124,9 +5161,14 @@
         // there, and weather.js owns everything visible in that air anyway - so
         // the field switches off entirely rather than laying an unmotivated
         // additive haze over a level built on pools of light and darkness.
+        // ...and for the same reason under a daylight overcast: the field is a
+        // SHAFT indicator, shadow-tested against the key cascade, so with the
+        // key cut to a fifth (or, enclosed, to nothing) there is no shaft for
+        // it to indicate and all it can contribute is an unmotivated additive
+        // veil over a level that is already carrying a deliberate one.
         this.dustParticles.visible =
           !(ctx && ctx.quality && ctx.quality.particles === 0) &&
-          !(this._stormF > 0.35);
+          !(this._stormF > 0.35) && !(this._overcastF > 0.35);
         // Nobody else knows this hook exists, so drive it here rather than
         // waiting for a caller that will never come.
         if (this.dustParticles.visible) this.bindKeyShadow(ctx && ctx.lighting);
