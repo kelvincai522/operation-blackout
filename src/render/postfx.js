@@ -171,11 +171,97 @@
 // now openable by a preset, both still default to exactly the shipped path.
 // Metering is the third: see GREEN_GRADE for the three separate mechanisms that
 // drive an enclosed frame to a grey wash, and how each is bounded.
+//
+// ----------------------------------------------------------------------------
+// LEVELS 3-10, BATCH 2: THE THREE THINGS A LEVEL FILE COULD NOT SAY
+// ----------------------------------------------------------------------------
+// Four findings from the metro / boneyard / refinery / ruins critics needed a
+// capability that did not exist here. Two of them are new public API and both
+// are OFF unless something asks for them:
+//
+//   postfx.setHeatShimmer({y, strength, cells:[{x,z,r}]})
+//       A gated screen-space refraction through the layer of hot air on a
+//       sun-baked slab - see pfHeatShimmer in FRAG_COMPOSITE. There was no
+//       shimmer capability in the build at all; the boneyard has published
+//       `level.heatShimmer` since it was built and nothing read it. update()
+//       now reads it directly, so a level opts in by publishing the record and
+//       needs no call and no knowledge of this file. Masked in world space by
+//       height band, by the level's own cells and by line-of-sight length, and
+//       the viewmodel is excluded outright. Pass null to force it off.
+//
+//   pose.focus  (on level.cameraPoses[key], honoured during capture only)
+//   postfx.setFocus(metres | 'hyperfocal')
+//       The autofocus raycasts the crosshair and falls back to a 12 m GAMEPLAY
+//       focus when the ray misses - which on an establishing shot standing 30 m
+//       over a 330 m site prints a tilt-shift model railway, and the only lever
+//       a level had was to move its aim point until the ray happened to hit
+//       something (see the comment at level_refinery.js:5321, written when
+//       exactly that happened). A pose may now state its own focus and it is
+//       LOCKED, not damped, so a 1.5 s capture lands on it.
+//
+// The other two are preset data: DAWN_GRADE and GREEN_GRADE re-state their
+// grain (it was the dominant high-frequency signal on the stone and on the
+// tunnel lining respectively) and SODIUM_GRADE moves to the spectral CA with a
+// low-luminance roll-off (its lattice of aliased steel was being turned into
+// cyan confetti by the two-tap split, 69x concentrated at the frame edge).
+//
+// All four are gated the same way as everything above them, and the claim is
+// measured rather than argued: after the round, quay.png differences to ZERO
+// against its pre-round capture on all 2.76 M bytes, and street.png differs by
+// one least-significant bit on ONE of its 921,600 pixels - shader-recompilation
+// rounding in the sky gradient, reproduced with the new code multiplied by zero,
+// and the only cost of adding any instruction at all to FRAG_COMPOSITE.
 // ============================================================================
 (function (GAME, THREE) {
   'use strict';
 
   var M = GAME.Math;
+
+  // The most world-space "hot cells" the heat shimmer will carry (see
+  // PostFX.prototype.setHeatShimmer). Shared between the shader's array
+  // declaration and the JS that fills it so the two cannot drift apart.
+  var HEAT_CELL_MAX = 6;
+
+  // vec3[PF_HEAT_CELLS] as (x, z, radius). Allocated once; _render writes into
+  // it in place, so a shimmering level costs no allocation per frame.
+  function makeHeatCellArray() {
+    var a = [];
+    for (var i = 0; i < HEAT_CELL_MAX; i++) a.push(new THREE.Vector3(0, 0, 1));
+    return a;
+  }
+
+  /**
+   * Validate a heat-shimmer record into the shape _render writes to the GPU, or
+   * null if it does not describe anything. Defensive by construction: this is
+   * fed straight from level data written by another agent, so every field is
+   * optional, every number is clamped, and anything malformed degrades to "no
+   * shimmer" rather than to a NaN in the composite's UV.
+   *
+   * @param {{y:Number, strength:Number, cells:Array}} cfg
+   * @returns {{y:Number, strength:Number, cells:Array<Array<Number>>}|null}
+   */
+  function normaliseHeat(cfg) {
+    if (!cfg) return null;
+    var strength = (typeof cfg.strength === 'number' && isFinite(cfg.strength))
+      ? M.clamp(cfg.strength, 0, 2) : 1;
+    if (strength <= 1e-4) return null;
+    var y = (typeof cfg.y === 'number' && isFinite(cfg.y)) ? cfg.y : 0;
+    var out = [];
+    var src = cfg.cells;
+    if (src && src.length) {
+      for (var i = 0; i < src.length && out.length < HEAT_CELL_MAX; i++) {
+        var c = src[i];
+        if (!c) continue;
+        var cx = +c.x, cz = +c.z, cr = +c.r;
+        if (!isFinite(cx) || !isFinite(cz) || !isFinite(cr) || cr <= 0) continue;
+        out.push([cx, cz, M.clamp(cr, 0.5, 4000)]);
+      }
+      // Cells were supplied but none of them parsed: that is a malformed record,
+      // not a request for a level-wide shimmer, so it is off rather than global.
+      if (!out.length) return null;
+    }
+    return { y: y, strength: strength, cells: out };
+  }
 
   // ==========================================================================
   // Shared GLSL
@@ -2485,7 +2571,12 @@
   // before it reaches the sensor; exposure and the tone curve are the sensor;
   // the grade and the grain happen to the recorded image.
   var FRAG_COMPOSITE = glsl(
-    COMMON,
+    COMMON, WORLDPOS,
+    // How many world-space hot cells the heat shimmer will carry. A fixed
+    // bound because GLSL ES 1.00 has no dynamic array sizes and no dynamic
+    // loop bounds; uHeatCount closes the loop early and is 0 everywhere the
+    // level publishes no `heatShimmer`.
+    '#define PF_HEAT_CELLS ' + HEAT_CELL_MAX,
     'uniform sampler2D tSrc;',
     'uniform sampler2D tBloom;',
     'uniform sampler2D tStreak;',
@@ -2567,6 +2658,34 @@
     'uniform float uHighWarmGate;',
     'uniform float uFlareAspect;',
     'uniform float uKeyFlash;',
+    // ---- LEVELS 3-10, batch 2. Same rule as every addition above: the default
+    // of each one is an EXACT no-op, and each is read only from inside a branch
+    // that its own default closes, so the two frozen levels never execute a
+    // single instruction of any of it.
+    //
+    //   uHeat 0            gates the whole heat-shimmer function out, including
+    //                      its depth fetch and the world reconstruction.
+    //   uCADark 0          gates the CA's low-luminance roll-off out.
+    //   uGrainShadowHi 0   gates the preset-supplied grain luminance knee out,
+    //                      leaving the shipped roll-off as the whole of it.
+    'uniform sampler2D tDepth;',
+    'uniform sampler2D tViewDepthC;',
+    'uniform float uHasViewC;',
+    'uniform vec3 uCamPos;',
+    'uniform float uHeat;',
+    'uniform float uHeatY;',
+    'uniform float uHeatH0;',
+    'uniform float uHeatH1;',
+    'uniform float uHeatD0;',
+    'uniform float uHeatD1;',
+    'uniform float uHeatScale;',
+    'uniform float uHeatTime;',
+    'uniform int uHeatCount;',
+    'uniform vec3 uHeatCells[ PF_HEAT_CELLS ];',
+    'uniform float uCADark;',
+    'uniform float uGrainShadowLo;',
+    'uniform float uGrainShadowHi;',
+    'uniform float uGrainShadowFloor;',
     '',
     // ------------------------------------------------------------------ AgX
     '// AgX (Sobotka). Chosen over ACES because its per-channel path desaturates',
@@ -2904,6 +3023,71 @@
     '  return -g * lens * uRainStrength * edgeW * vec2( 1.0 / max( uAspect, 1e-3 ), 1.0 );',
     '}',
     '',
+    // ------------------------------------------------------------ heat shimmer
+    '// Hot air over a sun-baked slab, as a screen-space refraction.',
+    '//',
+    '// This is a REFRACTION, not an overlay: it displaces the sample position and',
+    '// paints nothing, because that is what a gradient in the refractive index of',
+    '// air actually does. It lives in the composite for one reason - the composite',
+    '// is the only pass that holds the finished scene colour, and a shimmer that',
+    '// cannot resample the scene is a fog card.',
+    '//',
+    '// MASKED IN WORLD SPACE, three ways, because a full-screen warp is a',
+    '// distortion filter rather than a heat layer:',
+    '//   1. HEIGHT. The convection layer is a few metres deep and sits on the',
+    '//      ground, so the mask is a band above a caller-supplied ground Y. The',
+    '//      tail fin thirty metres up is still, the tarmac under it boils.',
+    '//   2. CELLS. The level says WHERE its slab is widest and most exposed; a',
+    '//      shaded hardstanding does not shimmer and neither does a hangar floor.',
+    '//   3. PATH LENGTH. The effect integrates along the line of sight, so it is',
+    '//      zero at arm\'s reach whatever the air is doing and saturates at range.',
+    '// ...and the VIEWMODEL is excluded outright. The weapon is 30 cm from the',
+    '// eye, it is not seen through anything, and the world depth buffer behind it',
+    '// holds the tarmac - so without this test the gun would boil hardest of all.',
+    '//',
+    '// The field is two octaves of value noise scrolling UPWARD with a strong',
+    '// vertical bias in the displacement, which is the signature that separates',
+    '// heat haze from water caustics or a cheap sine warp: hot air rises, so the',
+    '// image stretches and squashes vertically far more than it slides sideways.',
+    'float pfHeatNoise( vec2 p ) {',
+    '  vec2 i = floor( p );',
+    '  vec2 f = p - i;',
+    '  f = f * f * ( 3.0 - 2.0 * f );',
+    '  float a = pfHash21( i );',
+    '  float b = pfHash21( i + vec2( 1.0, 0.0 ) );',
+    '  float c = pfHash21( i + vec2( 0.0, 1.0 ) );',
+    '  float d = pfHash21( i + vec2( 1.0, 1.0 ) );',
+    '  return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y );',
+    '}',
+    'vec2 pfHeatShimmer( vec2 uv ) {',
+    '  // The weapon is not behind the hot air.',
+    '  if ( uHasViewC > 0.5 && texture2D( tViewDepthC, uv ).x < 0.999999 ) return vec2( 0.0 );',
+    '  float dep = texture2D( tDepth, uv ).x;',
+    '  if ( dep >= 0.999999 ) return vec2( 0.0 );',   // sky: nothing to refract
+    '  vec3 wp = pfWorldPos( uv, dep );',
+    '  float band = 1.0 - smoothstep( uHeatH0, uHeatH1, wp.y - uHeatY );',
+    '  if ( band < 0.004 ) return vec2( 0.0 );',
+    '  float cell = uHeatCount > 0 ? 0.0 : 1.0;',
+    '  for ( int i = 0; i < PF_HEAT_CELLS; i++ ) {',
+    '    if ( i >= uHeatCount ) break;',
+    '    vec3 hc = uHeatCells[ i ];',
+    '    float dd = length( wp.xz - hc.xy ) / max( hc.z, 0.5 );',
+    '    cell = max( cell, 1.0 - smoothstep( 0.62, 1.0, dd ) );',
+    '  }',
+    '  if ( cell < 0.004 ) return vec2( 0.0 );',
+    '  float dist = length( wp - uCamPos );',
+    '  float amp = uHeat * band * cell * smoothstep( uHeatD0, uHeatD1, dist );',
+    '  if ( amp < 1e-6 ) return vec2( 0.0 );',
+    '  vec2 q = vec2( uv.x * uAspect, uv.y ) * uHeatScale;',
+    '  float t = uHeatTime;',
+    '  float n1 = pfHeatNoise( q + vec2( 0.13 * t, -0.62 * t ) );',
+    '  float n2 = pfHeatNoise( q * 2.17 + vec2( -0.21 * t, -1.05 * t ) );',
+    '  float n3 = pfHeatNoise( q * 1.03 + vec2( 5.70 - 0.09 * t, 3.10 - 0.44 * t ) );',
+    '  float ox = ( n1 - 0.5 ) * 0.34 + ( n2 - 0.5 ) * 0.16;',
+    '  float oy = ( n3 - 0.5 ) * 0.78 + ( n2 - 0.5 ) * 0.36;',
+    '  return vec2( ox / max( uAspect, 1e-3 ), oy ) * amp;',
+    '}',
+    '',
     'void main() {',
     '  vec2 uv = vUv;',
     '',
@@ -2919,6 +3103,15 @@
     '  // uRainLens is 0, which is every frame of level 1.',
     '  if ( uRainLens > 1e-4 ) {',
     '    uv = clamp( uv + pfRainLens( uv, uv - 0.5 ) * uRainLens, vec2( 0.0 ), vec2( 1.0 ) );',
+    '  }',
+    '',
+    '  // Heat shimmer, for the same reason and in the same place: it happens to',
+    '  // the light on its way to the front element, not to the print. uHeat is 0',
+    '  // unless the level published a heatShimmer record (or called',
+    '  // postfx.setHeatShimmer), so on every level built before this one the',
+    '  // depth fetch, the world reconstruction and the noise never execute.',
+    '  if ( uHeat > 1e-5 ) {',
+    '    uv = clamp( uv + pfHeatShimmer( uv ), vec2( 0.0 ), vec2( 1.0 ) );',
     '  }',
     '',
     '  // Radial chromatic aberration. Real lenses disperse more off-axis, so',
@@ -2973,6 +3166,22 @@
     '    // the way out, which is where these fringes were sitting.',
     '    float rn = length( d * vec2( uAspect, 1.0 ) ) / max( 0.5 * length( vec2( uAspect, 1.0 ) ), 1e-4 );',
     '    float caKeep = smoothstep( 0.35, 1.0, rn ) * ( 1.0 - smoothstep( 0.06, 0.20, hf ) );',
+    '    // ...and OPTIONALLY roll it off in the dark (uCADark 0 = off, which is',
+    '    // every level that has shipped). A real lens fringe is a fraction of the',
+    '    // light already there, so at 0.04 luminance it is invisible - but the',
+    '    // pass is fed by sub-pixel speculars, which at 0.04 luminance are the',
+    '    // BRIGHTEST thing in their corner of the frame, and a dispersion of a',
+    '    // bright isolated sample against a black surround prints as a coloured',
+    '    // spark rather than as an edge tint. Measured on the refinery ADS frame:',
+    '    // the left 70 px strip carried 8x the strongly-blue-cyan pixel count of',
+    '    // an equivalent mid-frame strip, at 0.045 corner luminance. Gating on the',
+    '    // LOCAL display-referred level (the four taps hf was already built from,',
+    '    // so this costs no extra fetch) removes exactly that case and leaves the',
+    '    // fringe wherever there is enough light for a real one to be visible.',
+    '    if ( uCADark > 1e-5 ) {',
+    '      float lLoc = 0.25 * ( e0 + e1 + e2 + e3 );',
+    '      caKeep *= smoothstep( uCADark * 0.45, uCADark * 1.55, lLoc );',
+    '    }',
     '    color = mix( c0t, spread, caKeep );',
     '  } else if ( ca > 1e-5 ) {',
     '    color.r = texture2D( tSrc, clamp( uv + caDir * 1.0, vec2( 0.0 ), vec2( 1.0 ) ) ).r;',
@@ -3229,6 +3438,19 @@
     '  float amt = uGrain * mix( 1.0, 0.18, smoothstep( 0.25, 0.92, l ) )',
     '            * mix( 0.80, 1.0, smoothstep( 0.0, 0.12, l ) )',
     '            * ( 1.0 + uGrainLowKey * ( 1.0 - clamp( knD, 0.0, 1.0 ) ) );',
+    '  // OPT-IN luminance knee (uGrainShadowHi 0 = off, i.e. both frozen levels',
+    '  // never take this branch and the expression above is the whole of the',
+    '  // grain). The shipped roll-off starts at l = 0.25, which is ABOVE the mean',
+    '  // of several of the new levels - so on a dawn frame whose lit stone sits at',
+    '  // l ~ 0.35 the grain is still running at 95% of full strength and competes',
+    '  // with the material\'s own micro-detail instead of sitting under it. A',
+    '  // preset that wants its grain in the shadows, where a real emulsion puts',
+    '  // it, states its own knee and its own highlight floor here.',
+    '  if ( uGrainShadowHi > 1e-4 ) {',
+    '    amt = uGrain * mix( 1.0, uGrainShadowFloor, smoothstep( uGrainShadowLo, uGrainShadowHi, l ) )',
+    '        * mix( 0.80, 1.0, smoothstep( 0.0, 0.12, l ) )',
+    '        * ( 1.0 + uGrainLowKey * ( 1.0 - clamp( knD, 0.0, 1.0 ) ) );',
+    '  }',
     '  vec3 grain = ( vec3( g0, g1, g2 ) - 0.5 );',
     '  // Mostly monochrome with a little chroma, like a real emulsion.',
     '  grain = mix( vec3( grain.r ), grain, 0.35 );',
@@ -3941,7 +4163,58 @@
       meterTrim: 0,
       meterTrimLo: 2.2,
       meterTrimHi: 9.0,
-      meterLumFloor: 0.0005
+      meterLumFloor: 0.0005,
+
+      // ======================================================================
+      // LEVELS 3-10, BATCH 2. Four capabilities the levels could not express
+      // from their own files. Same rule as everything above: every default is
+      // an exact no-op and every one of them is read only from inside a branch
+      // its own default closes.
+      // ======================================================================
+
+      // ---- heat shimmer -----------------------------------------------------
+      // SHAPE ONLY. Whether the effect runs at all, where, and how hard is the
+      // LEVEL's statement, not the grade's: it comes from level.heatShimmer
+      // {y, strength, cells:[{x,z,r}]} or from postfx.setHeatShimmer(). A level
+      // that publishes nothing gets uHeat 0 and the pass is not merely invisible
+      // but unexecuted. The numbers here are the physics of the layer, which is
+      // the same physics on any level that has one:
+      //   heatAmount     peak screen displacement in UV at strength 1. 0.0060 is
+      //                  ~3.5 px of vertical boil at 1280 - enough to soften a
+      //                  hard horizon edge and make the apron crawl, nowhere
+      //                  near a heat-haze filter over the whole frame.
+      //   heatHeight/Soft  metres of convection layer above the ground plane,
+      //                  and how far it fades out over. A tail fin 12 m up is
+      //                  still; the tarmac under it boils.
+      //   heatNear/Far   metres of line of sight. The effect integrates along the
+      //                  ray, so it is zero in the foreground however hot the
+      //                  slab is and saturates at range.
+      //   heatScale      convection cells across the frame width.
+      //   heatSpeed      how fast the field rises, in cells/second.
+      heatAmount: 0.0090,
+      heatHeight: 3.2,
+      heatHeightSoft: 3.0,
+      heatNear: 12.0,
+      heatFar: 70.0,
+      heatScale: 6.5,
+      heatSpeed: 0.62,
+
+      // ---- chromatic aberration: the dark roll-off --------------------------
+      // 0 = shipped. Above 0 it is the display-referred local luminance at which
+      // the (spectral) CA reaches full strength; below ~0.45x of it the pass is
+      // off. Only read inside the spectral branch, so a preset must also set
+      // caSpectral for it to mean anything - which is the correct pairing
+      // anyway, since the two-tap split is the thing that manufactures the
+      // saturated speckle in the first place.
+      caLumFloor: 0.0,
+
+      // ---- grain: the preset-supplied luminance knee ------------------------
+      // grainShadowHi 0 = shipped (the 0.25 -> 0.92 roll-off to 0.18). A preset
+      // that sets these three states its own knee, so grain can be pushed into
+      // the shadows on a level whose midtone sits below the shipped knee.
+      grainShadowLo: 0.0,
+      grainShadowHi: 0.0,
+      grainShadowFloor: 0.18
     };
 
     // ---- impulse state -----------------------------------------------------
@@ -3970,6 +4243,16 @@
     this._focusTarget = this.settings.dofFocus;
     this._focus = this.settings.dofFocus;
     this._focusRayBroken = false;
+    // ---- heat shimmer state -------------------------------------------------
+    // _heat null = off, which is every level that publishes no heatShimmer and
+    // never calls setHeatShimmer. _heatExplicit records that a caller has taken
+    // ownership, so setHeatShimmer(null) is "off" rather than "not set yet" and
+    // the level scan can never resurrect it.
+    this._heat = null;
+    this._heatExplicit = false;
+    this._heatScanned = false;
+    // Set once per pose by _poseFocus during a capture; see update().
+    this._poseFocusVal = 0;
     this._ads = false;
     this._adsBlend = 0;    // smoothed, drives the optic falloff + the ADS stop
     this._histFrames = 0;  // depth of the TAA history, for progressive feedback
@@ -4759,8 +5042,28 @@
     midAmount: 0.55,
     highAmount: 0.62,
     gain: new THREE.Vector3(0.995, 1.010, 0.995),
-    grain: 0.036,
-    grainLowKey: 1.80,
+    // ---- grain: WHY THIS IS THE SMALLEST PAIR IN THE TABLE AND NOT THE LARGEST
+    // The first draft ran 0.036 / 1.80, the most aggressive pair here, on the
+    // argument that a low-key frame has the least tonal separation left and
+    // dither is the only thing that can break the resulting flat. That argument
+    // is right about a frame that is dark AND flat. This one is dark and NOT
+    // flat - it is a tunnel bore lit by hard local strips, so it has plenty of
+    // separation - and the two terms compound: the frame's median encoded luma
+    // is 0.09-0.19, which is entirely inside the band where the luminance term
+    // runs at full strength, so the low-key multiplier lands on TOP of it rather
+    // than replacing it and amt reaches ~0.10 peak to peak.
+    //
+    // MEASURED, and it is the dominant texture on the two largest surfaces in
+    // the level: two captures of the identical hero2 pose 1.5 s apart differ
+    // over the tunnel lining with per-pixel high-frequency content at ~1.0x the
+    // difference's own standard deviation, i.e. white noise that resamples every
+    // frame. The market's equivalent test sits at 0.48 - real motion. In motion
+    // this boils; in a still it reads as sandpaper on the concrete.
+    //
+    // 0.020 / 0.60 keeps a real dither on the vault (the tile gradients and the
+    // fog do still need one at this key) and takes it under the material.
+    grain: 0.020,
+    grainLowKey: 0.60,
     vignette: 0.24,
     bloomThreshold: 0.90,
     bloomKnee: 0.72,
@@ -5099,7 +5402,36 @@
     volumeHeightFalloff: 0.045,
     volumeBaseHeight: -2.0,
     volumeAnisotropy: 0.74,
-    volumeMaxDist: 110.0
+    volumeMaxDist: 110.0,
+
+    // ---- chromatic aberration ----------------------------------------------
+    // A refinery is a LATTICE: handrails, gratings, ladder stringers and pipe
+    // runs, all of them periodic combs at range and all of them aliased steel
+    // against a dark sky. That is precisely the input the two-tap RGB split
+    // cannot survive - the R and B taps land on different rails, so the pass
+    // synthesises saturated colours the source never contained. MEASURED on the
+    // ADS framing: the left 70 px strip carried 1.07% strongly blue-cyan pixels
+    // (peak blue 0.773) against 0.13% in an equivalent mid-frame strip - an 8x
+    // radial concentration - in a corner sitting at 0.045 luminance, where the
+    // sparkle was the most visible thing in it.
+    //
+    // Three changes, in order of how much each is worth. caSpectral makes every
+    // output channel a convex combination of source samples of that channel, so
+    // it is arithmetically incapable of inventing a hue. caLumFloor turns the
+    // pass off where there is not enough light for a real fringe to be visible,
+    // which is where the sparkle was. And the radial scale comes down a stop
+    // from the market's, because this level has far more aliasing edge per pixel
+    // than a street of plaster does.
+    chromaticAberration: 0.0016,
+    caSpectral: 1,
+    caLumFloor: 0.09,
+    // ...and the same content argues for the sharpen's own comb gate. RCAS's
+    // min/max limiter is STRUCTURALLY INERT on a periodic pattern - the 5-tap
+    // neighbourhood already spans the comb's full range, so the clamp never
+    // binds - which is how a sharpen ends up amplifying the aliasing on a
+    // handrail instead of the detail on the pipe behind it. This is the gate the
+    // harbor round added for its container ribs, on a level made of ribs.
+    sharpenExtGate: 1.0
   };
 
   // ---- 'dawn' - Bayon ruins ------------------------------------------------
@@ -5154,8 +5486,28 @@
     midAmount: 0.26,
     highAmount: 0.54,
     gain: new THREE.Vector3(1.010, 1.000, 0.998),
-    grain: 0.030,
-    grainLowKey: 1.10,
+    // ---- grain: under the stone, not on it ---------------------------------
+    // MEASURED: at 0.030 / 1.10 over a frame whose mean is 0.248-0.289 the grain
+    // was running at the same amplitude as the material's own micro-detail - the
+    // 1-px relative gradient of the near stone (0.089) was indistinguishable
+    // from the SKY's (0.089), and both of them were grain. That is the exact
+    // inversion this level cannot afford: its subject is weathered masonry and
+    // its whole claim is surface.
+    //
+    // Two changes, because the amplitude was only half of it. The shipped
+    // luminance roll-off starts at l = 0.25, which on a dawn frame is BELOW the
+    // lit stone faces - so the term that is supposed to keep grain out of the
+    // light was doing nothing here. grainShadowLo/Hi restate that knee for this
+    // preset (see the uGrainShadowHi block in FRAG_COMPOSITE): full strength in
+    // the mist and the shadowed galleries below 0.10, a fifth of it on a sunlit
+    // face by 0.40. A real emulsion behaves exactly this way and it is the
+    // difference between grain that sits under a material and grain that
+    // competes with it.
+    grain: 0.018,
+    grainLowKey: 1.00,
+    grainShadowLo: 0.10,
+    grainShadowHi: 0.40,
+    grainShadowFloor: 0.20,
     vignette: 0.15,
     bloomThreshold: 0.95,
     bloomKnee: 0.80,
@@ -5715,7 +6067,21 @@
       // ...and these five, same rule.
       uCASpectral: U(0), uTexelC: U(new THREE.Vector2(1 / 1280, 1 / 720)),
       uPivotTrack: U(s.pivotTrack), uHighWarmGate: U(s.highWarmGate),
-      uFlareAspect: U(s.flareAspect), uKeyFlash: U(1)
+      uFlareAspect: U(s.flareAspect), uKeyFlash: U(1),
+      // ...and batch 2. uHeat 0, uCADark 0 and uGrainShadowHi 0 each close their
+      // own branch, so none of the samplers or matrices below is ever read on a
+      // level that did not ask for them.
+      tDepth: U(null), tViewDepthC: U(null), uHasViewC: U(0),
+      uInvViewProj: U(new THREE.Matrix4()),
+      uCamPos: U(new THREE.Vector3()),
+      uHeat: U(0), uHeatY: U(0),
+      uHeatH0: U(s.heatHeight), uHeatH1: U(s.heatHeight + s.heatHeightSoft),
+      uHeatD0: U(s.heatNear), uHeatD1: U(s.heatFar),
+      uHeatScale: U(s.heatScale), uHeatTime: U(0),
+      uHeatCount: U(0), uHeatCells: U(makeHeatCellArray()),
+      uCADark: U(0),
+      uGrainShadowLo: U(s.grainShadowLo), uGrainShadowHi: U(s.grainShadowHi),
+      uGrainShadowFloor: U(s.grainShadowFloor)
     });
 
     var cu = m.composite.uniforms;
@@ -5982,9 +6348,122 @@
     return this;
   };
 
+  /**
+   * Lock the lens to a distance, or hand it back to the autofocus.
+   *
+   * @param {Number|String|null} dist  metres, or 'hyperfocal' for the distance
+   *   past which the far leg cannot reach full CoC (1 / dofFarDead - see COC),
+   *   or null/0 to release the lock.
+   */
   PostFX.prototype.setFocus = function (dist) {
-    this._focusOverride = (typeof dist === 'number' && dist > 0) ? dist : null;
+    var d = this._resolveFocus(dist);
+    this._focusOverride = d > 0 ? d : null;
     return this;
+  };
+
+  // 'hyperfocal' is not a magic number, it is the solution of the far leg: an
+  // object at infinity is 1/focus dioptres out, so focusing at 1/dofFarDead puts
+  // even infinity exactly on the near edge of the far dead band and nothing in
+  // the world defocuses. Clamped to the same window the autofocus uses.
+  PostFX.prototype._resolveFocus = function (dist) {
+    if (typeof dist === 'number' && isFinite(dist) && dist > 0) {
+      return M.clamp(dist, 1.2, 400);
+    }
+    if (typeof dist === 'string') {
+      var k = dist.toLowerCase();
+      if (k === 'hyperfocal' || k === 'infinity' || k === 'inf' || k === 'far') {
+        return M.clamp(1 / Math.max(this.settings.dofFarDead, 1e-3), 1.2, 400);
+      }
+    }
+    return 0;
+  };
+
+  /**
+   * Heat shimmer: a gated screen-space refraction through the layer of hot air
+   * sitting on a sun-baked slab. See pfHeatShimmer in FRAG_COMPOSITE.
+   *
+   * DEFAULTS TO OFF, and off means unexecuted - every level built before this
+   * existed renders bit-for-bit the frame it rendered before. A level opts in
+   * either by publishing `level.heatShimmer` (which update() picks up on its
+   * own, so no level file has to know this API exists) or by calling this.
+   *
+   * @param {{y:Number, strength:Number, cells:Array<{x:Number,z:Number,r:Number}>}|null} cfg
+   *   y        the ground plane the convection layer sits on, in world metres.
+   *   strength 0..2, scaling settings.heatAmount.
+   *   cells    where the slab is hot, as world-space discs (x, z, radius). Up to
+   *            HEAT_CELL_MAX of them; omit the field entirely for "everywhere".
+   *   null     turns it off and keeps it off - the level scan will not undo it.
+   */
+  PostFX.prototype.setHeatShimmer = function (cfg) {
+    try {
+      this._heat = normaliseHeat(cfg);
+    } catch (e) {
+      GAME.logError('postfx.setHeatShimmer', e);
+      this._heat = null;
+    }
+    this._heatExplicit = true;
+    return this;
+  };
+
+  // The level's own record, read once, guarded on everything. ctx.level is built
+  // four systems after this one and may be missing, half-built or from a level
+  // that has never heard of heat - all three degrade to "no shimmer".
+  PostFX.prototype._scanHeat = function (ctx) {
+    if (this._heatExplicit || this._heatScanned) return;
+    if (!ctx || !ctx.level) return;
+    this._heatScanned = true;
+    try {
+      this._heat = normaliseHeat(ctx.level.heatShimmer);
+    } catch (e) {
+      GAME.logError('postfx.heatShimmer', e);
+      this._heat = null;
+    }
+  };
+
+  /**
+   * The focus distance the framing being captured asks for, or 0.
+   *
+   * WHY THIS EXISTS. The autofocus raycasts the crosshair and falls back to a
+   * 12 m gameplay focus when the ray misses - which on an establishing shot
+   * standing 30 m up over a 330 m site is the difference between a photograph
+   * and a tilt-shift model railway, and a level had no way to say otherwise: the
+   * only lever was to move the aim point until the ray happened to hit
+   * something. A pose may now state its own focus:
+   *
+   *     cameraPoses.overview = { position, yaw, pitch, focus: 'hyperfocal' }
+   *     cameraPoses.hero2    = { position, yaw, pitch, focus: 6.5 }
+   *
+   * Matched by POSITION rather than by name because the pose key is not
+   * published anywhere this module can read (scenarios.js and main.js are both
+   * integration-owned), and during a capture the camera is placed exactly on the
+   * pose and frozen there - so the position IS the identifier. Capture only:
+   * during play the player is not standing on an authored mark and the
+   * autofocus is the correct behaviour.
+   */
+  PostFX.prototype._poseFocus = function (ctx) {
+    if (!ctx || !ctx.capture) return 0;
+    var lv = ctx.level, cam = ctx.camera;
+    if (!lv || !cam || !lv.cameraPoses) return 0;
+    var best = 0, bestD2 = 0.25 * 0.25;   // 25 cm of slop; poses are metres apart
+    try {
+      var poses = lv.cameraPoses;
+      for (var k in poses) {
+        if (!Object.prototype.hasOwnProperty.call(poses, k)) continue;
+        var p = poses[k];
+        if (!p || !p.position || p.focus === undefined || p.focus === null) continue;
+        var dx = p.position.x - cam.position.x;
+        var dy = p.position.y - cam.position.y;
+        var dz = p.position.z - cam.position.z;
+        var d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > bestD2) continue;
+        var f = this._resolveFocus(p.focus);
+        if (f > 0) { bestD2 = d2; best = f; }
+      }
+    } catch (e) {
+      GAME.logError('postfx.poseFocus', e);
+      return 0;
+    }
+    return best;
   };
 
   // --------------------------------------------------------------------------
@@ -6006,6 +6485,7 @@
     this.shakeTime += dt * (7.0 + 17.0 * this.trauma);
 
     this._updateWeather(dt, ctx);
+    this._scanHeat(ctx);
 
     var s = this.trauma * this.trauma * this.shakeScale;
     this._shakeActive = s > 1e-5;
@@ -6054,8 +6534,16 @@
     if (this._adsBlend < 1e-4) this._adsBlend = 0;
 
     var target = ads ? 26.0 : 12.0;
+    // A capture pose may state its own focus (see _poseFocus). It outranks the
+    // autofocus and it is LOCKED rather than damped: the author asked for a
+    // distance, not for a rack towards one that a 1.5 s capture may not finish.
+    // 0 on every level that publishes no `focus` on a pose, which is all of them
+    // today, so the branch below is the one that runs everywhere it ran before.
+    var poseFocus = this._poseFocus(ctx);
     if (this._focusOverride) {
       target = this._focusOverride;
+    } else if (poseFocus > 0) {
+      target = poseFocus;
     } else if (ctx && ctx.level && ctx.level.raycast && !this._focusRayBroken &&
                (this._updateCount % 5) === 0) {
       // Focus on whatever is under the crosshair, like a real operator would.
@@ -6074,8 +6562,14 @@
       }
     }
     this._focusTarget = target;
-    // Focus pull has weight; snapping between distances looks like a bug.
-    this._focus = M.damp(this._focus, this._focusTarget, ads ? 7.0 : 3.5, dt);
+    if (poseFocus > 0 && !this._focusOverride) {
+      // An authored capture focus is a LOCK, not a target: a 1.5 s capture is
+      // 90 damped steps from 12 m and would land short of a 90 m mark.
+      this._focus = target;
+    } else {
+      // Focus pull has weight; snapping between distances looks like a bug.
+      this._focus = M.damp(this._focus, this._focusTarget, ads ? 7.0 : 3.5, dt);
+    }
   };
 
   // --------------------------------------------------------------------------
@@ -6933,7 +7427,44 @@
     cu.uHighWarmGate.value = M.saturate(s.highWarmGate) * (1 - flashRel);
     cu.uFlareAspect.value = M.saturate(s.flareAspect);
     cu.uCASpectral.value = s.caSpectral ? 1 : 0;
+    // The CA's dark roll-off. Only meaningful inside the spectral branch, and 0
+    // (= off, the shipped path) unless the preset asked for it.
+    cu.uCADark.value = s.caSpectral ? Math.max(0, s.caLumFloor || 0) : 0;
     cu.uTexelC.value.set(1 / w, 1 / h);
+    // ---- heat shimmer ------------------------------------------------------
+    // uHeat 0 unless the level published one, at which point the entire block
+    // below - depth fetch, world reconstruction, cell test, noise - is skipped
+    // by the shader. See PostFX.prototype.setHeatShimmer.
+    var heat = this._heat;
+    if (heat && this.hasDepth) {
+      cu.uHeat.value = Math.max(0, s.heatAmount) * heat.strength;
+      cu.uHeatY.value = heat.y;
+      cu.uHeatH0.value = Math.max(0.1, s.heatHeight);
+      cu.uHeatH1.value = Math.max(0.2, s.heatHeight + Math.max(0.1, s.heatHeightSoft));
+      cu.uHeatD0.value = Math.max(0.5, s.heatNear);
+      cu.uHeatD1.value = Math.max(s.heatNear + 1, s.heatFar);
+      cu.uHeatScale.value = Math.max(0.5, s.heatScale);
+      cu.uHeatTime.value = time * Math.max(0, s.heatSpeed);
+      cu.uHeatCount.value = heat.cells.length;
+      for (var hi = 0; hi < heat.cells.length && hi < HEAT_CELL_MAX; hi++) {
+        cu.uHeatCells.value[hi].set(heat.cells[hi][0], heat.cells[hi][1], heat.cells[hi][2]);
+      }
+      cu.tDepth.value = depthTex;
+      cu.tViewDepthC.value = (viewOk && this.rtView.depthTexture)
+        ? this.rtView.depthTexture : this.whiteTex;
+      cu.uHasViewC.value = (viewOk && this.rtView.depthTexture) ? 1 : 0;
+      cu.uInvViewProj.value.copy(this._invViewProj);
+      cu.uCamPos.value.copy(camPos);
+    } else {
+      cu.uHeat.value = 0;
+      cu.uHeatCount.value = 0;
+      cu.uHasViewC.value = 0;
+      cu.tDepth.value = depthTex || this.whiteTex;
+      cu.tViewDepthC.value = this.whiteTex;
+    }
+    cu.uGrainShadowLo.value = Math.max(0, s.grainShadowLo);
+    cu.uGrainShadowHi.value = Math.max(0, s.grainShadowHi);
+    cu.uGrainShadowFloor.value = M.clamp(s.grainShadowFloor, 0, 1);
     cu.uWhite.value = Math.max(1.02, s.whitePoint);
     cu.uAds.value = M.saturate(this._adsBlend || 0);
     cu.uSaturation.value = s.saturation;

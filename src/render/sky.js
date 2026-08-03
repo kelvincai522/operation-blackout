@@ -977,10 +977,103 @@
   var OVER_DECK_MIN = 0.66;
   var OVER_DECK_RANGE = 0.62;
   // Horizon radiance as a fraction of the zenith. A real overcast is brightest
-  // overhead (shortest path up through the deck) and falls toward the skyline;
-  // 0.66 is about the measured 1.5:1 of a stratus day. Its own e-folding is the
-  // exp(-elev*3.2) the storm deck already computes.
-  var OVER_HORIZON_K = 0.66;
+  // overhead (shortest path up through the deck) and falls toward the skyline.
+  //
+  // 0.56 over an e-folding of 1.9, not 0.66 over the storm deck's 3.2, and the
+  // EXPONENT is the half that was actually wrong. exp(-sin(elev)*3.2) is spent
+  // by twenty degrees: measured on the model, the whole band a ground-level
+  // camera sees (0-30 deg) ran 0.93x the zenith down to 0.66x, and after the
+  // picture shoulder and AgX that 1.41x radiance range printed as a 1.5% spread
+  // - the featureless plate the snowbound critic measured (std 0.0118 on a mean
+  // of 0.78). At 1.9 the same band runs 0.83x down to 0.56x, i.e. the ramp is
+  // spread through the part of the dome that is actually in frame instead of
+  // being crushed into the last few degrees over the rooftops.
+  //
+  // The void ('none') profile keeps the storm deck's 3.2 and VOID_HORIZON_K -
+  // metro and bunker never see the sky at all and asked for none of this.
+  var OVER_HORIZON_K = 0.56;
+  var OVER_HORIZON_P = 1.9;
+  // ---- large-scale cloud-base breakup (the squall field) -------------------
+  //
+  // A real snow squall deck is not uniform: it has ragged darker cells the size
+  // of a whole quadrant of sky, and they drift. The three noise layers the deck
+  // already carries (stA/stB/stC) are all sampled at frequencies that MIP OUT
+  // to their mean exactly where the projection compresses - which is the entire
+  // lower half of a ground-level framing - so none of them can supply it.
+  //
+  // This one rides the same low-frequency pair the storm's weather-system term
+  // uses (the FAR projection at 0.28, plus a second NEAR sample at 0.17 on a
+  // slower drift so the two slide over each other and the field EVOLVES rather
+  // than translating rigidly). About two thirds of a tile crosses the whole
+  // visible sky, so it survives the horizon compression intact.
+  //
+  // Written as (1-k) + k*2*field, exactly as OVER_BAND and OVER_CELL are, so
+  // its mean is 1.0 by construction against a noise channel whose mean is 0.5.
+  // That is what lets it buy structure at ZERO cost to the deck's level, the
+  // frame mean, the vertical balance or the numeric solve in
+  // _applyOvercastAmbient - the CPU mirror does not need to know it exists.
+  //
+  // SCALE FIRST, AMPLITUDE SECOND, and both were measured rather than chosen.
+  //
+  //   Scale. The two samples land 1.8-3.5 and 1.6-3.8 noise cells across the
+  //   sky a hero framing sees. The first attempt reused the storm's own
+  //   weather-system projection (stFar * 0.28) on the reasoning that "lower
+  //   frequency survives the horizon compression" - and it does, but at 0.28
+  //   the ENTIRE visible sky samples 0.6 of one cell, i.e. a constant. That is
+  //   the same mistake CLOUD_SCALE and the storm deck's 0.80 each cost a round
+  //   already: at these projections the interesting band is narrow, and either
+  //   side of it is a flat card.
+  //
+  //   Amplitude. 0.42 gives 0.58x..1.42x, a 2.4x spread at the largest spatial
+  //   scale in the deck. That looks enormous written down and is not, because
+  //   of what the print does to it: measured end to end on snowbound, an 11%
+  //   change in deck radiance moved the printed sky by 1.2%. AgX plus an
+  //   auto-exposure metering a whiteout is a ~9:1 compressor up here, which is
+  //   exactly why every previous attempt to give this preset structure
+  //   disappeared. A real snow squall does vary 2:1 across the sky; this is the
+  //   authored amount that survives to the frame.
+  //
+  // ...and this is why the field is ALSO carried in HUE, which is the half that
+  // actually does the work. Probed by painting the deck magenta and
+  // re-capturing: the dome unambiguously owns the sky pixels (they went fully
+  // magenta) and the squall's shape was plainly legible IN THE CHROMA at the
+  // same amplitude whose luminance printed as 1%. Up at the level a whiteout
+  // meters to, AgX has almost no contrast left but plenty of colour, so a
+  // squall cell that is a colder blue-grey than the deck around it reads where
+  // a 2.4x luminance spread does not. That is the same conclusion the storm
+  // deck's stTint reached from the opposite end - "a deck that varies only in
+  // brightness is a gradient, one that varies in colour is cloud" - arrived at
+  // here by measurement rather than by analogy.
+  //
+  // The two endpoints are each normalised to luminance 1.0, so the tint is a
+  // pure chromaticity rotation about the field's mean and costs the deck's
+  // level, the meter and the numeric solve exactly nothing.
+  var OVER_SQUALL = 0.42;
+  var OVER_SQUALL_TINT = 0.55;
+  var OVER_SQ_COOL = [0.9364, 1.0042, 1.1449];
+  var OVER_SQ_WARM = [1.0600, 0.9957, 0.8622];
+  // ---- turbidity-driven horizon band ---------------------------------------
+  //
+  // The deck REPLACES the dome above about a degree of elevation (stCov is 1
+  // everywhere the coverage threshold is below the noise floor, which under a
+  // total overcast it always is), so the clear-sky haze band never reaches it.
+  // A dense whiteout needs the last twenty degrees over the skyline to converge
+  // on the same air the far field is dissolving into, or the deck prints as a
+  // card sitting on top of the fog with a value step where they meet.
+  //
+  // Driven by TURBIDITY, so one expression gives snowbound (0.09) a band
+  // reaching about 25 degrees at 0.58 strength and jungle (0.07) a shallower,
+  // weaker one - which is the difference between a blizzard and humid air.
+  //
+  // Deliberately NOT mirrored in _overcastShape. It is confined to the bottom
+  // ~15 degrees, which carry sin^2(15 deg) = 6.7% of the cosine-weighted
+  // irradiance, and it moves them by at most 15% - under 1% on E, i.e. below
+  // the resolution of the numeric solve that sets the deck's level. Adding it
+  // to the mirror would make the mirror depend on fog colours that are computed
+  // AFTER the level is solved, which is a loop, not an improvement.
+  var OVER_TURB_LO = 0.020, OVER_TURB_SPAN = 0.080;
+  var OVER_BAND_K_LO = 0.30, OVER_BAND_K_HI = 0.62;
+  var OVER_BAND_FALL_LO = 9.0, OVER_BAND_FALL_HI = 5.0;
   // Two independent mean-1 structure fields. Both average to exactly 1.0 by
   // construction (the noise channels average 0.5), so they buy internal
   // structure at zero cost to the deck's level, the frame mean or the meter -
@@ -1070,7 +1163,14 @@
   // sharing a preset from sharing a look.
   var OVER_FOG_GND_MIX = 0.34;
   var OVER_FOG_DENS_K = 2.2;       // x the AUTHORED base density, so setFog works
-  var OVER_HUE = [0.965, 0.985, 1.000];
+  // The deck's own chromaticity, before the sixth-of-the-way blend toward the
+  // ground below. Pushed a little further COOL than the 0.965/0.985/1.000 it
+  // shipped at: every level that runs this preset is a white or a green one,
+  // and the snowbound brief asks for white/pale-blue. It measured slightly WARM
+  // of neutral (R 0.784 against G/B 0.779) because the diffuse solar region -
+  // not the deck - was carrying a low sun's transmittance almost undiluted; see
+  // _applyOvercastAmbient for the other half of that fix.
+  var OVER_HUE = [0.950, 0.978, 1.000];
   // Rain/snow fills the whole column rather than hugging the ground, scatters
   // near-isotropically (there is no disc to forward-scatter from) and eats
   // chroma at distance far harder than dry air.
@@ -1342,6 +1442,17 @@
     'uniform vec4 uOverPic;',        // x picture gain, y knee, z asymptote, w tint amount
     'uniform vec3 uOverSun;',        // peak radiance of the diffuse solar region
     'uniform vec3 uOverGnd;',        // ground bounce landing on the cloud base
+    // x squall amount, y deck horizon e-fold, z HAZE BAND e-fold (0 = use the
+    // clear-sky literal 9.0), w horizon band strength. All zero for clear,
+    // storm and the enclosed profile, so every line that reads it is either
+    // inside the overcast branch or falls back to the exact constant it
+    // replaced. See OVER_SQUALL / OVER_BAND_K_LO.
+    'uniform vec4 uOverC;',
+    // Two-lobe haze tint: rgb = the colour the ANTI-SUN lobe of the horizon
+    // haze is pulled toward, w = how far. Applied luminance-preserving, so it
+    // shifts hue and never level. w = 0 for every existing caller, which makes
+    // the whole block dead code. See setFog({tint, tintAmount}).
+    'uniform vec4 uHazeTint;',
     'varying vec3 vDir;',
     GLSL_NOISE,
 
@@ -1416,8 +1527,29 @@
     '  float fg = uMode.z; float fg2 = fg * fg;',
     '  float fdn = max( 1e-3, 1.0 + fg2 - 2.0 * fg * cosT );',
     '  float fhg = ( 1.0 - fg2 ) / ( fdn * sqrt( fdn ) );',
-    '  vec3 haze = mix( uHazeSky, uHazeSun, clamp( ( fhg - 0.42 ) * 0.34, 0.0, 1.0 ) );',
-    '  float hz = uMode.y * exp( -abs( d.y ) * 9.0 );',
+    '  float hazeW = clamp( ( fhg - 0.42 ) * 0.34, 0.0, 1.0 );',
+    '  vec3 haze = mix( uHazeSky, uHazeSun, hazeW );',
+    // ---- two-lobe tint ----------------------------------------------------
+    // A pre-sunrise sky does not scatter GREY away from the sun, it scatters
+    // blue-violet, and `desaturate` is the only lever a level had for "less sun
+    // colour in the haze". This pulls the ANTI-SUN lobe (hazeW near 0) toward
+    // an authored chromaticity while the sunward lobe keeps the solar colour
+    // the atmosphere solved. Luminance-preserving on purpose: the level of the
+    // haze is a measured quantity capped against keyRef three functions away,
+    // and a tint has no business moving it. uHazeTint.w is 0 unless a level
+    // calls setFog({tint,...}), so this is dead code for market and harbor.
+    '  if ( uHazeTint.w > 0.0 ) {',
+    '    float htw = uHazeTint.w * ( 1.0 - hazeW );',
+    '    float hl = dot( haze, vec3( 0.2126, 0.7152, 0.0722 ) );',
+    '    float tl = dot( uHazeTint.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );',
+    '    haze = mix( haze, uHazeTint.rgb * ( hl / max( tl, 1e-4 ) ), clamp( htw, 0.0, 1.0 ) );',
+    '  }',
+    // The e-fold is a uniform ONLY so a dense overcast can reach further up the
+    // dome (see OVER_BAND_FALL_LO). It is 0 for every clear-sky and storm
+    // caller, which takes the literal 9.0 branch - the identical expression
+    // this line has always evaluated.
+    '  float hzFall = uOverC.z > 0.5 ? uOverC.z : 9.0;',
+    '  float hz = uMode.y * exp( -abs( d.y ) * hzFall );',
     '  float hazeMix = clamp( hz, 0.0, 0.96 );',
     '  col = mix( col, haze, hazeMix );',
 
@@ -1598,11 +1730,19 @@
     // ======================================================================
     '    vec3 stDeck = vec3( 0.0 );',
     '    if ( uOver.x > 0.0 ) {',
+    // ZENITH-TO-HORIZON RAMP, on the deck's OWN e-folding rather than the
+    // storm's. The storm's exp(-elev*3.2) is spent by twenty degrees, which
+    // puts the entire ramp behind the rooftops and leaves the sky a ground-level
+    // camera actually sees inside a 1.13x spread. uOverC.y is 1.9 for a daylight
+    // deck and the storm's own 3.2 for the enclosed profile, which asked for
+    // none of this. See OVER_HORIZON_P.
+    '      float oHor = exp( - max( stEl, 0.0 ) * max( uOverC.y, 0.05 ) );',
+    '      vec3 oAmb = mix( uStormHigh, uStormLow, oHor );',
     // A DAYLIGHT deck is lit from ABOVE, so the sign of the thickness term is
     // the opposite of the storm's: THIN cloud is bright (sunlight leaks
     // through it), thick cloud is the darker mass beside it. Same stTrans
     // field, read the other way round.
-    '      vec3 oD = stAmb * ( uOver.y + uOver.z * stTrans );',
+    '      vec3 oD = oAmb * ( uOver.y + uOver.z * stTrans );',
     // Hue structure rather than luminance structure, exactly as the storm deck
     // does it and for the same reason: a deck that varies only in brightness is
     // a gradient, one that varies in colour is cloud. Thin patches are showing
@@ -1619,6 +1759,32 @@
     // them an even deck is a flat card, which is the whole failure mode.
     '      oD *= ( 1.0 - uOverB.x ) + uOverB.x * 2.0 * stCell;',
     '      oD *= ( 1.0 - uOver.w ) + uOver.w * 2.0 * stB.g;',
+    // ---- THE SQUALL FIELD --------------------------------------------------
+    // The three layers above all ride projections whose frequency explodes at
+    // the skyline, so they mip out to their own mean across the entire lower
+    // half of a ground-level framing - which is most of the sky in frame, and
+    // is why the deck measured as a plate however much relief was authored into
+    // it. This is one octave of genuinely LARGE-scale breakup: stMacro off the
+    // far projection at 0.28 (about two thirds of a tile across the whole
+    // visible sky) against a second near-projection sample at 0.17 on a slower
+    // drift, so the two slide over each other and the field evolves instead of
+    // sliding rigidly past. Mean exactly 1.0 by construction - see OVER_SQUALL.
+    '      if ( uOverC.x > 0.0 ) {',
+    '        float oMacA = texture2D( uStormTex,',
+    '                        stFar * 0.90 + uStormDrift.zw * 0.60 + vec2( 0.41, 0.07 ) ).r;',
+    '        float oMacB = texture2D( uStormTex,',
+    '                        stNear * 0.26 + uStormDrift.xy * 0.30 + vec2( 0.19, 0.83 ) ).g;',
+    '        float oMac = oMacA * 0.58 + oMacB * 0.42;',
+    '        oD *= ( 1.0 - uOverC.x ) + uOverC.x * 2.0 * oMac;',
+    // The same field in HUE - the half that survives the print. Dark cell =
+    // cold blue-grey, thin patch = a shade warmer. Both endpoints are
+    // luminance-1 by construction, so this is a pure chromaticity rotation.
+    '        vec3 oSqT = mix( vec3( ' + OVER_SQ_COOL[0].toFixed(4) + ', ' +
+      OVER_SQ_COOL[1].toFixed(4) + ', ' + OVER_SQ_COOL[2].toFixed(4) + ' ),',
+    '                         vec3( ' + OVER_SQ_WARM[0].toFixed(4) + ', ' +
+      OVER_SQ_WARM[1].toFixed(4) + ', ' + OVER_SQ_WARM[2].toFixed(4) + ' ), oMac );',
+    '        oD *= mix( vec3( 1.0 ), oSqT, uOverB.w );',
+    '      }',
     // GROUND BOUNCE onto the cloud base. Under snow this is not a detail, it is
     // the effect: an 0.87-albedo field under an 0.58-reflectance base very
     // nearly doubles the light, and it arrives from BELOW, which is what
@@ -1649,6 +1815,18 @@
     '          float oRl = uOverPic.y + oSpan * ( 1.0 - exp( - ( oL - uOverPic.y ) / oSpan ) );',
     '          oD *= oRl / max( oL, 1e-6 );',
     '        }',
+    '      }',
+    // ---- TURBIDITY HORIZON BAND ---------------------------------------------
+    // AFTER the shoulder, deliberately: the target is the same inscatter colour
+    // the fog chunk paints on the geometry two hundred metres away, and that
+    // colour is never shoulder-compressed. Blending to it here is what makes the
+    // deck and the far field land on the SAME value at the skyline instead of
+    // meeting at a step - which under a whiteout is the whole illusion. Reaches
+    // about 25 degrees at snowbound's turbidity and about 15 at jungle's. Zero
+    // for storm, clear and the enclosed profile. See OVER_BAND_K_LO.
+    '      if ( uOverC.w > 0.0 ) {',
+    '        float oBand = uOverC.w * exp( - max( stEl, 0.0 ) * hzFall );',
+    '        oD = mix( oD, haze, clamp( oBand, 0.0, 0.92 ) );',
     '      }',
     '      stDeck = oD;',
     '    } else {',
@@ -1872,6 +2050,10 @@
     'uniform vec3 uCell;',
     'uniform vec3 uSunDir;',
     'uniform vec2 uT;',             // x time, y pixels-per-world-unit-at-1m
+    // How hard a mote on a steeply DESCENDING ray is suppressed. 0 for the
+    // market, the harbor and every level that does not ask, which makes the
+    // expression below an exact multiply by 1.0. See setDustGain().
+    'uniform float uDownFade;',
     'uniform mat4 uShadowMat;',
     'varying float vAlpha;',
     'varying float vScatter;',
@@ -1912,7 +2094,24 @@
     // rescue it.
     '  vec3 vray = ( world - uCamPos ) / max( length( world - uCamPos ), 1e-4 );',
     '  float upFade = 1.0 - smoothstep( 0.05, 0.22, vray.y );',
-    '  vAlpha = aSeed.w * edge * rng * lift * upFade;',
+    // ...and the OTHER half of the same test, which the original missed because
+    // it was written for a camera standing in a street.
+    //
+    // "A mote is only ever visible against something darker than itself" is the
+    // right rule; a rising ray is only half of it. On a level whose entire
+    // subject is 25 degrees BELOW the horizon and whose background is bright
+    // depth haze 176 m down - an unfinished floor plate over a city - every ray
+    // in frame descends, upFade is 1.0 for all of them, and the field prints at
+    // full alpha against the brightest thing in the picture: measured 765-1441
+    // hard white specks per frame, 11% of them chromatic. So a steeply
+    // DESCENDING ray gets the mirror-image suppression.
+    //
+    // Opt-in, because it is exactly wrong for a street: there the ground two
+    // metres ahead is the darkest thing in frame and a descending ray is where
+    // the shaft reads best. uDownFade is 0 unless a level sets it, and
+    // 1.0 - 0.0 * x is exactly 1.0, so market and harbor are bit-identical.
+    '  float downFade = 1.0 - uDownFade * ( 1.0 - smoothstep( -0.30, -0.055, vray.y ) );',
+    '  vAlpha = aSeed.w * edge * rng * lift * upFade * downFade;',
     // Forward scattering: a mote seen against the sun is far brighter than one
     // seen with the sun behind you. This is what makes the air read as thick.
     '  float c = dot( vray, uSunDir );',
@@ -2021,6 +2220,17 @@
     '  uniform vec3 gbFogSky;',
     '  uniform vec3 gbFogGnd;',
     '  uniform vec3 gbFogSunDir;',
+    // TWO-LOBE INSCATTER TINT. rgb = the chromaticity the ANTI-SUN lobe is
+    // pulled toward, w = how far. w is 0 for every existing caller, which makes
+    // the block below dead code and leaves market and harbor bit-identical.
+    //
+    // The problem it exists for: a misty dawn wants LESS of the sun's colour in
+    // the air away from the sun, and the only lever a level had was
+    // `desaturate`, which pulls toward GREY. A pre-sunrise sky does not scatter
+    // grey away from the sun, it scatters blue-violet, so the choice was a pink
+    // veil over everything or a dead one. Every level in the roster that pairs a
+    // low sun with heavy air hits this.
+    '  uniform vec4 gbFogTint;',
     '  vec3 gbApplyFog( vec3 col ) {',
     // view-space -> world-space offset. The view rotation is orthonormal, so
     // its inverse is its transpose and (M^T v).i == dot( M[i], v ).
@@ -2047,6 +2257,18 @@
     '    float w = clamp( ( hg - 0.42 ) * 0.34 * gbFogB.z, 0.0, 1.6 );',
     '    vec3 fc = mix( gbFogSky, gbFogSun, min( w, 1.0 ) );',
     '    fc += gbFogSun * max( 0.0, w - 1.0 ) * 0.75;',
+    // Phase-weighted, so the sunward lobe keeps the solar colour the atmosphere
+    // solved and only the anti-sun half takes the tint. Luminance-preserving:
+    // the LEVEL of the inscatter is a measured quantity capped against keyRef in
+    // _deriveAmbient and a tint has no business moving it - it shifts hue only.
+    // Applied before the ground blend so a warm bounce under a ledge still reads
+    // warm, which is what stops this becoming a global colour cast.
+    '    if ( gbFogTint.w > 0.0 ) {',
+    '      float tw = gbFogTint.w * ( 1.0 - min( w, 1.0 ) );',
+    '      float fl = dot( fc, vec3( 0.2126, 0.7152, 0.0722 ) );',
+    '      float tl = dot( gbFogTint.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );',
+    '      fc = mix( fc, gbFogTint.rgb * ( fl / max( tl, 1e-4 ) ), clamp( tw, 0.0, 1.0 ) );',
+    '    }',
     '    fc = mix( fc, gbFogGnd, ( 1.0 - smoothstep( -0.42, -0.04, rd.y ) ) * 0.65 );',
     // Aerial perspective: distance eats local chroma before it eats luminance.
     '    float lum = dot( col, vec3( 0.2126, 0.7152, 0.0722 ) );',
@@ -2086,6 +2308,36 @@
     '  }',
     '#endif'
   ].join('\n');
+
+  // --------------------------------------------------------------------------
+  // Read a colour out of whatever a caller happened to hand us: an [r,g,b]
+  // array, a THREE.Color (or anything with .r/.g/.b), or a 0xRRGGBB integer.
+  // Values are LINEAR - everything in this module is - and an integer is
+  // interpreted the way THREE.Color does, i.e. as sRGB-ish bytes converted with
+  // a 2.2 power, which is what an author typing a hex code expects.
+  //
+  // Returns false and leaves `out` alone on anything it cannot read, so a bad
+  // profile value degrades to "no tint" rather than to NaN in the fog.
+  // --------------------------------------------------------------------------
+  var _tintTmp = [1, 1, 1];
+  function readRGB(v, out) {
+    if (v == null) return false;
+    var r, g, b;
+    if (typeof v === 'number') {
+      if (!isFinite(v)) return false;
+      r = Math.pow(((v >> 16) & 255) / 255, 2.2);
+      g = Math.pow(((v >> 8) & 255) / 255, 2.2);
+      b = Math.pow((v & 255) / 255, 2.2);
+    } else if (typeof v.length === 'number' && v.length >= 3) {
+      r = +v[0]; g = +v[1]; b = +v[2];
+    } else if (isFinite(v.r) && isFinite(v.g) && isFinite(v.b)) {
+      r = v.r; g = v.g; b = v.b;
+    } else { return false; }
+    if (!isFinite(r) || !isFinite(g) || !isFinite(b)) return false;
+    if (r < 0) r = 0; if (g < 0) g = 0; if (b < 0) b = 0;
+    out[0] = r; out[1] = g; out[2] = b;
+    return true;
+  }
 
   // ==========================================================================
   // Sky
@@ -2139,6 +2391,20 @@
     this.dustParticles = null;
     this.mesh = null;
     this.cubeTexture = null;
+    // ---- dust field controls (see setDustGain) -----------------------------
+    // Both are the values the field has always run at, so an untouched build is
+    // bit-identical. They live on the instance rather than only in the uniform
+    // block because setDustGain() is legal before build(), and _makeDust runs
+    // several steps into build().
+    this._dustGain = 1.0;
+    this._dustDown = 0.0;
+    // ---- solar arc (see setSolarArc) ---------------------------------------
+    // Peak elevation of the day arc, in radians. MAX_ELEV (30 deg) is the
+    // art-directed default every shipped capture was framed against; a level
+    // whose whole premise is a different sun height overrides it through its env
+    // profile. Per-instance, so nothing a level does can move the module
+    // constant out from under market or harbor.
+    this._maxElev = MAX_ELEV;
 
     // ---- fog parameters (world units are metres) ---------------------------
     //
@@ -2171,6 +2437,14 @@
       mieG: 0.62,
       glowGain: 1.0,
       desaturate: 0.18,
+      // ---- two-lobe inscatter tint (see FOG_PARS_FRAGMENT / setFog) --------
+      // tint       null, or a colour the ANTI-SUN lobe of the haze is pulled
+      //            toward: [r,g,b], a THREE.Color, or a 0xRRGGBB number. LINEAR,
+      //            like everything else in this file.
+      // tintAmount 0..1, how far. 0 by default, which makes the shader block
+      //            dead code and keeps market and harbor bit-identical.
+      tint: null,
+      tintAmount: 0,
       enabled: true
     };
 
@@ -2281,13 +2555,16 @@
     this._fogSky = new Float32Array(3);
     this._fogGnd = new Float32Array(3);
     this._fogDir = new Float32Array([-0.556, 0.242, -0.795]);
+    // rgb = anti-sun lobe chromaticity, w = amount. Amount 0 = inert.
+    this._fogTint = new Float32Array([1, 1, 1, 0]);
     this.fogUniforms = {
       gbFogA: { value: this._fogA },
       gbFogB: { value: this._fogB },
       gbFogSun: { value: this._fogSun },
       gbFogSky: { value: this._fogSky },
       gbFogGnd: { value: this._fogGnd },
-      gbFogSunDir: { value: this._fogDir }
+      gbFogSunDir: { value: this._fogDir },
+      gbFogTint: { value: this._fogTint }
     };
 
     // ---- internals ---------------------------------------------------------
@@ -2490,9 +2767,12 @@
 
   Sky.prototype._solar = function (t) {
     var elev;
+    // Per-instance peak elevation. Defaults to MAX_ELEV, so market, harbor and
+    // every level that does not call setSolarArc() get the identical arc.
+    var peak = isFinite(this._maxElev) ? this._maxElev : MAX_ELEV;
     if (t >= 0.25 && t <= 0.75) {
       var d = (t - 0.25) / 0.5;
-      elev = MAX_ELEV * Math.pow(Math.sin(PI * d), 0.85);
+      elev = peak * Math.pow(Math.sin(PI * d), 0.85);
     } else {
       var n = t > 0.75 ? (t - 0.75) / 0.25 : (0.25 - t) / 0.25;
       elev = -NIGHT_DEPTH * Math.pow(M.saturate(n), 3.19);
@@ -2575,8 +2855,18 @@
     }
     // Nudge toward the art-directed 4200K so the default hour lands exactly on
     // the palette instead of merely near it.
+    //
+    // Faded out above 30 degrees of elevation, which is unreachable unless a
+    // level has called setSolarArc() - so the market's golden hour, the harbor
+    // and every clear-sky level keep the exact 0.22 they shipped with. It has to
+    // go for a genuine high sun: 4200 K is a golden-hour reference and a level
+    // that asks for high noon asking for it anyway would just be the market's
+    // lighting recipe re-dressed, which the roster lists as an instant fail. The
+    // extinction path already neutralises the disc's own colour toward ~5500 K
+    // as the slant path shortens; this stops the nudge fighting it.
     GAME.Color.kelvin(4200, _kelvinRef);
-    this.sunColor.lerp(_kelvinRef, 0.22);
+    this.sunColor.lerp(_kelvinRef,
+      0.22 * (1.0 - M.smoothstep(30.0, 55.0, this.sunElevation / M.DEG)));
 
     // lum^0.65 keeps a low sun usable as a key light instead of collapsing to
     // nothing; the clamp keeps a high sun inside the 4.5-6.6 band the art
@@ -3567,8 +3857,10 @@
   Sky.prototype._overcastShape = function (elevSin, out) {
     var vo = this._voidF > 0;
     var up = Math.max(elevSin, 0.0);
-    // The same exp(-elev * 3.2) the shader's stHor uses, so the two ramps agree.
-    var horiz = Math.exp(-up * 3.2);
+    // The same ramp the shader's oHor / stHor uses, so the two agree. A daylight
+    // deck runs OVER_HORIZON_P; the enclosed profile keeps the storm deck's 3.2,
+    // which is what it was solved against.
+    var horiz = Math.exp(-up * (vo ? 3.2 : OVER_HORIZON_P));
     var hk = vo ? VOID_HORIZON_K : OVER_HORIZON_K;
     var ramp = 1.0 + (hk - 1.0) * horiz;
     var dMin = vo ? 1.0 : OVER_DECK_MIN;
@@ -3629,11 +3921,24 @@
       if (!(hmx > 1e-5)) hmx = 1;
       for (c = 0; c < 3; c++) this._overHue[c] = _ovTmp[c] / hmx;
       // The solar region keeps some of the sun's own colour but a deck is a
-      // very effective diffuser, so it arrives most of the way to white.
+      // very effective diffuser, so it arrives most of the way to the DECK'S
+      // OWN hue - not to white, and not 55% of the way but 72%.
+      //
+      // This is the measured half of the "overcast prints warm" finding. At
+      // snowbound's 11 degree sun through turbidity 0.09 the normalised
+      // transmittance is about (1.00, 0.74, 0.34); blending that only 55% toward
+      // white left the solar region at (1.00, 0.88, 0.70) - a broad, warm,
+      // p=6 lobe carrying 0.55 of the zenith radiance and covering most of the
+      // sky a hero framing sees. The deck underneath it is authored cool, the
+      // brief asks for white/pale-blue, and the frame still measured warm of
+      // neutral (R 0.784 against G/B 0.779) because this term, not the deck, was
+      // setting the white balance. Converging on the deck's chromaticity instead
+      // of on white is also the physically honest version: what leaves the
+      // underside of a stratus deck near the sun is deck light, faintly warmed.
       var T = transmittanceRaw(0.0, Math.max(this.sunWorldDirection.y, 0.02), _ovTmp);
       var tmx = Math.max(T[0], Math.max(T[1], T[2])) || 1;
       for (c = 0; c < 3; c++) {
-        this._overSunHue[c] = M.lerp(T[c] / tmx, 1.0, 0.55);
+        this._overSunHue[c] = M.lerp(T[c] / tmx, this._overHue[c], 0.72);
       }
     }
     // Shape coefficients the mirror and the shader both consume.
@@ -3901,7 +4206,14 @@
       uOverB: { value: new THREE.Vector4(0, OVER_SUN_P, 1, 0) },
       uOverPic: { value: new THREE.Vector4(1.0, 1e9, 2e9, 1.0) },
       uOverSun: { value: new THREE.Vector3(0, 0, 0) },
-      uOverGnd: { value: new THREE.Vector3(0, 0, 0) }
+      uOverGnd: { value: new THREE.Vector3(0, 0, 0) },
+      // x squall amount, y deck horizon e-fold, z haze-band e-fold (0 = take
+      // the clear-sky literal), w horizon band strength. All zero here, so a
+      // clear or storm sky evaluates exactly the expressions it always has.
+      uOverC: { value: new THREE.Vector4(0, 0, 0, 0) },
+      // Two-lobe haze tint, the dome's half of setFog({tint, tintAmount}).
+      // w = 0 makes the block dead code.
+      uHazeTint: { value: new THREE.Vector4(1, 1, 1, 0) }
     };
 
     var mat = this._skyMaterial = new THREE.ShaderMaterial({
@@ -3972,7 +4284,11 @@
       uT: { value: new THREE.Vector2(0, 500) },
       uSunCol: { value: new THREE.Vector3(3.2, 2.3, 1.4) },
       uSkyCol: { value: new THREE.Vector3(0.34, 0.42, 0.62) },
-      uGain: { value: 1.0 },
+      // Seeded from the instance, not from a literal, because setDustGain() is
+      // legal before build() and _makeDust runs several steps into it. Both
+      // default to the values the field has always had (1.0 / 0.0).
+      uGain: { value: this._dustGain },
+      uDownFade: { value: this._dustDown },
       uShadowMap: { value: null },
       uShadowMat: { value: new THREE.Matrix4() },
       uShadowP: { value: new THREE.Vector2(0.0, 0.0016) }
@@ -4204,6 +4520,27 @@
     this._fogDir[0] = this.sunDirection.x;
     this._fogDir[1] = this.sunDirection.y;
     this._fogDir[2] = this.sunDirection.z;
+    // Two-lobe inscatter tint. Resolved every push so setFog() needs no special
+    // case, and inert (amount 0, hue white) unless a level authored one.
+    var tintOn = false;
+    var ta = M.saturate(isFinite(this.fog.tintAmount) ? this.fog.tintAmount : 0);
+    if (ta > 0 && readRGB(this.fog.tint, _tintTmp)) {
+      var tmax = Math.max(_tintTmp[0], Math.max(_tintTmp[1], _tintTmp[2]));
+      if (tmax > 1e-4) {
+        // Stored as a pure chromaticity (max channel 1). The shader rescales it
+        // to whatever luminance the atmosphere solved for that direction, so a
+        // level authoring a tint can never accidentally move the haze's level.
+        this._fogTint[0] = _tintTmp[0] / tmax;
+        this._fogTint[1] = _tintTmp[1] / tmax;
+        this._fogTint[2] = _tintTmp[2] / tmax;
+        this._fogTint[3] = ta;
+        tintOn = true;
+      }
+    }
+    if (!tintOn) {
+      this._fogTint[0] = 1; this._fogTint[1] = 1; this._fogTint[2] = 1;
+      this._fogTint[3] = 0;
+    }
 
     var u = this._skyUniforms;
     if (u) {
@@ -4252,6 +4589,14 @@
       u.uMode.value.w = MILKYWAY_LUM * SKY_SCALE;
       u.uHazeSun.value.set(this._fogSun[0], this._fogSun[1], this._fogSun[2]);
       u.uHazeSky.value.set(this._fogSky[0], this._fogSky[1], this._fogSky[2]);
+      // The dome's horizon haze is the same colour the fog chunk paints on
+      // geometry, so it takes the same two-lobe tint or the sky and the far
+      // field would disagree about their own hue at the skyline. Amount 0 for
+      // every existing caller.
+      if (u.uHazeTint) {
+        u.uHazeTint.value.set(this._fogTint[0], this._fogTint[1],
+          this._fogTint[2], this._fogTint[3]);
+      }
       if (u.uHazeGnd) {
         u.uHazeGnd.value.set(this._fogGnd[0], this._fogGnd[1], this._fogGnd[2]);
       }
@@ -4298,6 +4643,11 @@
         } else {
           u.uStorm.value.set(sf, STORM_COVER, STORM_DETAIL, this._windAngle);
         }
+        // Cleared here and re-filled by _pushOvercast, which returns
+        // immediately with no overcast - so a clear or storm sky always sees
+        // (0,0,0,0) and every expression that reads it takes the branch or the
+        // literal fallback it had before this uniform existed.
+        if (u.uOverC) u.uOverC.value.set(0, 0, 0, 0);
         if ((sf > 0 || ovf > 0) && this._stormTex && u.uStormTex) {
           u.uStormTex.value = this._stormTex;
         }
@@ -4372,7 +4722,19 @@
         vo ? 0.0 : OVER_BAND);
     }
     if (u.uOverB) {
-      u.uOverB.value.set(vo ? 0.0 : OVER_CELL, this._overSunP || OVER_SUN_P, 1.0, 0.0);
+      u.uOverB.value.set(vo ? 0.0 : OVER_CELL, this._overSunP || OVER_SUN_P, 1.0,
+        vo ? 0.0 : OVER_SQUALL_TINT);
+    }
+    if (u.uOverC) {
+      // Turbidity, remapped across the useful range. snowbound's 0.09 lands
+      // 0.875 (a dense band reaching ~25 degrees), jungle's 0.07 lands 0.625,
+      // a clean alpine 0.02 lands 0. One expression, two very different skies.
+      var tf = M.saturate((MIE_AOD - OVER_TURB_LO) / OVER_TURB_SPAN);
+      u.uOverC.value.set(
+        vo ? 0.0 : OVER_SQUALL,
+        vo ? 3.2 : OVER_HORIZON_P,
+        vo ? 0.0 : M.lerp(OVER_BAND_FALL_LO, OVER_BAND_FALL_HI, tf),
+        vo ? 0.0 : M.lerp(OVER_BAND_K_LO, OVER_BAND_K_HI, tf));
     }
     if (u.uOverGnd) {
       var gb = vo ? 0 : this._overBounceRel * sc;
@@ -4781,10 +5143,65 @@
         this.setGroundAlbedo(GROUND_ALBEDO_BY_LEVEL[ctx.levelId]);
       }
 
+      // Peak solar elevation, in DEGREES. Must land BEFORE the time of day: the
+      // arc is what turns t into an elevation, so setting it afterwards would
+      // leave one generation of everything downstream built against the default
+      // 30-degree cap. Absent for every level that wants the art-directed arc,
+      // which is all of them but the noon one. See setSolarArc.
+      if (isFinite(env.sunElevation)) this.setSolarArc(env.sunElevation);
+      else if (env.solarArc) this.setSolarArc(env.solarArc);
+      // ?sunElev=66 on the capture URL, same contract as ?weather= above: a QA
+      // hook so a sun height can be photographed and graded before a level's
+      // profile is written, never a default. Wins over the profile deliberately
+      // - the point is to be able to override it from the command line.
+      if (GAME.params && GAME.params.sunElev != null) {
+        this.setSolarArc(parseFloat(GAME.params.sunElev));
+      }
+
       if (isFinite(env.timeOfDay)) {
         // setTimeOfDay short-circuits to _solar + _computeLightingTerms while
         // _built is false, which is exactly the pre-build behaviour wanted.
         this.setTimeOfDay(env.timeOfDay);
+      }
+
+      // Dust field. Landed before _makeDust runs (build() resolves the profile
+      // first), so the uniforms are seeded rather than written and rewritten.
+      if (isFinite(env.dustGain)) this.setDustGain(env.dustGain);
+      else if (env.dust) this.setDustGain(env.dust);
+      // ?dustGain=0.2&dustDown=0.85 - the same QA hook, same contract.
+      if (GAME.params) {
+        if (GAME.params.dustGain != null) {
+          this.setDustGain(parseFloat(GAME.params.dustGain));
+        }
+        if (GAME.params.dustDown != null) {
+          this.setDustGain({ downFade: parseFloat(GAME.params.dustDown) });
+        }
+      }
+
+      // Fog: the two-lobe inscatter tint, and any authored base parameter a
+      // level would otherwise have to reach for setFog() for. All optional and
+      // all inert when absent.
+      if (env.fog) this.setFog(env.fog);
+      if (env.fogTint != null) {
+        this.setFog({
+          tint: env.fogTint,
+          tintAmount: isFinite(env.fogTintAmount) ? env.fogTintAmount : 0.30
+        });
+      } else if (isFinite(env.fogTintAmount)) {
+        this.setFog({ tintAmount: env.fogTintAmount });
+      }
+      // ?fogTint=6b7ac0&fogTintAmount=0.35 - the same QA hook again, so a haze
+      // chromaticity can be photographed and graded before it is committed to a
+      // profile. Hex without the 0x, the way a colour is normally typed.
+      if (GAME.params && GAME.params.fogTint != null) {
+        var qh = parseInt(String(GAME.params.fogTint).replace(/^0x|^#/, ''), 16);
+        if (isFinite(qh)) {
+          this.setFog({
+            tint: qh,
+            tintAmount: (GAME.params.fogTintAmount != null)
+              ? parseFloat(GAME.params.fogTintAmount) : 0.30
+          });
+        }
       }
     } catch (e) { GAME.logError('sky.resolveEnvProfile', e); }
   };
@@ -5079,11 +5496,136 @@
     } catch (e) { GAME.logError('sky.setTurbidity', e); }
   };
 
-  /** Bulk-set fog parameters, e.g. sky.setFog({ density: 0.02 }). */
+  /**
+   * Bulk-set fog parameters, e.g. sky.setFog({ density: 0.02 }).
+   *
+   * Recognised keys: density, heightScale, baseY, startDistance, maxOpacity,
+   * mieG, glowGain, desaturate, enabled - plus the two-lobe tint:
+   *
+   *   sky.setFog({ tint: [0.42, 0.46, 0.72], tintAmount: 0.35 })
+   *
+   * `tint` is the chromaticity the ANTI-SUN lobe of the inscatter is pulled
+   * toward; the sunward lobe keeps the solar colour the atmosphere solved.
+   * Accepts [r,g,b] (linear), a THREE.Color, or a 0xRRGGBB integer. `tintAmount`
+   * is 0..1 and defaults to 0, which makes the whole thing inert - so market,
+   * harbor and every level that does not ask are bit-identical.
+   *
+   * The blend is LUMINANCE-PRESERVING. The level of the haze is a measured
+   * quantity (derived off the atmosphere, then capped against keyRef in
+   * _deriveAmbient so it can never out-brighten the brightest surface in frame)
+   * and a tint has no business moving it. `desaturate` remains the lever for
+   * pulling toward grey; this one pulls toward a colour, which is what a
+   * pre-sunrise sky actually scatters away from the sun.
+   *
+   * Never throws; an unreadable tint degrades to no tint.
+   */
   Sky.prototype.setFog = function (opts) {
-    if (!opts) return;
-    for (var k in opts) if (k in this.fog) this.fog[k] = opts[k];
-    this._pushUniforms();
+    try {
+      if (!opts) return;
+      for (var k in opts) if (k in this.fog) this.fog[k] = opts[k];
+      this._pushUniforms();
+    } catch (e) { GAME.logError('sky.setFog', e); }
+  };
+
+  /**
+   * Override the peak elevation of the day arc.
+   *
+   *   sky.setSolarArc({ maxElevDeg: 66 })   // high noon
+   *   sky.setSolarArc(66)                   // same thing
+   *
+   * The arc is an ART CHOICE, not an ephemeris (see the Solar/lunar geometry
+   * header): it is capped at 30 degrees so the whole daylight range keeps the
+   * long raking shadows ART_DIRECTION is built around. That is right for eight
+   * of the ten levels and fatal for the one whose entire premise is a brutal
+   * overhead sun - at 30 degrees the boneyard's shadows run 1.7x object height
+   * under a 4300 K raking key, i.e. the market's golden-hour lighting recipe
+   * re-dressed in a desert, which the roster lists as an instant fail.
+   *
+   * Per-instance and clamped, defaulting to exactly MAX_ELEV, so nothing a level
+   * does here can move market or harbor. At ~65 degrees shadows shorten to
+   * 0.4-0.5x height, the key neutralises through the existing extinction path
+   * (and the 4200 K nudge in _computeLightingTerms fades out above 30 degrees
+   * for the same reason), and the zenith lifts and desaturates on its own
+   * without anyone touching turbidity.
+   *
+   * A level's env profile can carry `sunElevation: 66` instead of calling this.
+   *
+   * Idempotent, safe before build(), and never throws.
+   *
+   * @param {Object|number} opts {maxElevDeg} or the number itself, in DEGREES.
+   */
+  Sky.prototype.setSolarArc = function (opts) {
+    try {
+      var deg = (typeof opts === 'number') ? opts
+        : (opts && isFinite(opts.maxElevDeg) ? opts.maxElevDeg
+          : (opts && isFinite(opts.maxElevation) ? opts.maxElevation : NaN));
+      if (!isFinite(deg)) return;
+      // 88 rather than 90: the LUT parameterises elevation as sign(y)*sqrt(|y|)
+      // and the azimuth-from-sun frame degenerates at the exact zenith, where
+      // every view ray has the same sun-relative azimuth and the horizon band
+      // would lose the one axis it is defined along.
+      var e = M.clamp(deg, 3.0, 88.0) * M.DEG;
+      if (Math.abs(e - this._maxElev) < 1e-6) return;
+      this._maxElev = e;
+      // Re-derive the geometry the arc feeds. setTimeOfDay does exactly the
+      // right thing at every stage of the lifecycle: before build() it lands
+      // the sun and returns, after it rebuilds the LUT, the ambient, the fog
+      // colours and the probe - and only when the sun has actually moved.
+      this.setTimeOfDay(this.timeOfDay);
+    } catch (e) { GAME.logError('sky.setSolarArc', e); }
+  };
+
+  /**
+   * Turn the floating dust-mote field down, off, or make it background-aware.
+   *
+   *   sky.setDustGain(0.20)
+   *   sky.setDustGain({ gain: 0.20, downFade: 0.85 })
+   *   sky.setDustGain(0)                       // off entirely
+   *
+   * WHY THIS IS A LEVEL-FACING CONTROL. The field is a SHAFT INDICATOR: it is
+   * shadow-tested against cascade 0 and faded out on rising rays, because "a
+   * mote is only ever visible against something darker than itself" and a rising
+   * ray is the cheap depth-free proxy for "this speck is about to sit on the
+   * sky". That proxy is written for a camera standing in a street. A level whose
+   * entire subject is 25 degrees BELOW the eye and whose background is bright
+   * depth haze 176 m down gets the full field at full alpha against the
+   * brightest thing in the frame - measured at 765-1441 hard white specks per
+   * frame on Meridian Tower, 11% of them chromatic enough to read as red/cyan
+   * confetti, and unambiguously as STARS where they crossed the twilight sky.
+   *
+   *   gain      multiplies the mote radiance. 1.0 default. 0.15-0.25 is the
+   *             right order for a level looking down at bright haze; 0 removes
+   *             the field from the frame without paying for it.
+   *   downFade  0..1, how hard a mote on a steeply DESCENDING ray is suppressed
+   *             (full by ~17 degrees below horizontal). 0 default. This is the
+   *             mirror image of the existing rising-ray guard and it is opt-in
+   *             because it is exactly wrong for a street, where the ground two
+   *             metres ahead is the darkest thing in frame.
+   *
+   * A level's env profile can carry `dustGain: 0.20` or
+   * `dust: {gain: 0.20, downFade: 0.85}` instead of calling this.
+   *
+   * Legal before build(), idempotent, and never throws.
+   *
+   * @param {Object|number} opts {gain, downFade} or the gain itself.
+   */
+  Sky.prototype.setDustGain = function (opts) {
+    try {
+      var g = NaN, dn = NaN;
+      if (typeof opts === 'number') g = opts;
+      else if (opts) {
+        if (isFinite(opts.gain)) g = opts.gain;
+        else if (isFinite(opts.value)) g = opts.value;
+        if (isFinite(opts.downFade)) dn = opts.downFade;
+      }
+      if (isFinite(g)) this._dustGain = M.clamp(g, 0.0, 4.0);
+      if (isFinite(dn)) this._dustDown = M.saturate(dn);
+      var du = this._dustUniforms;
+      if (du) {
+        if (du.uGain) du.uGain.value = this._dustGain;
+        if (du.uDownFade) du.uDownFade.value = this._dustDown;
+      }
+    } catch (e) { GAME.logError('sky.setDustGain', e); }
   };
 
   /**

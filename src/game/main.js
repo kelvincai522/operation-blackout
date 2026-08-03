@@ -116,6 +116,12 @@
       level: 'LevelBoneyard', props: 'PropsBoneyard',
       defaultScenario: 'lv_hero1',
       env: {
+        // Peak solar elevation, in degrees. The shared arc is capped at 30 so
+        // every other level keeps ART_DIRECTION's long raking shadows; this is
+        // the one level whose premise is a brutal overhead sun, and at 30 its
+        // shadows run 1.7x object height - the market's golden hour re-dressed
+        // in a desert. Per-instance in sky.js, so market and harbor cannot move.
+        sunElevation: 66,
         timeOfDay: 0.50, sky: 'clear', weather: 'clear', turbidity: 0.035,
         grade: 'bleach', exposure: 0.0, lightRig: 'sun', interior: false
       }

@@ -207,10 +207,26 @@
     //   lens 0.06               - flakes melt on a warm front element, but a
     //                             lens full of water is a storm effect and this
     //                             is not that. Near zero, not zero.
+    //   shelter 'anchors'       - IT DOES NOT SNOW INDOORS. A stone nave with a
+    //                             shell hole in the roof is this level's one
+    //                             interior, and it shipped standing in the
+    //                             blizzard: the roof mask's two sources are an
+    //                             explicit publication (this level makes none)
+    //                             and AXIS-ALIGNED box colliders (a church at
+    //                             0.06 rad with 0.42 m wall boxes matches
+    //                             neither the rotation test nor the 1 m minimum
+    //                             extent), so the mask came back empty and every
+    //                             volume rained through the roof. This opts the
+    //                             preset into deriving shelter from the anchor
+    //                             contract every level already satisfies, and
+    //                             apertures from the downward light shafts it
+    //                             already publishes. Opt-in per preset, so the
+    //                             harbor's storm and the delta's drizzle keep
+    //                             the masks they shipped with.
     blizzard: {
       rain: 0.0, snow: 1.0, wetness: 0.10, wind: 13.0, gust: 5.5, fog: 0.026,
       lightning: 0, mist: 0.0, spray: 0.0, lens: 0.06,
-      haze: 1.0, drift: 1.0, kind: 'snow',
+      haze: 1.0, drift: 1.0, kind: 'snow', shelter: 'anchors',
       look: {
         adaptive: true, ref: [0.60, 0.64, 0.72], refFloor: 0.30, refCeil: 1.70,
         // The flake core sits 62% above the veil it falls through and the halo
@@ -936,6 +952,14 @@
     'uniform float uTime;',
     'uniform float uSize;',
     'uniform float uStretch;',
+    // Effective shutter, in SECONDS. See the MOTION STREAK block below: this is
+    // the single number that turns a flake from a disc into a dash, and it is a
+    // time, not a taste multiplier, so the same value is right on every layer.
+    'uniform float uStreakSec;',
+    // 0 = a streak is as opaque per-pixel as the disc it came from (a light
+    // painter), 1 = full energy conservation (a pure occluder smeared over its
+    // own path). Snow is somewhere between the two.
+    'uniform float uMotionDim;',
     'uniform float uFlutter;',
     'uniform float uPixelScale;',
     'uniform float uMinPx;',
@@ -959,6 +983,7 @@
     'varying vec3 vCol;',
     'varying float vAlpha;',
     'varying float vViewZ;',
+    'varying float vAspect;',
     'void main() {',
     '  vUv = uv;',
     '  float sp = aRand.y;',
@@ -989,7 +1014,19 @@
     '  float vl = length(vdir);',
     '  vdir = vl > 1e-5 ? vdir / vl : vec3(0.0, -1.0, 0.0);',
     '  vec3 toEye = normalize(-vp.xyz);',
-    '  vec3 side = cross(vdir, toEye);',
+    '  // THE STREAK AXIS LIVES IN THE SCREEN PLANE, not along the raw view-space',
+    '  // velocity. Stretching along the velocity itself works right up until the',
+    '  // wind blows down the view ray, at which point the quad extends along -Z,',
+    '  // projects to nothing, and the whole field thins out exactly when you turn',
+    '  // to look downwind. Projecting the velocity onto the plane perpendicular',
+    '  // to the eye ray gives the correct direction AND, through its length,',
+    '  // the correct foreshortening: `pl` is sin(angle between wind and view),',
+    '  // so a flake coming straight at the lens streaks by zero and prints as a',
+    '  // dot, which is what it actually looks like.',
+    '  vec3 vperp = vdir - toEye * dot(vdir, toEye);',
+    '  float pl = length(vperp);',
+    '  vec3 axis = pl > 1e-4 ? vperp / pl : vec3(0.0, 1.0, 0.0);',
+    '  vec3 side = cross(axis, toEye);',
     '  float sl = length(side);',
     '  side = sl > 1e-4 ? side / sl : vec3(1.0, 0.0, 0.0);',
     '',
@@ -1005,11 +1042,30 @@
     '  // survive one pixel must carry a quarter of the opacity or the far field',
     '  // turns into a grey wash.',
     '  float subpix = clamp(want / max(rad, 1e-5), 0.30, 1.0);',
-    '  // Snow barely streaks - that is the point - but at 13 m/s the near layer',
-    '  // does travel a couple of its own diameters per frame, and a perfectly',
-    '  // round near flake in a gale reads as floating ash.',
+    '  // ---- THE MOTION STREAK -------------------------------------------------',
+    '  // The received wisdom in the block comment above - "it is a SHAPE on film',
+    '  // and not a dash" - is true of a 0.9 m/s flake in still air and false of',
+    '  // this preset. Kirovsk Pass declares 13 m/s of wind. Over a 1/110 s',
+    '  // exposure that flake travels 0.12 m; the flake itself is 20-50 mm across.',
+    '  // It is a dash five times its own width, and drawing it as a disc is what',
+    '  // made three framings come back reading as dirt on the lens.',
+    '  //',
+    '  // So the half-length is the RADIUS PLUS HALF THE DISTANCE TRAVELLED, in',
+    '  // world metres, not a multiplier on the radius. That is the difference',
+    '  // that matters: a multiplier scales with flake size, so the big flakes',
+    '  // stay fat blobs and the small ones stay dots. Travel scales with SPEED,',
+    '  // so every flake in a gale is a streak and every flake in still air is a',
+    '  // dot, and the same shader reads correctly for both. uStretch stays as',
+    '  // the per-layer aspect bias on top of it.',
+    '  //',
+    '  // `vl` is the per-flake speed (the ws/sp shear is already in uVel), and',
+    '  // `pl` foreshortens it against the view ray, so nothing here needs a',
+    '  // second angle term.',
     '  float stretch = 1.0 + uStretch * (0.55 + 0.90 * sp);',
-    '  vp.xyz += vdir * (position.y * rad * 2.0 * stretch) + side * (position.x * rad * 2.0);',
+    '  float travel = vl * uStreakSec * pl;',
+    '  float halfL = rad * stretch + travel * 0.5;',
+    '  vAspect = halfL / max(rad, 1e-5);',
+    '  vp.xyz += axis * (position.y * halfL * 2.0) + side * (position.x * rad * 2.0);',
     '  gl_Position = projectionMatrix * vp;',
     '  vViewZ = dist;',
     '',
@@ -1025,6 +1081,15 @@
     '  a *= exp(-dist * uFogSigma * 0.75);',
     '  a *= uSnow * uGain * (0.55 + 0.70 * aRand.z);',
     '  a *= subpix;',
+    '  // A REAL SHUTTER SPREADS THE SAME FLAKE OVER MORE PIXELS. A streak five',
+    '  // times its own width covers each pixel on its path for a fifth of the',
+    '  // exposure, so full energy conservation is a 1/aspect dim. Full',
+    '  // conservation is also too much here - the flake is an OVER composite',
+    '  // against a whiteout, not an emitter, and at 1/5 alpha the near field',
+    '  // stops existing - so uMotionDim is the exponent and 0.55 is roughly',
+    '  // half the dim, which keeps the total ink on the frame near constant',
+    '  // while the shape changes from blob to dash.',
+    '  a *= pow(max(1.0 / max(vAspect, 1.0), 1e-3), uMotionDim);',
     '  // Squall curtains travelling downwind, world-anchored, so the density',
     '  // surges through the valley instead of the whole field dimming at once.',
     '  float sheet = 0.5 + 0.5 * cos(6.2831853 * (dot(wp.xz, uSheetDir) * 0.021 + uSheetPhase));',
@@ -1051,13 +1116,29 @@
     'uniform vec3 uRimCol;',
     'uniform float uRim;',
     'uniform vec2 uCoreR;',
+    // Where the body's falloff STARTS, as a fraction of the half-width. 0.0 is
+    // the original behaviour - a gradient across the entire disc, i.e. a flake
+    // that is out of focus by construction. See the block below.
+    'uniform float uEdge;',
+    // Width of the dark rim band, inward from uCoreR.y.
+    'uniform float uRimW;',
     'varying vec2 vUv;',
     'varying vec3 vCol;',
     'varying float vAlpha;',
     'varying float vViewZ;',
+    'varying float vAspect;',
     'void main() {',
     '  vec2 p = vUv * 2.0 - 1.0;',
-    '  float r = length(p);',
+    '  // A CAPSULE, NOT AN ELLIPSE. Scaling a disc along the streak axis gives',
+    '  // an ellipse, whose width tapers to nothing at both ends, so a 5:1 streak',
+    '  // reads as a lens flare rather than as a flake dragged sideways. Mapping',
+    '  // the quad into half-width units and measuring distance to a SEGMENT',
+    '  // gives constant width down the body with round caps - which is what a',
+    '  // shutter actually integrates: the same disc at every point on its path.',
+    '  float asp = max(vAspect, 1.0);',
+    '  vec2 q = vec2(p.x, p.y * asp);',
+    '  q.y = max(abs(q.y) - (asp - 1.0), 0.0);',
+    '  float r = length(q);',
     '  if (r > 1.0) discard;',
     '  // A BRIGHT BODY WITH A DARK RIM, and the balance between the two is the',
     '  // whole ballgame. See the block comment above SNOW_VERT for why a flake',
@@ -1078,9 +1159,17 @@
     '  // job it is there for: giving the flake an edge against a background it',
     '  // cannot out-brighten. On a dark wall the rim is invisible and the body',
     '  // reads; on the whiteout the body clips into the sky and the rim reads.',
-    '  float disc = 1.0 - smoothstep(0.0, 1.0, r);',
+    '  // AND THE BODY HAS AN EDGE. smoothstep(0.0, 1.0, r) is a gradient across',
+    '  // the WHOLE radius: there is no solid part of the flake anywhere, and at',
+    '  // 15 px across that is indistinguishable from a defocused speck of grime',
+    '  // on the front element. Starting the falloff at uEdge leaves the inner',
+    '  // 60% at full coverage and spends the outer 40% on the antialiased edge -',
+    '  // which on a 4 px-wide streak is under a pixel of softness, i.e. an edge.',
+    '  // The defocus that a 3 cm object 60 cm from the lens genuinely has is',
+    '  // postfx\'s job and postfx already does it; doing it twice is the bug.',
+    '  float disc = 1.0 - smoothstep(uEdge, 1.0, r);',
     '  float ac = pow(disc, uCoreR.x) * vAlpha;',
-    '  float ring = smoothstep(uCoreR.y - 0.40, uCoreR.y, r) *',
+    '  float ring = smoothstep(uCoreR.y - uRimW, uCoreR.y, r) *',
     '               (1.0 - smoothstep(uCoreR.y, 1.0, r));',
     '  float ah = ring * vAlpha * uRim;',
     '  float a = ac + ah;',
@@ -1120,6 +1209,9 @@
     'uniform float uGain;',
     'uniform float uScroll;',
     'uniform vec3 uBaseCol;',
+    'uniform vec4 uRoofRect;',
+    'uniform float uRoofScale;',
+    'uniform sampler2D uRoofMap;',
     LIGHT_PARS,
     'varying vec2 vUv;',
     'varying vec3 vCol;',
@@ -1153,6 +1245,15 @@
     '  // Close enough to walk through, far enough to reach the middle distance.',
     '  a *= smoothstep(0.7, 4.0, dist) * (1.0 - smoothstep(28.0, 52.0, dist));',
     '  a *= uGain * (0.45 + 0.90 * aRand.z);',
+    '  // Blowing snow is snow that has already landed, so it stops at the door',
+    '  // like everything else. Standing inside the nave the cards are at floor',
+    '  // level and mostly occluded, but "mostly" is how the flakes got in too.',
+    '  vec2 ruv = (world.xz - uRoofRect.xy) * uRoofRect.zw;',
+    '  float roofY = 0.0;',
+    '  if (ruv.x > 0.0 && ruv.x < 1.0 && ruv.y > 0.0 && ruv.y < 1.0) {',
+    '    roofY = texture2D(uRoofMap, ruv).r * uRoofScale;',
+    '  }',
+    '  a *= 1.0 - step(0.5, roofY) * step(world.y + 0.05, roofY);',
     '  vAlpha = a;',
     '  vScroll = uScroll * aRand.w + aBase.w;',
     '  vCol = uBaseCol + gbSampleLights(world) * 0.25;',
@@ -1760,7 +1861,7 @@
         // points - because this.rng is a single stream and reordering it would
         // move every drip edge and every splash in a shipped level.
         var wp = PRESETS[want];
-        this._buildRoofMask(ctx);
+        this._buildRoofMask(ctx, wp);
         this._roofBuilt = true;
         if (wp.rain > 0.001) {
           this._buildRain();
@@ -1818,7 +1919,7 @@
   Weather.prototype._ensureResources = function (ctx, p) {
     if (!p) return;
     try {
-      if (!this._roofBuilt) { this._buildRoofMask(ctx); this._roofBuilt = true; }
+      if (!this._roofBuilt) { this._buildRoofMask(ctx, p); this._roofBuilt = true; }
       if (p.rain > 0.001 && !this.layers.length) {
         this._buildRain();
         this._buildSplash();
@@ -2130,11 +2231,12 @@
   // and far away entirely, and without near flakes its wall photographs in
   // clear air.
   //
-  // `sz` * aRand.x (0.5-2.4) is 11-53 mm on the near layer down to 7-36 mm on
-  // the far one. Real wet aggregates in a warm blizzard reach 25 mm, so this
-  // flatters the biggest flakes about twice - which is the same allowance the
-  // rain streaks take, and for the same reason: a shape has to beat the resolve
-  // before it can beat the tone curve.
+  // `sz` * aRand.x (0.5-2.4) is 7-36 mm on the near layer down to 5-26 mm on
+  // the far one - i.e. the WIDTH of the streak, since the length now comes from
+  // the shutter below. Real wet aggregates in a warm blizzard reach 25 mm, so
+  // the biggest are still flattered a little; they were flattered twice as much
+  // before the streak existed, because a disc has to be fat to beat the resolve
+  // and a dash does not.
   //
   // `fl` is the tumble amplitude in metres. It GROWS with distance on purpose:
   // the meander has to stay perceptible in SCREEN space, and a 30 cm excursion
@@ -2152,7 +2254,10 @@
   // wall. So the body was never failing - the edge was simply louder than it,
   // because a thin dark ring on a light field is a far stronger signal to the
   // eye than a diffuse light disc on it. The brief asks for a SUBTLE dark rim
-  // and 0.34 is subtle; 0.90 is an outline, and an outline is a cartoon.
+  // and 0.30 is subtle; 0.90 is an outline, and an outline is a cartoon.
+  // It came down again with the streak, along with `rw`: on a long thin capsule
+  // the rim is a full-length edge rather than a ring at one radius, so the same
+  // coverage buys a great deal more dark pixels than it used to.
   //
   // DENSITY WAS THE FIRST THING MEASURED AND THE FIRST THING WRONG. At
   // 900/1500/1900 the mid volume held 0.054 flakes per cubic metre against the
@@ -2162,22 +2267,62 @@
   // same either way: MORE and SMALLER, not fewer and bigger. The counts are up
   // ~70% and every base size is down ~15%, which costs 5k triangles and buys a
   // field that reads as a curtain instead of as a handful of objects.
+  // --------------------------------------------------------------------------
+  // ROUND DISCS -> WIND-DRIVEN STREAKS. Three fields carry the change and all
+  // three are per-layer so the far field, which genuinely cannot streak, is
+  // left alone:
+  //
+  //   `ss`  effective shutter, SECONDS. halfLength = radius + speed*ss/2. At the
+  //         preset's 13 m/s a near flake gains 0.06 m of half-length against a
+  //         10-25 mm radius, which is the 4-6:1 dash a blizzard actually prints.
+  //         One number, one unit, and it is a time - so if a future preset drops
+  //         the wind to 2 m/s the same value stops streaking on its own.
+  //   `ed`  where the body's falloff starts, in half-widths. This is the one
+  //         that fixes "semi-transparent blobs at varying blur radii": 0.0 (the
+  //         old fixed behaviour) is a gradient across the whole flake, i.e. no
+  //         solid pixel anywhere. 0.58-0.62 near, easing to 0.30 far, where a
+  //         flake is 1-2 px and softness is all that is holding it together.
+  //   `md`  motion-dim exponent, energy conservation against the streak (see
+  //         SNOW_VERT). Only the layers that actually streak carry it.
+  //
+  // `mx` COMES DOWN WITH IT, and has to. The pixel ceiling was 18 near / 16 on
+  // the viewmodel volume, i.e. flakes up to 36 px ACROSS - which is what the
+  // critique measured at "15+ px" and read as dust bunnies. A streak wants to
+  // be long, not fat; the length now comes from `ss` and the width is capped at
+  // a believable 7-8 px. `sz` comes down ~20% with it, walking back some of the
+  // 2x size flattery the comment above admits to, because a dash reads at a
+  // smaller width than a disc does.
+  //
+  // `rw` is the rim band width (was a fixed 0.40). On a streak the rim is an
+  // OUTLINE along a long thin body rather than an annulus in a disc, so it wants
+  // to be narrow or it eats the body it is supposed to be edging.
+  // --------------------------------------------------------------------------
   var SNOW_LAYER_DEFS = [
-    { n: 'near', c: 2000, b: [12, 11, 12], f: 1.05, w: 1.00, sz: 0.019, mn: 2.00, mx: 18,
-      st: 0.55, fl: 0.30, cr: [1.15, 0.86], rim: 0.34, nf: 0.55, ff: 14, g: 0.85, ro: 13 },
-    { n: 'mid',  c: 3400, b: [34, 24, 34], f: 0.92, w: 0.95, sz: 0.015, mn: 1.55, mx: 14,
-      st: 0.34, fl: 0.75, cr: [1.05, 0.88], rim: 0.22, nf: 0.90, ff: 36, g: 0.72, ro: 12 },
-    { n: 'far',  c: 4000, b: [80, 46, 80], f: 0.78, w: 0.86, sz: 0.012, mn: 1.15, mx: 9,
-      st: 0.14, fl: 1.60, cr: [0.95, 0.90], rim: 0.09, nf: 2.00, ff: 88, g: 0.55, ro: 11 }
+    { n: 'near', c: 2000, b: [12, 11, 12], f: 1.05, w: 1.00, sz: 0.015, mn: 2.00, mx: 8,
+      st: 0.35, ss: 0.0105, md: 0.55, ed: 0.60, rw: 0.20,
+      fl: 0.30, cr: [1.15, 0.90], rim: 0.30, nf: 0.55, ff: 14, g: 0.85, ro: 13 },
+    { n: 'mid',  c: 3400, b: [34, 24, 34], f: 0.92, w: 0.95, sz: 0.013, mn: 1.55, mx: 7,
+      st: 0.22, ss: 0.0100, md: 0.50, ed: 0.48, rw: 0.26,
+      fl: 0.75, cr: [1.05, 0.90], rim: 0.20, nf: 0.90, ff: 36, g: 0.72, ro: 12 },
+    { n: 'far',  c: 4000, b: [80, 46, 80], f: 0.78, w: 0.86, sz: 0.011, mn: 1.15, mx: 6,
+      st: 0.14, ss: 0.0060, md: 0.35, ed: 0.30, rw: 0.34,
+      fl: 1.60, cr: [0.95, 0.90], rim: 0.09, nf: 2.00, ff: 88, g: 0.55, ro: 11 }
   ];
 
   // The fourth volume, in ctx.viewScene. Same reason the rain has one: postfx
   // composites the viewmodel over the world with a cleared depth buffer, so
   // nothing in ctx.scene can ever draw in front of the weapon and the player
   // would otherwise be standing in a blizzard inside a dry bubble.
+  //
+  // Its shutter is SHORTER than the world layers' and deliberately so. This
+  // volume is 2.6 m across, so its flakes sit 0.3-1.5 m from the lens where the
+  // same 0.12 m of travel is 50-100 px of streak; that is geometrically honest
+  // and compositionally a set of white bars across the weapon. 1/220 s keeps
+  // them clearly driven without letting the nearest volume own the frame.
   var VIEW_SNOW_DEF = {
-    n: 'view', c: 300, b: [2.6, 2.2, 2.6], f: 1.00, w: 1.00, sz: 0.013, mn: 1.60, mx: 16,
-    st: 0.45, fl: 0.10, cr: [1.15, 0.86], rim: 0.34, nf: 0.06, ff: 2.5, g: 0.90, ro: 3
+    n: 'view', c: 300, b: [2.6, 2.2, 2.6], f: 1.00, w: 1.00, sz: 0.009, mn: 1.60, mx: 7,
+    st: 0.30, ss: 0.0058, md: 0.60, ed: 0.58, rw: 0.20,
+    fl: 0.10, cr: [1.15, 0.90], rim: 0.30, nf: 0.06, ff: 2.5, g: 0.90, ro: 3
   };
 
   Weather.prototype._buildSnow = function () {
@@ -2223,6 +2368,13 @@
         uTime: U.uTime,
         uSize: { value: D.sz },
         uStretch: { value: D.st },
+        // Every one of these reads its default through isFinite, so a layer def
+        // that predates the streak - or a future one that wants the old discs
+        // back - gets exactly the geometry it had before: uStreakSec 0 removes
+        // the travel term, uMotionDim 0 removes the dim, uEdge 0 restores the
+        // full-radius gradient and uRimW 0.40 restores the original band.
+        uStreakSec: { value: isFinite(D.ss) ? D.ss : 0 },
+        uMotionDim: { value: isFinite(D.md) ? D.md : 0 },
         uFlutter: { value: D.fl },
         uPixelScale: U.uPixelScale,
         uMinPx: { value: D.mn },
@@ -2238,6 +2390,8 @@
         uRimCol: { value: this._snowRim.clone() },
         uRim: { value: D.rim },
         uCoreR: { value: new THREE.Vector2(D.cr[0], D.cr[1]) },
+        uEdge: { value: isFinite(D.ed) ? D.ed : 0 },
+        uRimW: { value: isFinite(D.rw) ? D.rw : 0.40 },
         uSheetDir: U.uSheetDir,
         uSheetPhase: U.uSheetPhase,
         uRoofMap: U.uRoofMap,
@@ -2366,6 +2520,9 @@
         uGain: { value: 0 },
         uScroll: { value: 0 },
         uBaseCol: { value: this._driftCol.clone() },
+        uRoofMap: U.uRoofMap,
+        uRoofRect: U.uRoofRect,
+        uRoofScale: U.uRoofScale,
         uLightPos: U.uLightPos,
         uLightDir: U.uLightDir,
         uLightCol: U.uLightCol,
@@ -2684,22 +2841,110 @@
   // highest sheltering surface over this square metre" and the shader reads it.
   // Deterministic, one texel fetch, and it doubles as a free occlusion cull:
   // drops inside a solid container stack stop being drawn at all.
+  //
+  // WHAT IT COULD NOT EXPRESS, AND NOW CAN. Two gaps found by the Kirovsk Pass
+  // interior framing, where a blizzard fell through a solid stone nave:
+  //
+  //  1. EVERY SHELTER WAS AXIS-ALIGNED. The publication format is a world-AABB,
+  //     and the collider scan explicitly skips any collider whose quaternion is
+  //     not identity ("a rotated footprint's AABB is bigger than the footprint").
+  //     A village whose buildings all sit at their own yaw therefore has no way
+  //     to describe a single one of them: the AABB of a 9 x 14 m barn at 1.4 rad
+  //     covers 60% more ground than the barn does, and shrinking it enough to be
+  //     safe leaves a strip down the middle. Rects now carry an optional
+  //     rotation and the bake tests the point in the rect's own frame, so an
+  //     oriented building is described exactly rather than conservatively.
+  //  2. NOTHING DERIVED SHELTER FROM THE THING EVERY LEVEL ALREADY PUBLISHES.
+  //     A building with modelled walls does not need a roof COLLIDER - you
+  //     cannot walk on it - so the collider scan finds nothing, and the level
+  //     contract's answer to "where are the buildings" is `anchors`, not
+  //     colliders. `shelter: 'anchors'` on a preset turns on a derivation from
+  //     anchor SHAPE (centre + yaw + footprint + eave/ridge), which is data, not
+  //     a name: any anchor of that shape becomes a roof, and an anchor that is a
+  //     spawn point or a path is silently not one.
+  //
+  // Both are OPT-IN. Oriented rects only exist if a level publishes one, and the
+  // anchor derivation only runs for a preset that asks for it, which today is
+  // `blizzard` alone - so the harbor's mask is bit-identical to the one it
+  // shipped with and the market still never builds one at all.
   // --------------------------------------------------------------------------
-  Weather.prototype._buildRoofMask = function (ctx) {
+
+  // A shelter descriptor derived from an anchor, or null if this anchor is not
+  // a roofed building. Shape-matched, never name-matched:
+  //   centre/center : Vector3-ish, required
+  //   footprint     : nave{hw,hz} (half-extents) or w/d (full sizes)
+  //   height        : ridge preferred over eave - see the warehouse note below
+  //   yaw           : optional, defaults to axis-aligned
+  function shelterFromAnchor(a) {
+    if (!a || typeof a !== 'object') return null;
+    var c = a.centre || a.center;
+    if (!c || !isFinite(c.x) || !isFinite(c.z)) return null;
+    // THE RIDGE, NOT THE EAVE, for exactly the reason the warehouse block below
+    // gives: taking the eave leaves the volume inside the roof itself unmasked
+    // and precipitation draws through the trusses.
+    var top = isFinite(a.ridge) ? a.ridge : (isFinite(a.eave) ? a.eave : NaN);
+    if (!isFinite(top)) return null;
+    var hx, hz;
+    if (a.nave && isFinite(a.nave.hw) && isFinite(a.nave.hz)) {
+      hx = a.nave.hw; hz = a.nave.hz;
+    } else if (isFinite(a.w) && isFinite(a.d)) {
+      hx = a.w * 0.5; hz = a.d * 0.5;
+    } else {
+      return null;
+    }
+    // Conservative: the footprint an anchor publishes is the outside of the
+    // walls, and a mask that reaches past them puts a dry rectangle on the
+    // ground OUTSIDE the building, which is far more visible than a wet strip
+    // just inside it.
+    hx -= 0.45; hz -= 0.45;
+    if (!(hx > 0.35) || !(hz > 0.35)) return null;
+    var yaw = isFinite(a.yaw) ? a.yaw : 0;
+    return {
+      cx: c.x, cz: c.z, hx: hx, hz: hz, h: top + 0.4,
+      cos: Math.cos(yaw), sin: Math.sin(yaw),
+      x0: c.x - (hx + hz), x1: c.x + (hx + hz),
+      z0: c.z - (hx + hz), z1: c.z + (hx + hz)
+    };
+  }
+
+  Weather.prototype._buildRoofMask = function (ctx, preset) {
     try {
       var lvl = ctx && ctx.level;
       if (!lvl) return;
       var rects = [], holes = [];
       var i;
+      var auto = !!(preset && preset.shelter === 'anchors');
 
       // An explicit publication always wins.
       var pub = lvl.rainShelters;
       if (Array.isArray(pub)) {
         for (i = 0; i < pub.length; i++) {
           var ps = pub[i];
-          if (!ps || !isFinite(ps.x0) || !isFinite(ps.h)) continue;
+          if (!ps || !isFinite(ps.h)) continue;
+          // Oriented form: centre, half-extents and a yaw. Additive - the AABB
+          // form below is untouched and is still what every current publisher
+          // uses.
+          if (isFinite(ps.cx) && isFinite(ps.cz) && isFinite(ps.hx) && isFinite(ps.hz)) {
+            var pyaw = isFinite(ps.yaw) ? ps.yaw : 0;
+            var pr = ps.hx + ps.hz;
+            rects.push({
+              cx: ps.cx, cz: ps.cz, hx: ps.hx, hz: ps.hz, h: ps.h,
+              cos: Math.cos(pyaw), sin: Math.sin(pyaw),
+              x0: ps.cx - pr, x1: ps.cx + pr, z0: ps.cz - pr, z1: ps.cz + pr
+            });
+            continue;
+          }
+          if (!isFinite(ps.x0)) continue;
           rects.push({ x0: Math.min(ps.x0, ps.x1), x1: Math.max(ps.x0, ps.x1),
                        z0: Math.min(ps.z0, ps.z1), z1: Math.max(ps.z0, ps.z1), h: ps.h });
+        }
+      }
+      // A level may publish apertures directly alongside its shelters.
+      if (Array.isArray(lvl.roofHoles)) {
+        for (i = 0; i < lvl.roofHoles.length; i++) {
+          var rh = lvl.roofHoles[i];
+          if (!rh || !isFinite(rh.x) || !isFinite(rh.z)) continue;
+          holes.push({ x: rh.x, z: rh.z, r: isFinite(rh.r) ? rh.r : 2.0 });
         }
       }
 
@@ -2741,6 +2986,56 @@
           rects.push({ x0: ce.x - ex, x1: ce.x + ex, z0: ce.z - ez, z1: ce.z + ez, h: top });
         }
       }
+
+      // ---- ANCHOR-DERIVED SHELTER, opt-in per preset -------------------------
+      // Walks whatever `anchors` publishes, one level deep plus arrays, and
+      // keeps the entries whose SHAPE is a roofed building. No key is looked up
+      // by name, so a level gets its buildings sheltered by satisfying the
+      // documented anchor contract rather than by being special-cased here.
+      var autoN = 0;
+      if (auto && A && typeof A === 'object') {
+        var keys = Object.keys(A);
+        for (i = 0; i < keys.length; i++) {
+          var av = A[keys[i]];
+          if (!av || typeof av !== 'object') continue;
+          var list = Array.isArray(av) ? av : [av];
+          for (var j = 0; j < list.length; j++) {
+            var sh = shelterFromAnchor(list[j]);
+            if (sh) { rects.push(sh); autoN++; }
+          }
+        }
+        // ---- APERTURES FROM THE LIGHT SHAFTS ---------------------------------
+        // A level publishes `lightShafts` for the openings daylight comes
+        // through, and a DOWNWARD one is by definition a hole in a roof. Snow
+        // comes through the same hole the light does - that is the entire
+        // subject of the Kirovsk Pass interior framing - so the shaft list is
+        // exactly the aperture list, already authored, already positioned on
+        // geometry that really has a hole in it. Downward only: a shaft cast
+        // sideways through a window is not a hole in the roof.
+        var shafts = lvl.lightShafts;
+        if (Array.isArray(shafts)) {
+          for (i = 0; i < shafts.length; i++) {
+            var sf = shafts[i];
+            if (!sf || !sf.origin || !isFinite(sf.origin.x)) continue;
+            if (!sf.dir || !(sf.dir.y <= -0.70)) continue;
+            // `width` is the beam's cross-section AT the aperture, and the
+            // aperture is deliberately WIDER than that. A light shaft is a
+            // straight-sided cone because photons travel in straight lines;
+            // snow entering the same hole at 13 m/s does not. It arrives with
+            // horizontal momentum, hits the still air of the interior and
+            // fans - the plume under a shell hole is metres across by the time
+            // it reaches the floor, which is why the drift cone the level
+            // models under this hole is wider than the hole is. Beam plus 1.6 m
+            // is a conservative version of that, and it is also what makes the
+            // column READ: the mid volume carries 0.12 flakes per cubic metre,
+            // so a 2 m aperture holds about a dozen flakes over the whole
+            // 7 m drop and photographs as nothing at all.
+            var sw = isFinite(sf.width) ? sf.width : 2.4;
+            holes.push({ x: sf.origin.x, z: sf.origin.z, r: Math.max(1.4, sw * 0.5 + 1.6) });
+          }
+        }
+      }
+
       if (!rects.length) return;
 
       var minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
@@ -2753,7 +3048,14 @@
       }
       minX -= 3; maxX += 3; minZ -= 3; maxZ += 3;
       var spanX = Math.max(4, maxX - minX), spanZ = Math.max(4, maxZ - minZ);
+      // 128 is the shipped resolution and stays the shipped resolution: on the
+      // harbor it is 0.5 m per texel over one terminal. A village spread over
+      // 90 m of valley needs the same METRES per texel, not the same texel
+      // count, or a 10 m nave is 14 texels wide and its walls land wherever the
+      // grid happens to fall. Only the opt-in path can raise it, so no existing
+      // mask changes by a single byte.
       var S = 128;
+      if (autoN > 0) S = Math.max(128, Math.min(256, Math.ceil(Math.max(spanX, spanZ) / 0.40 / 32) * 32));
       var data = new Uint8Array(S * S * 4);
       var inv = 1 / this._roofScale;
       for (var gz = 0; gz < S; gz++) {
@@ -2764,6 +3066,18 @@
           for (i = 0; i < rects.length; i++) {
             var Q = rects[i];
             if (wx < Q.x0 || wx > Q.x1 || wz < Q.z0 || wz > Q.z1) continue;
+            // Oriented rects carry their own frame; the AABB above is only the
+            // broadphase for them. Untouched levels publish no `cos`, take the
+            // original comparison and bake identically.
+            if (Q.cos !== undefined) {
+              var dx = wx - Q.cx, dz = wz - Q.cz;
+              // The anchor convention in this project is x' = x*cos + z*sin,
+              // z' = -x*sin + z*cos (see every level's toWorld), so the inverse
+              // is the transpose of that.
+              var lx2 = dx * Q.cos - dz * Q.sin;
+              var lz2 = dx * Q.sin + dz * Q.cos;
+              if (Math.abs(lx2) > Q.hx || Math.abs(lz2) > Q.hz) continue;
+            }
             if (Q.h > best) best = Q.h;
           }
           if (best > 0) {
@@ -2790,7 +3104,14 @@
       this._roofSize = S;
       this._roofRect.set(minX, minZ, 1 / spanX, 1 / spanZ);
       this.uniforms.uRoofMap.value = tex;
-      this.roofMask = { texture: tex, origin: [minX, minZ], span: [spanX, spanZ], scale: this._roofScale };
+      // Published for anyone who wants to interrogate the bake without a
+      // capture: `auto` is how many shelters the anchor derivation found and
+      // `holes` how many apertures were punched, which is the pair that tells
+      // you whether a level's interior is masked at all.
+      this.roofMask = {
+        texture: tex, origin: [minX, minZ], span: [spanX, spanZ], scale: this._roofScale,
+        rects: rects.length, auto: autoN, holes: holes.length, res: S
+      };
     } catch (e) {
       GAME.logError('weather.roofMask', e);
     }
@@ -3055,6 +3376,23 @@
       u.uWidth.value = this.viewRain.def.wd * wm;
       u.uBlur.value = this.viewRain.def.bl * bm;
       u.uGain.value = this.viewRain.def.g * gm;
+    }
+
+    // ---- the SNOW dials, same identity-default rule --------------------------
+    // `flakeStreak` is a multiplier on the per-layer shutter and `flakeEdge` on
+    // the body hardness, so a future flurry preset (2 m/s, fat slow flakes) can
+    // take the streak back out from its own env profile without anyone editing
+    // the layer table. Absent on `blizzard`, so both evaluate to the identity
+    // and the table values stand as authored.
+    var sm = (L && isFinite(L.flakeStreak)) ? L.flakeStreak : 1.0;
+    var em = (L && isFinite(L.flakeEdge)) ? L.flakeEdge : 1.0;
+    var snows = this.snowLayers.slice();
+    if (this.viewSnow) snows.push(this.viewSnow);
+    for (i = 0; i < snows.length; i++) {
+      R = snows[i]; u = R.mat.uniforms;
+      if (!u.uStreakSec) continue;
+      u.uStreakSec.value = (isFinite(R.def.ss) ? R.def.ss : 0) * sm;
+      u.uEdge.value = M.clamp((isFinite(R.def.ed) ? R.def.ed : 0) * em, 0, 0.95);
     }
   };
 

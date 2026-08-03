@@ -2076,7 +2076,41 @@
     // ------------------------------------------------------------------------
     var lid = null, ldef = null;
     try { lid = ctx && ctx.levelId; ldef = ctx && ctx.levelDef; } catch (e) { /* no ctx */ }
-    this.wetEnabled = !!(lid === 'harbor' || (ldef && ldef.weather));
+
+    // ------------------------------------------------------------------------
+    // THE LEVELS 3-10 GATE.
+    //
+    // market and harbor carry `env: null` in main.js's LEVELS table - that is
+    // the documented marker for "legacy level, configures itself" and it is
+    // the ONLY thing the two frozen levels have in common that a level added
+    // later cannot accidentally acquire. Every filtering correction added
+    // below hangs off this flag, so both shipped levels emit byte-identical
+    // shader source and land on byte-identical program cache keys. The level
+    // id test is belt-and-braces: if anyone ever gives market or harbor an env
+    // profile, they still do not get the new code.
+    //
+    // This is a FILTERING gate, not a look gate. Nothing behind it changes art
+    // direction; it changes how the shading normal is band-limited against the
+    // pixel footprint, which is a correctness property every level wants and
+    // which levels 1-2 already got by other means (the market never runs a
+    // point light near-tangent to a normal-mapped wall; the harbor gets the
+    // same schedule through F.wet).
+    // ------------------------------------------------------------------------
+    this.declarative = !!(ldef && ldef.env) && lid !== 'market' && lid !== 'harbor';
+
+    // The weather half of the gate. `ldef.weather` is where the LEGACY levels
+    // declare a preset; levels 3-10 declare theirs inside `env` because
+    // main.js's applyEnv() reads it from there. The original expression only
+    // looked at the top-level field, so every declarative level came out with
+    // wetEnabled false no matter what preset it had asked weather.js for -
+    // which is not a subtle mis-tuning, it silently removes the whole wet
+    // contract from a level that is standing in a downpour. `clear` is
+    // excluded because weather.js treats `clear` as ABSENT (no geometry, no
+    // wetness, nothing added to the scene) and a level that asked for nothing
+    // must not pay for a wet program.
+    var envWeather = (ldef && ldef.env && ldef.env.weather) || null;
+    this.wetEnabled = !!(lid === 'harbor' || (ldef && ldef.weather) ||
+      (this.declarative && envWeather && envWeather !== 'clear'));
 
     // Shared uniform OBJECTS - one per concept for the whole library, exactly
     // like _time. Assigning the same object into every material's uniform set
@@ -2116,6 +2150,12 @@
   // #define, so it is a constant rather than a setting: the loop is unrolled
   // and the count uniform breaks out of it early.
   var FOAM_MAX = 6;
+
+  // Edge length of every family detail tile (see build() / _makeDetailNormal).
+  // Baked into the shader as a literal rather than passed as a uniform: it is
+  // the same number for all four families and it has to be, because the detail
+  // texel-density schedule reads it as a compile-time constant.
+  var DETAIL_TEXELS = 256;
 
   // The harbor's own material set, in the order the level asks for it. Public
   // so a consumer (or a test) can iterate the level-2 library without knowing
@@ -3630,6 +3670,53 @@
 
     var detailKind = opts.detailKind || def.detailKind || 'mineral';
 
+    // ---- LEVELS 3-10: base-normal texel-density LOD schedule ----------------
+    // The schedule itself (gbNrmTexels -> gbNLod -> gbNrmW + gbLodVar) was
+    // written for the harbor and gated on F.wet, which made a FILTERING
+    // correction look like a weather feature. It is not one: it band-limits the
+    // base normal map against the pixel footprint and hands the variance it
+    // removes back as roughness (the Toksvig identity). Every hard surface in
+    // the build wants it; only market and harbor are excluded, market because
+    // it is frozen and harbor because F.wet already gives it the same block.
+    //
+    // Gated on the same set of features `_patch` gates nsExpr on, so the
+    // uniform, the derivative pair and the log2 are only paid for by materials
+    // that will actually consume gbNrmW.
+    var lodNrmOn = !!(this.declarative && maps.normalMap && !wetOn &&
+      (triOn || detailOn || pomOn || wearOn || stochOn));
+
+    // ---- LEVELS 3-10: detail-tile texel-density schedule --------------------
+    // The detail layer had a DISTANCE fade (9-26 m) and no density term at all,
+    // which is the same mistake the base normal map made and it costs more,
+    // because the detail tile is the highest-frequency thing in the file: a
+    // 256-texel tile on a 5 cm period is 5120 texels per metre, so it is
+    // already minified 15x at three metres while `gbDetailFade` still says 1.0.
+    //
+    // What that produces is NOT primarily a normal artefact - measured on the
+    // bunker's beacon-lit dado, scaling gbDetailStrength from 1.0 to 0.35 moved
+    // Laplacian energy 0.2032 -> 0.2009 (nothing), while disabling the layer
+    // outright moved it to 0.1306 and cut isolated over-bright pixels from
+    // 4.34% to 1.91%. The difference between those two experiments is the
+    // CAVITY: gbDet.b multiplies albedo (x0.80-1.20), the AO term (x0.70-1.30)
+    // and the specular occlusion, so at full weight the layer is a 2:1
+    // multiplicative modulation of everything, at a spatial frequency the pixel
+    // grid cannot carry. On a surface the alarm beacon is already only just
+    // lifting off black, a 2:1 multiplier IS the burnt-cork crumble.
+    //
+    // So the schedule multiplies gbDetailFade, which every consumer of the
+    // layer already reads - normal, albedo cavity, AO, spec-occ, micro
+    // roughness and the polish crest all come down together, which is the only
+    // way this can stay physically coherent - and the variance it removes comes
+    // back as roughness on the same Toksvig identity the base map uses.
+    var lodDetOn = !!(this.declarative && detailOn);
+
+    // ---- LEVELS 3-10: grazing-footprint specular AA -------------------------
+    // Widens the specAA near-field throttle by how stretched the pixel
+    // footprint is on THIS surface rather than by view distance alone. See the
+    // gbAAd block in _fragmentShader for why distance alone is the wrong
+    // measure underground.
+    var microAAOn = !!this.declarative;
+
     // ---- second layer (see MaterialLibrary.blended) --------------------------
     var bw = (triOn && opts.blendWith && opts.blendWith.maps && opts.blendWith.maps.map)
       ? opts.blendWith : null;
@@ -3715,6 +3802,14 @@
       // position x tiles-per-metre, sampled with texture2D, which never sees
       // texture.repeat at all) - so one number serves both.
       nrmTexels: (maps.normalMap && maps.normalMap.image && maps.normalMap.image.width) || 512,
+      // LEVELS 3-10. The base-normal LOD schedule, decoupled from the weather.
+      // False on market and harbor, so neither emits a character it did not
+      // already emit (harbor reaches the identical block through F.wet).
+      lodNrm: lodNrmOn,
+      // LEVELS 3-10. The detail tile's own texel-density schedule.
+      lodDet: lodDetOn,
+      // LEVELS 3-10. Grazing-angle term on the specAA distance ramp.
+      microAA: microAAOn,
       // Specular AA only means anything where a normal map (or the detail /
       // meso layers) can put sub-pixel variation into the shading normal.
       specAA: (!!maps.normalMap || detailOn)
@@ -3777,6 +3872,12 @@
     // references to varyings that do not exist and the material would fail to
     // link - taking the frame with it. Disable rather than break.
     if (F.wet && !F.world) { F.wet = false; F.ripple = false; }
+    // Same defence for the two LEVELS 3-10 schedules. Both are pure filtering
+    // corrections, so switching one off degrades the image slightly; emitting a
+    // reference to a varying the caller has just disabled would fail to LINK
+    // and take the whole surface with it.
+    if (F.lodDet && (!F.detail || (F.worldDetail && !F.world))) F.lodDet = false;
+    if (F.lodNrm && !F.hasNormalMap) F.lodNrm = false;
     var anyShader = F.world || F.triplanar || F.detail || F.macro || F.parallax ||
       F.wear || F.translucent || F.hasRoughMap || F.wind || F.stochastic ||
       F.grounding || F.specAA || F.polish || F.premulSpec || F.wet || F.water ||
@@ -3912,6 +4013,9 @@
       // from the one it was tuned against, which is all of them.
       if (F.hasNormalMap) U.gbNrmTexels = { value: F.nrmTexels };
     }
+    // LEVELS 3-10: the same uniform, reached without the wet layer. F.lodNrm is
+    // false whenever F.wet is true, so this never double-declares.
+    if (F.lodNrm && F.hasNormalMap) U.gbNrmTexels = { value: F.nrmTexels };
     if (F.water) {
       var wt = null;
       try { wt = self._ensureWave(); } catch (e) { wt = null; }
@@ -3967,6 +4071,11 @@
       ck += '_Q' + (F.puddle > 0.01 ? 'p' : '') + (F.streak > 0.01 ? 's' : '') +
         (F.ripple ? 'r' : '');
     }
+    // LEVELS 3-10, appended for exactly the reason above: adding slots to the
+    // join would re-key every market material.
+    if (F.lodNrm) ck += '_L';
+    if (F.lodDet) ck += '_K';
+    if (F.microAA && F.specAA) ck += '_N';
     if (F.water) ck += '_Z';
 
     var obc = function (shader) {
@@ -4098,6 +4207,9 @@
         'uniform float gbDetailTile;', 'uniform float gbDetailScale;',
         'uniform float gbDetailRough;', 'uniform float gbDetailCav;');
       pars.push('vec4 gbDet = vec4( 0.5, 0.5, 0.5, 0.5 );');
+      // LEVELS 3-10 only. gbDetW is the texel-density weight the detail layer
+      // never had; gbDetVar is the variance it gives up, returned as roughness.
+      if (F.lodDet) pars.push('float gbDetW = 1.0;', 'float gbDetVar = 0.0;');
       pars.push(G_RNM, G_DETN);
       if (F.worldDetail || F.meso) pars.push(G_DETUV);
     }
@@ -4193,7 +4305,18 @@
     // identity - normal variance is mathematically extra roughness. Take only
     // the first half and the surface goes flat and plastic; take only the second
     // and the barcode is still there, just duller.
-    if (F.wet && F.hasNormalMap) {
+    //
+    // LEVELS 3-10. The block below is emitted for F.lodNrm as well, because the
+    // schedule is a filtering correction and not a weather feature - a dry
+    // refinery bund wall minified to a quarter of a texel per pixel shatters
+    // into exactly the same per-pixel speckle a dry container flank did, and
+    // for exactly the same reason. Measured on lv_hero3 before this was
+    // decoupled: Laplacian energy 0.172 on the bund wall against 0.037 on the
+    // level's own sky-grain floor, i.e. 4.6x, which reads as vermiculate
+    // popcorn rather than as concrete. F.lodNrm is false whenever F.wet is
+    // true, so the two never both fire and the emitted string is identical
+    // either way - the harbor is untouched and the market never reaches here.
+    if ((F.wet || F.lodNrm) && F.hasNormalMap) {
       pars.push('uniform float gbNrmTexels;',
         'float gbNLod = 0.0;',      // log2 texels per pixel, >= 0
         'float gbNrmW = 1.0;',      // base-normal amplitude schedule
@@ -4290,7 +4413,7 @@
     // the triplanar path (where the projection coordinate IS the uv) and on the
     // planar path (where three has already folded the repeat into vNormalMapUv)
     // without either having to know the other's scale.
-    if (F.wet && F.hasNormalMap) {
+    if ((F.wet || F.lodNrm) && F.hasNormalMap) {
       head.push('{');
       if (F.triplanar) {
         head.push('  vec3 gbNdX = dFdx( gbTP ) * gbNrmTexels;');
@@ -4363,9 +4486,39 @@
       // Sampled once here so albedo, roughness and the normal all see the same
       // texel. World projection where the surface is static: the detail layer
       // then sits at a fixed 3-6 cm no matter what UV scale the consumer used.
-      head.push(F.worldDetail
-        ? 'gbDet = texture2D( gbDetailNormal, gbDetProj( gbWP, gbWN ) * gbDetailScale );'
-        : 'gbDet = texture2D( gbDetailNormal, ( vNormalMapUv + gbUvShift ) * gbDetailTile );');
+      var gbDUvExpr = F.worldDetail
+        ? 'gbDetProj( gbWP, gbWN ) * gbDetailScale'
+        : '( vNormalMapUv + gbUvShift ) * gbDetailTile';
+      if (F.lodDet) {
+        // LEVELS 3-10. Same measurement as the base map's schedule, in the
+        // units this layer is actually addressed in. DETAIL_TEXELS is the tile
+        // edge and is a build-time constant, not a uniform, because every
+        // family tile is generated at the same size by _makeDetailNormal.
+        head.push('{');
+        head.push('  gbDet = texture2D( gbDetailNormal, ' + gbDUvExpr + ' );');
+        // NOT dFdx of the detail UV. gbDetProj is a HARD axis select on the
+        // world normal, so its screen-space derivative is meaningless wherever
+        // the dominant axis flips and near-degenerate on any 45-degree face -
+        // measured, that turned the schedule into a noise source in its own
+        // right (refinery hero3 bund: Laplacian 0.158 -> 0.211 and isolated
+        // over-bright pixels 0.028% -> 0.965%, i.e. the correction was worse
+        // than the artefact). The world-space pixel footprint is the same
+        // quantity, is continuous everywhere, and does not care which plane the
+        // projection happens to have picked.
+        head.push(F.worldDetail
+          ? '  float gbDpx = max( length( dFdx( gbWP ) ), length( dFdy( gbWP ) ) ) * gbDetailScale;'
+          : '  float gbDpx = max( length( dFdx( vNormalMapUv ) ), length( dFdy( vNormalMapUv ) ) ) * gbDetailTile;');
+        head.push('  float gbDLod = max( 0.0, log2( max( gbDpx * ' +
+          DETAIL_TEXELS.toFixed(1) + ', 1e-6 ) ) );');
+        // One free level for anisotropic filtering, exactly as the base map's
+        // schedule allows itself.
+        head.push('  gbDetW = 1.0 / ( 1.0 + max( gbDLod - 1.0, 0.0 ) * 0.62 );');
+        head.push('  gbDetVar = ( 1.0 - gbDetW ) * 0.085;');
+        head.push('  gbDetailFade *= gbDetW;');
+        head.push('}');
+      } else {
+        head.push('gbDet = texture2D( gbDetailNormal, ' + gbDUvExpr + ' );');
+      }
     }
     if (F.meso) {
       // Same tile, ~11x the period, offset so it does not correlate with the
@@ -4385,7 +4538,12 @@
       var d2uv = F.worldDetail
         ? 'gbDetProj( gbWP, gbWN ) * ( gbDetailScale * 1.55 )'
         : '( vNormalMapUv + gbUvShift ) * ( gbDetailTile * 1.55 )';
-      head.push('gbDet2W = ( 1.0 - smoothstep( gbDet2Range.x, gbDet2Range.y, gbViewDist ) ) * gbDetailStrength;');
+      // LEVELS 3-10: the near tier runs the SAME tile at 1.55x the frequency,
+      // so it is minified harder than the base tier at every distance and it
+      // needs the same weight. gbDetW is already the base tier's, which is the
+      // conservative choice - it under-corrects the near tier rather than over.
+      head.push('gbDet2W = ( 1.0 - smoothstep( gbDet2Range.x, gbDet2Range.y, gbViewDist ) ) * gbDetailStrength' +
+        (F.lodDet ? ' * gbDetW' : '') + ';');
       head.push('{');
       head.push('  vec2 gbU2r = ' + d2uv + ';');
       head.push('  vec2 gbU2 = vec2( gbU2r.y, - gbU2r.x ) + vec2( 0.531, 0.147 );');
@@ -4729,6 +4887,22 @@
         roughCode.push('roughnessFactor = min( 1.0, sqrt( roughnessFactor * roughnessFactor +' +
           ' gbLodVar * ( 1.0 - gbPud ) ) );');
       }
+    } else if (F.lodNrm && F.hasNormalMap) {
+      // LEVELS 3-10, DRY. The other half of the schedule. Without it the far
+      // field only goes flat and plastic; with it, the amplitude gbNrmW took
+      // out of the shading normal comes back as the broader, dimmer specular
+      // lobe it should have been in the first place. No puddle exemption on
+      // this path because there is no standing water on it.
+      roughCode.push('roughnessFactor = min( 1.0, sqrt( roughnessFactor * roughnessFactor +' +
+        ' gbLodVar ) );');
+    }
+    // LEVELS 3-10. The detail tile's half of the same identity. Separate from
+    // the block above because a material can have a detail layer and no normal
+    // map (and vice versa), and because on a wet declarative level the branch
+    // above is the wet one.
+    if (F.lodDet && F.detail) {
+      roughCode.push('roughnessFactor = min( 1.0, sqrt( roughnessFactor * roughnessFactor +' +
+        ' gbDetVar ) );');
     }
     // 0.035 is the market's floor and stays the market's floor. Standing water
     // is genuinely smoother than that - clamping a puddle to 0.035 broadens
@@ -4793,6 +4967,29 @@
     if (F.specAA) {
       brdf.push('{');
       brdf.push('  float gbAAd = smoothstep( 6.0, 20.0, gbViewDist );');
+      // ---- LEVELS 3-10: the near-field throttle is not a distance problem ---
+      // The throttle above assumes "near = fully resolved", which is true for
+      // a wall the camera faces and false for every floor, dado and catwalk
+      // grating it looks ALONG. At 75 degrees of incidence one pixel covers
+      // four times the surface it covers head-on, so the map is minified in
+      // one axis while gbViewDist still says "hero range" and the ceiling stays
+      // pinned at 0.06 - which is how a 2 m concrete pit wall raked by a point
+      // light ends up as isolated maxima of 0.771 sitting on a p50 of 0.042
+      // with 62.9% of the lit region below L=0.05. That is not a surface, it is
+      // glitter on tarmac, and underground there is no indirect term to fill
+      // the gaps between the hits.
+      //
+      // So the ramp takes the WORSE of distance and footprint stretch. Squared,
+      // because 1-|NoV| is already 0.29 at a perfectly ordinary 45 degrees and
+      // only real raking should lift the ceiling. It is still multiplied by the
+      // measured variance gbNv, so this cannot touch a surface whose normals
+      // are smooth - a wet floor's long specular smear comes from the low-
+      // variance texels and survives; the high-variance texels that were
+      // sequins get the broader lobe they should always have had.
+      if (F.microAA) {
+        brdf.push('  float gbAAg = 1.0 - abs( dot( normal, normalize( vViewPosition ) ) );');
+        brdf.push('  gbAAd = max( gbAAd, gbAAg * gbAAg );');
+      }
       brdf.push('  vec3 gbNdx = dFdx( normal ), gbNdy = dFdy( normal );');
       brdf.push('  float gbNv = max( dot( gbNdx, gbNdx ), dot( gbNdy, gbNdy ) );');
       // COLD HARBOR. The near-field throttle above (0.28x strength, 0.06
@@ -4914,6 +5111,14 @@
       // both the physical answer and the one that keeps a wet apron reading as
       // an apron instead of as a sheet of black glass.
       if (F.wet) nsExpr = '( ' + nsExpr + ' * mix( 0.26, 1.0, gbWetND ) * gbNrmW )';
+      // LEVELS 3-10, DRY. Same schedule, without the water film's own levelling
+      // factor - there is no film. `* gbNrmW` alone is the mip taper the base
+      // map never had: at one texel per pixel it is exactly 1.0, so a hero-range
+      // wall keeps every bit of the relief it has now, and it only starts to
+      // bite past two texels per pixel where the map is genuinely under-sampled
+      // and the amplitude is aliasing rather than describing anything. The
+      // variance comes straight back as roughness below.
+      else if (F.lodNrm) nsExpr = '( ' + nsExpr + ' * gbNrmW )';
       if (F.triplanar) {
         nrmCode.push('#ifdef USE_NORMALMAP_TANGENTSPACE');
         nrmCode.push('  vec3 gbNw = gbTriNormal( normalMap, gbTP, gbWN, gbTW, 1.0, ' + nsExpr + ' );');
