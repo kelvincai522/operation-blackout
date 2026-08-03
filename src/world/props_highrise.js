@@ -2053,13 +2053,34 @@
 
   // A ribbon pinned along its top edge, for anything the wind gets hold of.
   // Local space: x across [-w/2, w/2], y from 0 (the pin) down to -h.
-  function ribbonG(w, h, nx, ny, u0, v0, u1, v1) {
+  // `sag` bakes a catenary into the base positions and tears the two ends.
+  //
+  // Stretched barrier tape does not run dead straight and it does not end in a
+  // machine-cut square: it drops 60-120 mm between posts and the ends are torn,
+  // dirty and twisted round whatever they were tied to. Both used to be left
+  // entirely to the wind animation, which means a capture taken at a moment of
+  // low gust photographed a ruler-straight vinyl ribbon glued across the frame -
+  // and that ribbon runs through the lower third of two published framings.
+  function ribbonG(w, h, nx, ny, u0, v0, u1, v1, sag) {
     var pos = [], nrm = [], uv = [], idx = [];
     var i, j;
     for (j = 0; j <= ny; j++) {
       for (i = 0; i <= nx; i++) {
         var fx = i / nx, fy = j / ny;
-        pos.push((fx - 0.5) * w, -fy * h, 0);
+        var dy = 0, dz = 0;
+        if (sag) {
+          // catenary, plus a slow twist so the tape shows its back somewhere
+          dy = -Math.sin(fx * Math.PI) * sag;
+          dz = Math.sin(fx * Math.PI * 1.7 + 0.6) * sag * 0.35;
+          // the torn ends: the last 6% of the run frays and narrows
+          var endT = Math.max(0, 1 - Math.min(fx, 1 - fx) / 0.06);
+          if (endT > 0) {
+            var frayed = (Math.sin(fx * 813.7 + fy * 41.3) * 0.5 + 0.5);
+            dy += endT * (fy - 0.5) * h * 0.55 * (0.4 + frayed);
+            dz += endT * (frayed - 0.5) * h * 0.9;
+          }
+        }
+        pos.push((fx - 0.5) * w, -fy * h + dy, dz);
         nrm.push(0, 0, 1);
         uv.push(u0 + (u1 - u0) * fx, v1 + (v0 - v1) * fy);
       }
@@ -2177,13 +2198,27 @@
     var ply = new PB();
     var h = tall === undefined ? 2.44 : tall;
     var w = 1.20;
+    // ---- NO TWO SHEETS THE SAME --------------------------------------------
+    // The first cut leaned n identical 1.20 x 2.44 rectangles at 12 mrad
+    // increments, and four of them appeared in one hero2 frame as the same
+    // object copied four times. A real stack is a mixture: full sheets, cut
+    // sheets, a half board, one that has slipped and is standing on its long
+    // edge, one that has been sawn down the middle and lost a corner.
     for (var i = 0; i < n; i++) {
       var l = lean + i * 0.012 + R.range(-0.006, 0.006);
       var off = i * 0.021;
+      var roll = R.next();
+      var sw = w, sh = h;
+      if (roll < 0.22) { sh = h * R.range(0.42, 0.62); }        // a cut sheet
+      else if (roll < 0.38) { sw = w * R.range(0.48, 0.72); }   // a rip
+      else if (roll < 0.50) { sw = h; sh = w; }                 // one on its side
+      else { sh = h * R.range(0.94, 1.0); sw = w * R.range(0.93, 1.0); }
+      var th = R.bool(0.28) ? 0.019 : 0.0125;                   // OSB vs ply
       // a sheet leaning at `l` from vertical, its foot kicked out
-      ply.box(w + R.range(-0.02, 0.02), h, 0.0125,
-        R.range(-0.03, 0.03), h * 0.5 * Math.cos(l), off + h * 0.5 * Math.sin(l),
-        l, 0, R.range(-0.010, 0.010), 0.003);
+      ply.box(sw + R.range(-0.02, 0.02), sh, th,
+        R.range(-0.10, 0.10) + (w - sw) * R.range(-0.4, 0.4),
+        sh * 0.5 * Math.cos(l), off + sh * 0.5 * Math.sin(l),
+        l, R.range(-0.05, 0.05), R.range(-0.035, 0.035), 0.003);
     }
     var m = Tn(x, y, z, 0, yaw, 0);
     var g = ply.build();
@@ -2874,6 +2909,93 @@
       collider: [0.48, 0.5, 0.48], material: 'fabric' });
     this._drop(this.B.bulkBag, -15.2, -19.9, { r: 0.75, h: 1.0, yaw: 1.1,
       collider: [0.48, 0.5, 0.48], material: 'fabric' });
+
+    // ---- THE SUNLIT RUN ------------------------------------------------------
+    // The strip between the z = -16 and z = -8 grid lines is the largest surface
+    // in five of the six framings and the one the signature shot looks straight
+    // down, and it was carrying about one readable object per 300 m2 - one bulk
+    // bag, one coil, one small stack. Meanwhile the module models a wheelbarrow,
+    // a mortar tub, a 110 V transformer, a gas stillage and a spoil heap that
+    // almost never reached camera. The budget is 500 draws / 4.5M triangles
+    // against 320 / 1.05M, so this is triangles that were simply not being spent.
+    //
+    // Three or four readable objects per hundred square metres, on the two grid
+    // lines rather than scattered, because material lands where the crane can
+    // put it down and that is between the columns.
+    this._barrow(6.2, -12.6, 1.15, false);
+    this._tub(7.4, -13.4, 0.55);
+    this._tub(5.1, -11.4, 2.35, true);
+    this._transformer(9.2, -15.6, 1.30);
+    this._leadRun([[9.6, -15.0], [7.4, -11.8], [4.2, -10.4], [1.0, -12.6]], 0.014);
+    this._gangBox(12.6, -13.8, 0.35);
+    this._spoilHeap(15.4, -11.0, 1.15, 0.44);
+    this._spoilHeap(19.8, -8.6, 0.95, 0.36);
+    this._gasCage(17.2, -14.6, -0.42);
+    this._palletStack(13.4, -17.4, -0.22, 6);
+    this._palletStack(20.6, -16.2, 0.41, 4);
+    this._sheetStack(11.2, -11.2, 0.92, 7, 0.15);
+    this._sheetStack(22.4, -12.4, -0.55, 5, 0.13);
+    this._cableDrum(2.6, -8.6, 1.9, 0.62, false);
+    this._meshSheet(17.8, -18.4, 0.22, 0.16, 3);
+    this._drop(this.B.bulkBag, 8.6, -18.6, { r: 0.75, h: 1.0, yaw: 0.7,
+      collider: [0.48, 0.5, 0.48], material: 'fabric' });
+    this._tool(11.0, -15.9, 0.9, 0.30, 'shovel');
+    this._tool(15.0, -12.2, 2.3, 0.36, 'broom');
+
+    // and the offcuts, bag ends and tie wire that live on a floor between them.
+    // Instanced, so 120 more objects is zero extra draw calls.
+    var runDebris = 0, gd = 0;
+    while (runDebris < 120 && gd++ < 900) {
+      var dx = R.range(-2.0, 25.0), dz = R.range(-19.5, -6.5);
+      if (!this._onPlate(dx, dz, 0.8)) continue;
+      if (!this._laneClear(dx, dz, 0.2, true)) { if (!R.bool(0.25)) continue; }
+      var roll3 = R.next();
+      if (roll3 < 0.30) {
+        if (this._drop(this.B.timber, dx, dz, { r: 0.22, low: true, tilt: 0.10,
+          scale: R.range(0.35, 0.9), h: 0.08, yaw: R.range(0, M.TAU) })) runDebris++;
+      } else if (roll3 < 0.56) {
+        if (this._drop(this.B.rubble, dx, dz, { r: 0.13, low: true, tilt: 0.5,
+          scale: R.range(0.3, 0.8), h: 0.10 })) runDebris++;
+      } else if (roll3 < 0.74) {
+        if (this._drop(this.B.block, dx, dz, { r: 0.15, low: true, tilt: 0.45,
+          scale: R.range(0.35, 0.8), h: 0.12 })) runDebris++;
+      } else if (roll3 < 0.88) {
+        if (this._drop(this.B.rebar, dx, dz, { r: 0.20, low: true, tilt: 0.05,
+          scale: R.range(0.5, 1.1), h: 0.08, yaw: R.range(0, M.TAU) })) runDebris++;
+      } else {
+        if (this._litter(R.pick([CELL.paper, CELL.card, CELL.sack, CELL.bag]),
+          dx, dz, R.range(0.6, 1.1))) runDebris++;
+      }
+    }
+    // the tyre ruts and barrow tracks between the hoist, the core and the edge:
+    // a wear layer along the routes people actually take, which is the one thing
+    // 2200 m2 of power-floated concrete cannot supply for itself
+    var ROUTES = [
+      [[25.5, -13.4], [16.0, -13.0], [8.6, -12.2]],
+      [[8.6, -12.2], [2.0, -14.0], [-6.0, -17.0]],
+      [[8.6, -12.2], [4.0, -8.0], [-2.0, -6.5]],
+      [[13.0, -16.0], [13.5, -19.0], [8.0, -19.6]]
+    ];
+    for (i = 0; i < ROUTES.length; i++) {
+      var rt = ROUTES[i];
+      for (var seg = 0; seg < rt.length - 1; seg++) {
+        var a0 = rt[seg], a1 = rt[seg + 1];
+        var segLen = Math.hypot(a1[0] - a0[0], a1[1] - a0[1]);
+        var steps = Math.max(2, Math.round(segLen / 2.4));
+        var ang2 = Math.atan2(a1[0] - a0[0], a1[1] - a0[1]);
+        for (var q5 = 0; q5 < steps; q5++) {
+          var tt = (q5 + 0.5) / steps;
+          var rx = M.lerp(a0[0], a1[0], tt) + R.gaussian(0, 0.35);
+          var rz = M.lerp(a0[1], a1[1], tt) + R.gaussian(0, 0.35);
+          this._decal(CELL.scuff, rx, rz, R.range(2.6, 4.0), ang2 + R.gaussian(0, 0.10),
+            R.range(0.35, 0.6), R.range(0.30, 0.55));
+          if (R.bool(0.5)) {
+            this._decal(CELL.boots, rx + R.gaussian(0, 0.5), rz + R.gaussian(0, 0.5),
+              R.range(2.0, 3.0), ang2 + R.gaussian(0, 0.15), 1.5, R.range(0.30, 0.55));
+          }
+        }
+      }
+    }
   };
 
   // ==========================================================================
@@ -3167,11 +3289,11 @@
     // tape strung across the corner, sagging and vibrating
     if (this.mats.litter && this._atlasOk) {
       var uv = atlasUV(CELL.tape);
-      var g = ribbonG(3.4, 0.12, 12, 1, uv[0], uv[1], uv[2], uv[3]);
+      var g = ribbonG(3.4, 0.12, 16, 1, uv[0], uv[1], uv[2], uv[3], 0.085);
       this._flap(this.mats.litter, g,
         Tn(V.x0 - 0.75, this._ground(V.x0 - 0.75, V.z0 + 1.4) + 1.02, V.z0 + 1.4, 0, 0, 0),
         { w: 3.4, h: 0.12, amp: 0.5, both: true });
-      var g2 = ribbonG(2.9, 0.12, 11, 1, uv[0], uv[1], uv[2], uv[3]);
+      var g2 = ribbonG(2.9, 0.12, 14, 1, uv[0], uv[1], uv[2], uv[3], 0.072);
       this._flap(this.mats.litter, g2,
         Tn(V.x0 + 1.3, this._ground(V.x0 + 1.3, V.z0 - 0.85) + 0.98, V.z0 - 0.85,
           0, Math.PI * 0.5, 0),
@@ -3254,13 +3376,13 @@
     if (this.mats.litter && this._atlasOk) {
       var uv = atlasUV(CELL.tape);
       var span = (gx1 - gx0) * 0.5 + 0.8;
-      var g2 = ribbonG(span, 0.12, 14, 1, uv[0], uv[1], uv[2], uv[3]);
+      var g2 = ribbonG(span, 0.12, 18, 1, uv[0], uv[1], uv[2], uv[3], 0.105);
       var mx = (gx0 + (gx0 + gx1) * 0.5) * 0.5;
       this._flap(this.mats.litter, g2,
         Tn(mx, this._ground(mx, nz + 0.98) + 0.62, nz + 0.98, 0, 0, 0),
         { w: span, h: 0.12, amp: 0.9, both: true });
       var mx2 = ((gx0 + gx1) * 0.5 + gx1) * 0.5;
-      var g3 = ribbonG(span, 0.12, 14, 1, uv[0], uv[1], uv[2], uv[3]);
+      var g3 = ribbonG(span, 0.12, 18, 1, uv[0], uv[1], uv[2], uv[3], 0.092);
       this._flap(this.mats.litter, g3,
         Tn(mx2, this._ground(mx2, nz + 0.98) + 0.60, nz + 0.98, 0, 0.04, 0),
         { w: span, h: 0.12, amp: 0.9, both: true });

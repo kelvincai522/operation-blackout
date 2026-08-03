@@ -144,7 +144,19 @@
   // The city, 176 m down.
   var CITY_Y = -176.0;
   var CITY_R = 610.0;                 // radius of the modelled block grid
-  var GROUND_R = 900.0;               // the ground plate under it
+  // The ground plate has to reach the point where the fog is AT its opacity cap,
+  // or its rim draws a ruled horizontal seam against a sky dome whose lower
+  // hemisphere is nearly black. At density 0.0019 and a 380 m scale height that
+  // is about 2.3 km; 2600 m buys margin and costs one quad.
+  var GROUND_R = 2600.0;
+  // Between the modelled blocks and the rim, three rings of pure silhouette
+  // slabs so the skyline recedes in steps instead of stopping.
+  var FAR_R0 = 700.0, FAR_R1 = 1750.0;
+  // City block module. The street texture, the block layout and the street
+  // lighting all derive from this ONE number, which is the only way the roads in
+  // the map can end up under the gaps between the buildings.
+  var BLK_M = 56.0;
+  var ROAD_W = 15.0;                  // carriageway + footways
 
   // ---------------------------------------------------------------------------
   // THE HOUR.  main.js's env profile asks for timeOfDay 0.80. sky.js's _solar
@@ -165,6 +177,9 @@
   // The correct long-term fix is `timeOfDay: 0.712` in the LEVELS table; this
   // block should be deleted the day that lands.
   var TIME_OF_DAY = 0.712;
+  // Aerosol optical depth. See the note in update(): the profile's 0.03 is the
+  // thinnest air in the roster and it is why the shadows had no blue in them.
+  var TURBIDITY = 0.062;
   var SUN_AZ = -0.72 - (TIME_OF_DAY - 0.5) * 0.30 * 2.0;   // -0.847 rad
   var SUN_EL = 9.2 * Math.PI / 180;
   var SUN_X = Math.sin(SUN_AZ) * Math.cos(SUN_EL);
@@ -194,14 +209,64 @@
     // shader: trowel polish in B reads as the pale burnished lanes a power
     // float leaves, and that is what gives a 54 m sheet of grey any tonal
     // structure for a raking key to find.
-    slab:        { uv: 0.42, cast: true,  recv: true,  wear: true,
-                   base: 'concrete', rough: 0.86 },
-    soffit:      { uv: 0.38, cast: true,  recv: true,  wear: true,
-                   base: 'concrete_wall', rough: 0.92 },
-    core_wall:   { uv: 0.36, cast: true,  recv: true,  wear: true,
-                   base: 'concrete_wall' },
-    column:      { uv: 0.52, cast: true,  recv: true,  wear: true,
-                   base: 'concrete', rough: 0.84 },
+    // ---- THE ONE THAT MATTERED: `uv` DOES NOTHING ON THESE ------------------
+    // concrete and concrete_wall are both `tri: true` in materials.js, i.e.
+    // TRIPLANAR, and its own comment says so: "world projection takes the scale
+    // away from the consumer's uv attribute entirely, so a mis-UV'd wall
+    // physically cannot happen". The consequence is that the documented fix for
+    // the black-pitted crust on the soffit and core walls - lower the level's uv
+    // - could not possibly have worked, because the surface has never read the
+    // level's uv. concrete_wall tiles at 0.49 per metre, i.e. ONE TILE ACROSS
+    // 2.04 m, which is exactly the implied 5-10 cm blowholes that photographed
+    // as burnt toast on the largest surfaces in the level.
+    //
+    // The lever that does exist is `opts.triScale` (documented in materials.js
+    // as "tiles per metre for triplanar"), plus aoMapIntensity and normalScale
+    // on the returned material - and because every request below carries a
+    // `variant` key the cache entry is this level's alone, so mutating it cannot
+    // reach another consumer. `uv` is kept honest for the non-triplanar path and
+    // for Geo.worldUV's uv1 (the AO channel).
+    //
+    // All four concretes now sit in one family at ~0.9 m per tile, so a column
+    // and the wall behind it read as the same building.
+    slab:        { uv: 0.58, cast: true,  recv: true,  wear: true,
+                   base: 'concrete', rough: 0.86,
+                   triScale: 0.90, ao: 0.72, ns: 0.85, variant: 'hr_slab' },
+    // ---- AND WHY THESE TWO ARE `concrete`, NOT `concrete_wall` --------------
+    // concrete_wall's map carries its blowholes at roughly 8% of a tile, so they
+    // are 16 cm at the def's own 0.49 tiles/m and still 7 cm at 1.18 - and no
+    // triScale a consumer can reach makes them millimetres without turning the
+    // surface into sandpaper. Measured on lv_interior: densely packed dark pits
+    // at an implied 5-10 cm covering the ceiling and both core walls, far too
+    // large for blowholes, too regular for honeycombing, and with the AO dark
+    // enough that 40% of the frame read as burnt toast.
+    //
+    // `concrete` is the same triplanar machinery with a mineral map that has no
+    // macro voids in it, which is exactly why the columns (which already used
+    // it) photographed clean. Putting all four surfaces on it settles the
+    // critic's other half of this finding as well - a smooth column next to a
+    // pitted wall is worse than two surfaces in one family - and the macro story
+    // that concrete_wall was accidentally supplying is now authored where it
+    // belongs, in the wear channels: pour lift lines every 1.2 m, form-tie holes
+    // on a 600 mm grid, the 1.22 m ply joint grid on the soffit, and a
+    // differential stain gradient below every opening.
+    // A soffit is the one surface in the level that is ALWAYS seen at a grazing
+    // angle, because it is directly above the eye - and parallax occlusion at
+    // grazing incidence smears its own depth into long high-contrast streaks.
+    // That, plus a 5 cm detail normal at full scale, is what turned a coffered
+    // concrete ceiling into volcanic scoria across the top third of every
+    // framing. POM off, normal scale a third, and the relief comes back as
+    // authored geometry (downstand beams, ply joints) instead.
+    soffit:      { uv: 0.98, cast: true,  recv: true,  wear: true,
+                   base: 'concrete', rough: 0.94, albedoTarget: 0xa9a49a, env: 1.5,
+                   triScale: 1.05, ao: 0.44, ns: 0.34, noPom: true, noDetail: true,
+                   variant: 'hr_soffit' },
+    core_wall:   { uv: 1.02, cast: true,  recv: true,  wear: true,
+                   base: 'concrete', rough: 0.88, albedoTarget: 0x968f85,
+                   triScale: 0.92, ao: 0.62, ns: 0.90, variant: 'hr_core' },
+    column:      { uv: 0.92, cast: true,  recv: true,  wear: true,
+                   base: 'concrete', rough: 0.84,
+                   triScale: 1.15, ao: 0.70, ns: 0.90, variant: 'hr_col' },
     blockwork:   { uv: 0.46, cast: true,  recv: true,  wear: true,
                    base: 'brick' },
     // ---- steel --------------------------------------------------------------
@@ -240,15 +305,27 @@
     // that makes an extrusion read as an extrusion is a hard specular line
     // running its full length.
     mullion:     { uv: 1.30, cast: true,  recv: true,  wear: false,
-                   base: 'painted_metal', albedoTarget: 0x35302b,
-                   rough: 0.26, metal: 0.90, env: 1.5 },
-    glazing:     { uv: 0.40, cast: false, recv: false, wear: false,
-                   base: 'glass', env: 2.4 },
+                   base: 'painted_metal', albedoTarget: 0x2c2926,
+                   rough: 0.22, metal: 0.92, env: 1.6 },
+    // The one asset the roster brief singles out. It gets its OWN material (see
+    // _glazingMaterial): a site facade that has been open for months carries a
+    // dirt/streak/protective-film story, and without one a pane at a grazing
+    // angle is a blank sheet of inscatter no matter what the fog is doing.
+    // uv 0.62 is a WORLD projection on purpose: a per-pane 0..1 box UV would
+    // stamp the identical dirt pattern on all twenty-six lights, which is the
+    // uniformity problem this is meant to solve. At 0.62 a 1.5 m pane covers
+    // most of a tile at a phase set by where it stands, so no two match.
+    glazing:     { uv: 0.62, cast: false, recv: false, wear: false,
+                   own: true, env: 2.0 },
     // Opaque spandrel panel at every floor band - real curtain wall is about a
     // third spandrel, and without it a glazed facade is a single sheet.
+    // Lifted out of black: at 0x2a2f33 / metalness 0.70 the band under every
+    // pane measured 0.014 median linear, i.e. it was the darkest thing in the
+    // level. A shadow-box spandrel is anodised sheet over insulation, not a
+    // mirror, so most of the metalness was wrong as well as too dark.
     spandrel:    { uv: 0.60, cast: true,  recv: true,  wear: false,
-                   base: 'painted_metal', albedoTarget: 0x2a2f33,
-                   rough: 0.34, metal: 0.70, env: 1.3 },
+                   base: 'painted_metal', albedoTarget: 0x4a5158,
+                   rough: 0.42, metal: 0.34, env: 1.2 },
     // ---- soft goods ---------------------------------------------------------
     // Polythene sheeting: translucent, double sided, and it is what the wind is
     // FOR. Its whole job is to be backlit by a sun 0.3 degrees under the
@@ -257,9 +334,17 @@
     // grey with dust and it is 60% opaque. At albedoTarget 0xb9bec0 with env
     // 0.9 these panels clipped to white against the sky in three of five
     // framings and read as luminous boards hung in the openings.
+    // Polythene is TRANSLUCENT and MeshStandardMaterial is not, so the face you
+    // are looking at is whichever one the sun is not on - and a sheet hung in a
+    // north opening with the sun in the west therefore renders as a black
+    // curtain, which is the opposite of the brief. A low emissive is the honest
+    // stand-in for the light coming THROUGH it: it is the only surface in the
+    // level that is genuinely lit from behind, and 0.30 puts it a stop under the
+    // festoon bulbs so it glows rather than sources.
     sheeting:    { uv: 0.55, cast: false, recv: true,  wear: false, keepUV: true,
                    base: 'plastic', albedoTarget: 0x7f8486,
-                   rough: 0.70, metal: 0.0, side: 2, env: 0.35 },
+                   rough: 0.70, metal: 0.0, side: 2, env: 0.35,
+                   emissive: 0xffc79a, emissiveIntensity: 0.15 },
     debris_net:  { uv: 1.0, cast: false, recv: false, wear: false, keepUV: true,
                    own: true },
     // ---- distance -----------------------------------------------------------
@@ -268,7 +353,18 @@
     // none of the detail-normal / parallax machinery the near surfaces do.
     city:        { uv: 1.0, cast: false, recv: false, wear: false, keepUV: true,
                    own: true },
-    city_ground: { uv: 0.030, cast: false, recv: false, wear: false,
+    // The street plane. It used to be a bare asphalt plate at uv 0.030 - a 33 m
+    // texture repeat, invisible at 400 m - so the one place the eye goes when it
+    // looks over the edge was a flat grey sheet. It now carries its OWN baked
+    // road network (see buildStreetMaps): carriageways, blocks, and an emissive
+    // sodium lane along every primary axis, at a tile size of four city blocks
+    // so it survives 400 m of aerial perspective.
+    city_ground: { uv: 1 / (BLK_M * 4), cast: false, recv: false, wear: false,
+                   own: true, env: 0.30 },
+    // Rooftop plant used to share city_ground's material. Now that city_ground
+    // is a road network it needs its own bucket, or every plant room on every
+    // roof in the city has a dual carriageway printed on it.
+    city_plant:  { uv: 0.11, cast: false, recv: false, wear: false,
                    base: 'asphalt', rough: 0.92, env: 0.35 },
     // Our own tower, below the working floor. Same atlas as the city - it is
     // literally the same kind of building - but it is 176 m of it directly
@@ -314,13 +410,14 @@
     crane:       [0xc0631e, 0.56, 0.38],
     timber:      [0xa3886a, 0.88, 0.0],
     ply:         [0xa8916a, 0.88, 0.0],
-    mullion:     [0x35302b, 0.26, 0.90],
-    glazing:     [0x2a3238, 0.10, 0.0],
-    spandrel:    [0x2a2f33, 0.34, 0.70],
+    mullion:     [0x2c2926, 0.22, 0.92],
+    glazing:     [0x556168, 0.14, 0.0],
+    spandrel:    [0x4a5158, 0.42, 0.34],
     sheeting:    [0xb9bec0, 0.62, 0.0],
     debris_net:  [0xd06a20, 0.80, 0.0],
     city:        [0x6d6a66, 0.94, 0.0],
-    city_ground: [0x3a3833, 0.92, 0.0],
+    city_ground: [0x27251f, 0.92, 0.0],
+    city_plant:  [0x3a3833, 0.92, 0.0],
     shell:       [0x77736d, 0.90, 0.0],
     decal:       [0xffffff, 0.80, 0.0],
     lamp_glass:  [0xffcf92, 0.24, 0.0],
@@ -343,6 +440,14 @@
 
   function vertCount(g) {
     return g.index ? g.index.count : g.attributes.position.count;
+  }
+
+  // A deterministic 0..1 hash. Never Math.random: this is used inside texture
+  // builders that have no rng handed to them, and a capture has to be
+  // byte-reproducible.
+  function rngLike(x) {
+    var s = Math.sin(x * 127.1 + 311.7) * 43758.5453;
+    return s - Math.floor(s);
   }
 
   // Cached primitives. Everything is returned NON-INDEXED so Geo.mergeAll never
@@ -640,7 +745,12 @@
   // concrete frame. Alpha-tested cards laid coplanar on the slab, the columns
   // and the core walls: this is what stops 3000 m2 of grey being 3000 m2 of
   // grey, and it is the cheapest legibility there is.
-  var ATLAS_N = 4, ATLAS_PX = 1024, ATLAS_CELL = ATLAS_PX / ATLAS_N;
+  // 8 x 8 at 2048, so the cell resolution is unchanged at 256 px and there is
+  // room for the EIGHT column marks the level needs. One gridref cell stamped on
+  // thirty columns is "perfectly uniform anything" delivered by the level's own
+  // storytelling element, and a stencil is high contrast, so it is the first
+  // thing a player notices.
+  var ATLAS_N = 8, ATLAS_PX = 2048, ATLAS_CELL = ATLAS_PX / ATLAS_N;
   var CELL = {
     hazard: 0,     // yellow/black chevron tape, tiles horizontally
     gridref: 1,    // stencilled column grid reference, e.g. "E4 / L47"
@@ -657,8 +767,18 @@
     drip: 12,      // drip lines from a soffit penetration
     label: 13,     // adhesive service label plate
     chalk: 14,     // snapped chalk line and a dimension
-    logo: 15       // contractor's mark, invented script
+    logo: 15,      // contractor's mark, invented script
+    // ---- the column marks --------------------------------------------------
+    // A real column mark is a grid reference and a level, sprayed through a
+    // stencil by whoever was setting out that bay - so they vary in wording, in
+    // size, in how much they have run and in how badly the stencil skipped.
+    gr0: 16, gr1: 17, gr2: 18, gr3: 19,
+    gr4: 20, gr5: 21, gr6: 22, gr7: 23
   };
+  // Indexed by column, never picked at random: adjacent columns must not match,
+  // and a stride coprime with the count is the cheapest way to guarantee it.
+  var GRIDREFS = [CELL.gr0, CELL.gr1, CELL.gr2, CELL.gr3,
+                  CELL.gr4, CELL.gr5, CELL.gr6, CELL.gr7];
   // Invented script: consistent letterforms that read as writing at a glance
   // and as nothing in particular up close. No font files exist in this build.
   var GLYPHS = 'AEHIKLMNORSTUVX0123456789';
@@ -669,11 +789,16 @@
     return [cx, cy, ATLAS_CELL, ATLAS_CELL];
   }
   // Canvas row 0 is v = 1 after three's flipY, so the v range is inverted here.
+  // The 0.6% inset is not decoration: 64 cells on one mip chain will bleed a
+  // neighbour's ink into the border texel by mip 3, and a ghost of a DANGER
+  // placard down the side of a column is worse than no placard.
+  var ATLAS_INSET = 0.006 / ATLAS_N;
   function atlasUV(cell) {
     var cx = (cell % ATLAS_N) / ATLAS_N;
     var cy = Math.floor(cell / ATLAS_N) / ATLAS_N;
     var s = 1 / ATLAS_N;
-    return [cx, 1 - cy - s, cx + s, 1 - cy];
+    return [cx + ATLAS_INSET, 1 - cy - s + ATLAS_INSET,
+            cx + s - ATLAS_INSET, 1 - cy - ATLAS_INSET];
   }
 
   function buildAtlas(rng) {
@@ -752,6 +877,15 @@
       var tot = (n - 1) * w;
       for (var q = 0; q < n; q++) {
         glyph(rng.pick(GLYPHS.split('')), x - tot * 0.5 + q * w, y, s);
+      }
+    }
+    // The same, but from a literal string, so a column mark can actually SAY a
+    // grid reference instead of five random letterforms.
+    function text(str, x, y, s, gap) {
+      var w = s * 0.68 + (gap === undefined ? s * 0.26 : gap);
+      var tot = (str.length - 1) * w;
+      for (var q = 0; q < str.length; q++) {
+        glyph(str.charAt(q), x - tot * 0.5 + q * w, y, s);
       }
     }
     // Spray edge: a real stencil bleeds and skips.
@@ -977,6 +1111,63 @@
     word(5, S * 0.66, S * 0.40, S * 0.18);
     endCell();
 
+    // ---- 16..23  THE COLUMN MARKS -------------------------------------------
+    // Eight of them, and every one is PAINT rather than a printed decal: a soft,
+    // eroded edge, a couple of runs where the can was held too long, overspray
+    // haze around the stencil, and a different wording each time. The wording is
+    // a grid reference and a level, which is what a setting-out engineer sprays
+    // and, not incidentally, is the invented-script system this file already
+    // uses everywhere else.
+    var MARKS = [
+      { a: 'EK', b: 'H05', s: 0.30, c: '#26241f', drips: 3, tilt: -0.05 },
+      { a: 'FL', b: '47',  s: 0.34, c: '#2b2823', drips: 2, tilt: 0.04 },
+      { a: 'C4', b: 'L47', s: 0.28, c: '#1f2a33', drips: 4, tilt: 0.0 },
+      { a: 'D7', b: 'L46', s: 0.31, c: '#2e2620', drips: 1, tilt: 0.07 },
+      { a: 'HN', b: '05',  s: 0.36, c: '#242220', drips: 3, tilt: -0.03 },
+      { a: 'T3', b: 'X47', s: 0.27, c: '#38271e', drips: 2, tilt: 0.02 },
+      { a: 'AR', b: '148', s: 0.32, c: '#22262a', drips: 5, tilt: -0.06 },
+      { a: 'MV', b: 'L48', s: 0.29, c: '#2a231d', drips: 2, tilt: 0.05 }
+    ];
+    for (i = 0; i < MARKS.length; i++) {
+      var mk = MARKS[i];
+      S = cellCtx(GRIDREFS[i]);
+      g.save();
+      g.translate(S * 0.5, S * 0.5); g.rotate(mk.tilt); g.translate(-S * 0.5, -S * 0.5);
+      // overspray haze first, so the stencil sits IN it rather than on top
+      spray(0.10, 520, S, mk.c);
+      g.strokeStyle = mk.c;
+      text(mk.a, S * 0.5, S * 0.14, S * mk.s);
+      g.strokeStyle = 'rgba(34,32,28,0.80)';
+      text(mk.b, S * 0.5, S * 0.52, S * mk.s * 0.72);
+      // runs: a stencil sprayed on a vertical face always drips somewhere
+      for (j = 0; j < mk.drips; j++) {
+        var dx0 = rng.range(S * 0.22, S * 0.78);
+        var dy0 = rng.range(S * 0.30, S * 0.80);
+        var dl = rng.range(S * 0.08, S * 0.30);
+        var dg = g.createLinearGradient(0, dy0, 0, dy0 + dl);
+        dg.addColorStop(0, 'rgba(38,36,31,0.62)');
+        dg.addColorStop(1, 'rgba(38,36,31,0)');
+        g.fillStyle = dg;
+        g.fillRect(dx0, dy0, rng.range(2.5, 6.0), dl);
+        // the bead at the bottom of the run
+        g.fillStyle = 'rgba(34,32,28,0.34)';
+        g.beginPath();
+        g.arc(dx0 + 2, dy0 + dl, rng.range(2.0, 4.5), 0, 6.28318); g.fill();
+      }
+      // erode the whole mark: a stencil skips over a formed concrete surface
+      g.globalCompositeOperation = 'destination-out';
+      for (j = 0; j < 260; j++) {
+        g.globalAlpha = rng.range(0.10, 0.72);
+        g.beginPath();
+        g.arc(rng.range(0, S), rng.range(0, S), rng.range(1.5, 9.0), 0, 6.28318);
+        g.fill();
+      }
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = 'source-over';
+      g.restore();
+      endCell();
+    }
+
     var tex = new THREE.CanvasTexture(cv);
     tex.wrapS = THREE.ClampToEdgeWrapping;
     tex.wrapT = THREE.ClampToEdgeWrapping;
@@ -987,7 +1178,7 @@
 
   // A decal card, laid on a face. `axis` picks the plane; `s` the size in
   // metres; `roll` a little rotation so nothing is applied dead square.
-  function decalCard(B, cell, x, y, z, w, h, axis, tintC, roll) {
+  function decalCard(B, cell, x, y, z, w, h, axis, tintC, roll, alpha) {
     var uvr = atlasUV(cell);
     var g = quad(w, h, uvr[0], uvr[1], uvr[2], uvr[3]);
     var m;
@@ -1000,7 +1191,64 @@
     var old = B.tint;
     if (tintC) B.tint = tintC;
     var e = B.add('decal', g, m);
+    // Per-card opacity, carried in the alpha of the decal bucket's vertex
+    // colour (see _paint). It is what lets a stencil FADE where the concrete
+    // has been polished rather than sitting on the surface at full strength
+    // everywhere - the difference between paint and a sticker.
+    if (alpha !== undefined) e.alpha = alpha;
     B.tint = old;
+    return e;
+  }
+
+  // ----------------------------------------------------------------------------
+  // A SIGN IS AN OBJECT SCREWED TO A WALL, NOT A DECAL PAINTED ON ONE.
+  //
+  // Every placard in the first cut was a razor-edged rectangle laid flat on the
+  // concrete with no fixings, no thickness, no shadow gap and no weathering, on
+  // a construction site months into a fit-out. That reads as a UI element
+  // dropped into a 3D scene, and the instant-fail list names it directly.
+  //
+  // This gives one: a backing plate with real thickness stood proud of the wall,
+  // four fixing screws with one missing (so the plate hangs off-square about the
+  // remaining three), a rust weep under the bottom fixings, and a dust gradient
+  // heaviest at the bottom edge.
+  //
+  //   axis  'x-' 'x+' 'z' 'z-'    which face it is screwed to
+  // ----------------------------------------------------------------------------
+  function signPlate(B, rng, cell, x, y, z, s, axis, dropped) {
+    var t = 0.014;                       // plate thickness
+    var roll = dropped ? rng.range(0.11, 0.21) * (rng.bool() ? 1 : -1)
+                       : rng.range(-0.05, 0.05);
+    var nx = 0, nz = 0;
+    if (axis === 'x-') nx = -1; else if (axis === 'x+') nx = 1;
+    else if (axis === 'z-') nz = -1; else nz = 1;
+    var px = x + nx * t * 0.5, pz = z + nz * t * 0.5;
+    // the backing plate
+    B.paint = 'paint';
+    B.boxR('plant', nx ? t : s * 1.09, s * 1.09, nx ? s * 1.09 : t,
+      px, y, pz, 0, 0, roll * (nx ? -1 : 1), 0.003);
+    // fixings: three of four, and the fourth hole empty
+    B.paint = 'steel';
+    var miss = dropped ? (rng.bool() ? 0 : 1) : rng.int(0, 5);
+    var cr = Math.cos(roll), sr = Math.sin(roll);
+    for (var q = 0; q < 4; q++) {
+      if (q === miss) continue;
+      var ox = ((q % 2) ? 1 : -1) * s * 0.44, oy = (q < 2 ? 1 : -1) * s * 0.44;
+      var lx = ox * cr - oy * sr, ly = ox * sr + oy * cr;
+      B.cyl('scaff', 0.008, 0.008, 0.020,
+        px + nx * 0.014 + (nz ? lx : 0), y + ly, pz + nz * 0.014 + (nx ? lx : 0),
+        nx ? 0 : Math.PI * 0.5, 0, nx ? Math.PI * 0.5 : 0, 6);
+    }
+    // the graphic itself, faded by the grime it has collected
+    B.paint = 'flat';
+    var e = decalCard(B, cell, x + nx * (t + 0.004), y, z + nz * (t + 0.004),
+      s, s, axis, tint(0xffffff, 0), roll, 0.88);
+    // dust film, heaviest at the bottom edge, and a rust weep off the fixings
+    decalCard(B, CELL.streak, x + nx * (t + 0.008), y - s * 0.18, z + nz * (t + 0.008),
+      s * 0.94, s * 0.62, axis, tint(0xffffff, 0), roll, 0.40);
+    decalCard(B, CELL.drip, x + nx * (t + 0.006), y - s * 0.74, z + nz * (t + 0.006),
+      s * 0.9, s * 0.55, axis, tint(0xffffff, 0), roll, 0.32);
+    B.paint = 'steel';
     return e;
   }
 
@@ -1016,7 +1264,13 @@
   // This is the market's distantFacadeTexture idea carried up 176 m and given
   // the one thing a city at sunset must have and a desert town must not: rows
   // of lights coming on.
-  var CITY_GRID = 8;
+  // 16, not 8. At 8 the whole metropolis had 64 window bays: every facade wider
+  // than eight bays repeated the same lit windows at the same floors, and the
+  // per-block uOfs only shifted the phase, so the skyline beat into a visible
+  // vertical moire. 16 x 16 at 2048 keeps the same 128 px per bay and gives a
+  // 256-bay tile, which at a random integer offset per face is past the point
+  // where the eye can find the period.
+  var CITY_GRID = 16;
   var BAY_W = 3.30, BAY_H = 3.55;      // metres per window bay / storey
 
   var _cityTex = null, _cityEmis = null, _cityTried = false;
@@ -1024,12 +1278,12 @@
     if (_cityTried) return _cityTex;
     _cityTried = true;
     if (typeof document === 'undefined' || !document.createElement) return null;
-    var S = 1024, C = S / CITY_GRID;             // 128 px per bay
+    var S = 2048, C = S / CITY_GRID;             // 128 px per bay
     var cvA = document.createElement('canvas'), cvE = document.createElement('canvas');
     cvA.width = cvA.height = S; cvE.width = cvE.height = S;
     var a = cvA.getContext('2d'), e = cvE.getContext('2d');
     if (!a || !e) return null;
-    var i, r, c;
+    var i, r, c, q, q2;
     function rgba(cr, cg, cb, al) {
       return 'rgba(' + (cr | 0) + ',' + (cg | 0) + ',' + (cb | 0) + ',' + al.toFixed(3) + ')';
     }
@@ -1065,10 +1319,45 @@
     }
 
     // ---- the windows --------------------------------------------------------
+    // THE LIT SET IS DECIDED FIRST, AS RUNS, and only then drawn.
+    //
+    // The previous pass rolled a die per (r, c) cell while the comment claimed
+    // the lights were "lit in vertical runs (one tenant, one riser)". They were
+    // not: an independent roll per cell is by definition scattered, and at 3x
+    // zoom the city read as sprayed confetti with no coherent building faces.
+    // A real office tower at dusk lights up by RISER - one tenant leaves a
+    // block of three to eight consecutive floors on, on one or two columns of
+    // the facade - which is why a night skyline reads as a set of vertical bars
+    // and not as static.
     e.fillStyle = '#000000'; e.fillRect(0, 0, S, S);
     var lit = [];
     for (r = 0; r < CITY_GRID; r++) {
       lit.push([]);
+      for (c = 0; c < CITY_GRID; c++) lit[r].push(false);
+    }
+    // Roughly one bay column in three carries a tenant, and each tenant
+    // occupies a contiguous run of floors. Wrapped, so the tile is seamless in v
+    // as well as u.
+    var risers = Math.max(3, Math.round(CITY_GRID * 0.38));
+    for (i = 0; i < risers; i++) {
+      var rc = rng.int(0, CITY_GRID - 1);
+      var runs = rng.int(1, 2);
+      for (q = 0; q < runs; q++) {
+        var r0 = rng.int(0, CITY_GRID - 1);
+        var rl = rng.int(3, 8);
+        for (q2 = 0; q2 < rl; q2++) {
+          lit[(r0 + q2) % CITY_GRID][rc] = true;
+          // a tenant on a corner usually spills one bay sideways
+          if (rng.bool(0.34)) lit[(r0 + q2) % CITY_GRID][(rc + 1) % CITY_GRID] = true;
+        }
+      }
+    }
+    // plus a thin scatter of single lit rooms - a cleaner, a late meeting
+    for (i = 0; i < CITY_GRID * 2; i++) {
+      lit[rng.int(0, CITY_GRID - 1)][rng.int(0, CITY_GRID - 1)] = true;
+    }
+
+    for (r = 0; r < CITY_GRID; r++) {
       for (c = 0; c < CITY_GRID; c++) {
         var ww = C * 0.62, wh = C * 0.56;
         var wx = c * C + (C - ww) * 0.5, wy = r * C + C * 0.16;
@@ -1088,19 +1377,17 @@
         a.fillStyle = rgba(150, 146, 134, 0.80);
         a.fillRect(wx - 4, wy + wh, ww + 8, 4);
 
-        // ---- how many windows are lit, and how hard --------------------------
+        // ---- how hard the lit ones burn --------------------------------------
         // The sun is still up: this is the hour when the FIRST lights come on,
         // not full night. The first pass ran 30-58% lit at emissive 2.6 and the
         // city photographed as a white speckled carpet that took the whole
         // frame's metering with it - the sky went navy behind a Christmas
-        // display. One in six, at a third of the output, is a city at dusk.
-        // Lit in vertical runs (one tenant, one riser) rather than scattered:
-        // scattered reads as noise, runs read as a building.
-        var on = rng.next() < (c % 3 === 0 ? 0.30 : 0.11);
-        lit[r].push(on);
-        if (!on) continue;
+        // display.
+        if (!lit[r][c]) continue;
         var k = rng.range(0.66, 1.0);
-        var warm = rng.bool(0.72);
+        // One tenant, one lamp spec: warm/cool is decided by the RISER, not by
+        // the room, so a run of floors is one colour the way a real fit-out is.
+        var warm = ((c * 7 + 3) % 10) < 7;
         var lr = warm ? 255 * k : 214 * k;
         var lg = warm ? 206 * k : 226 * k;
         var lb = warm ? 138 * k : 244 * k;
@@ -1142,6 +1429,259 @@
     return _cityTex;
   }
 
+  // ========================================================== THE STREET GRID ==
+  // The one thing a viewer looks at when they look over a 176 m edge is the
+  // GROUND, and until now it was a bare asphalt plate at a 33 m texture repeat,
+  // i.e. invisible at 400 m. The city therefore had no floor: from the overview
+  // the space between the blocks was a flat pale plane, and from hero3 it read
+  // as fog with dots in it.
+  //
+  // This bakes the actual road network - carriageways, footways, lane markings,
+  // block infill and a sodium lighting lane - at ONE TILE PER FOUR CITY BLOCKS
+  // (224 m across 2048 px, ~9 px/m), so a 15 m street is 137 px and survives
+  // four hundred metres of aerial perspective. The tile aligns with BLK_M, which
+  // is the same number the block layout and the lamp lines use, so the roads
+  // genuinely run between the buildings rather than under them.
+  var _roadTex = null, _roadEmis = null, _roadTried = false;
+  function buildStreetMaps(rng, N) {
+    if (_roadTried) return _roadTex;
+    _roadTried = true;
+    if (typeof document === 'undefined' || !document.createElement) return null;
+    var S = 2048;
+    var TILE = BLK_M * 4;                        // world metres across the tile
+    var PPM = S / TILE;                          // pixels per metre
+    var cvA = document.createElement('canvas'), cvE = document.createElement('canvas');
+    cvA.width = cvA.height = S; cvE.width = cvE.height = S;
+    var a = cvA.getContext('2d'), e = cvE.getContext('2d');
+    if (!a || !e) return null;
+    var i, k;
+    function rgba(cr, cg, cb, al) {
+      return 'rgba(' + (cr | 0) + ',' + (cg | 0) + ',' + (cb | 0) + ',' + al.toFixed(3) + ')';
+    }
+
+    // ---- block infill --------------------------------------------------------
+    // The blocks are what the plan view is mostly made of, and they are lighter
+    // than the carriageway: roofs, yards, car parks, the odd park.
+    a.fillStyle = '#43413a'; a.fillRect(0, 0, S, S);
+    for (i = 0; i < 900; i++) {
+      var bx = rng.range(0, S), bz = rng.range(0, S);
+      var bw = rng.range(6, 34) * PPM, bd = rng.range(6, 34) * PPM;
+      var v = rng.range(-16, 26);
+      a.fillStyle = rgba(74 + v, 71 + v, 64 + v * 0.9, rng.range(0.25, 0.70));
+      a.fillRect(bx, bz, bw, bd);
+    }
+    // a few green squares - a city with no parks is a circuit board
+    for (i = 0; i < 7; i++) {
+      a.fillStyle = rgba(46, 58, 40, 0.75);
+      a.fillRect(rng.range(0, S), rng.range(0, S), rng.range(18, 42) * PPM, rng.range(18, 42) * PPM);
+    }
+
+    // ---- the carriageways ----------------------------------------------------
+    // Dark, because tarmac at dusk is the darkest thing in a city, and that is
+    // exactly the value separation the plan view needs.
+    var rw = ROAD_W * PPM;
+    function road(px, horiz, width, hot) {
+      a.fillStyle = '#211f1c';
+      if (horiz) a.fillRect(0, px - width * 0.5, S, width);
+      else a.fillRect(px - width * 0.5, 0, width, S);
+      // footways
+      a.fillStyle = rgba(96, 92, 84, 0.55);
+      if (horiz) {
+        a.fillRect(0, px - width * 0.5, S, width * 0.16);
+        a.fillRect(0, px + width * 0.5 - width * 0.16, S, width * 0.16);
+      } else {
+        a.fillRect(px - width * 0.5, 0, width * 0.16, S);
+        a.fillRect(px + width * 0.5 - width * 0.16, 0, width * 0.16, S);
+      }
+      // centre line, dashed
+      a.fillStyle = rgba(198, 190, 160, 0.50);
+      for (k = 0; k < S; k += 9 * PPM) {
+        if (horiz) a.fillRect(k, px - width * 0.022, 5 * PPM, width * 0.044);
+        else a.fillRect(px - width * 0.022, k, width * 0.044, 5 * PPM);
+      }
+      // ---- the lighting -----------------------------------------------------
+      // Sodium, in the footway, at 32 m centres. This is the emissive half: at
+      // 176 m up and 400 m out each lamp is a pixel, and a LINE of pixels
+      // running away is the single strongest depth cue the drop has.
+      var step = 32 * PPM;
+      for (k = step * 0.5; k < S; k += step) {
+        for (var s = -1; s <= 1; s += 2) {
+          var lx = horiz ? k : px + s * width * 0.40;
+          var ly = horiz ? px + s * width * 0.40 : k;
+          var gr = e.createRadialGradient(lx, ly, 0, lx, ly, 4.2 * PPM);
+          gr.addColorStop(0, hot ? 'rgba(255,226,178,1)' : 'rgba(255,196,132,0.95)');
+          gr.addColorStop(0.35, hot ? 'rgba(255,190,120,0.42)' : 'rgba(238,168,96,0.34)');
+          gr.addColorStop(1, 'rgba(255,170,90,0)');
+          e.fillStyle = gr;
+          e.beginPath(); e.arc(lx, ly, 4.2 * PPM, 0, 6.28318); e.fill();
+        }
+      }
+      // and the pool each one throws on the tarmac, in the albedo
+      for (k = step * 0.5; k < S; k += step) {
+        var gx = horiz ? k : px, gy = horiz ? px : k;
+        var g2 = a.createRadialGradient(gx, gy, 0, gx, gy, width * 0.62);
+        g2.addColorStop(0, 'rgba(150,112,64,0.30)');
+        g2.addColorStop(1, 'rgba(150,112,64,0)');
+        a.fillStyle = g2;
+        a.beginPath(); a.arc(gx, gy, width * 0.62, 0, 6.28318); a.fill();
+      }
+    }
+    e.fillStyle = '#000000'; e.fillRect(0, 0, S, S);
+    for (i = 0; i < 4; i++) {
+      var arterial = (i === 1);
+      road((i + 0.5) * (S / 4), true, arterial ? rw * 1.7 : rw, arterial);
+      road((i + 0.5) * (S / 4), false, arterial ? rw * 1.5 : rw, arterial);
+    }
+    // one diagonal avenue, because a perfect orthogonal grid photographs as
+    // graph paper and every real city has at least one road that ignores it
+    a.save();
+    a.translate(S * 0.5, S * 0.5); a.rotate(0.62); a.translate(-S * 0.5, -S * 0.5);
+    a.fillStyle = '#211f1c'; a.fillRect(-S, S * 0.5 - rw * 0.6, S * 3, rw * 1.2);
+    a.fillStyle = rgba(198, 190, 160, 0.42);
+    for (k = -S; k < S * 2; k += 9 * PPM) a.fillRect(k, S * 0.5 - rw * 0.03, 5 * PPM, rw * 0.06);
+    a.restore();
+    e.save();
+    e.translate(S * 0.5, S * 0.5); e.rotate(0.62); e.translate(-S * 0.5, -S * 0.5);
+    for (k = -S; k < S * 2; k += 30 * PPM) {
+      var dg = e.createRadialGradient(k, S * 0.5, 0, k, S * 0.5, 4.0 * PPM);
+      dg.addColorStop(0, 'rgba(255,214,160,0.95)');
+      dg.addColorStop(1, 'rgba(255,170,90,0)');
+      e.fillStyle = dg;
+      e.beginPath(); e.arc(k, S * 0.5, 4.0 * PPM, 0, 6.28318); e.fill();
+    }
+    e.restore();
+
+    // ---- grain ---------------------------------------------------------------
+    try {
+      var id = a.getImageData(0, 0, S, S), dt = id.data;
+      for (i = 0; i < dt.length; i += 4) {
+        var nn = rng.range(-11, 11);
+        dt[i] = M.clamp(dt[i] + nn, 0, 255);
+        dt[i + 1] = M.clamp(dt[i + 1] + nn * 0.96, 0, 255);
+        dt[i + 2] = M.clamp(dt[i + 2] + nn * 0.90, 0, 255);
+      }
+      a.putImageData(id, 0, 0);
+    } catch (eg) { /* never throw out of a build */ }
+
+    _roadTex = new THREE.CanvasTexture(cvA);
+    _roadTex.wrapS = _roadTex.wrapT = THREE.RepeatWrapping;
+    _roadTex.colorSpace = THREE.SRGBColorSpace;
+    _roadTex.needsUpdate = true;
+    _roadEmis = new THREE.CanvasTexture(cvE);
+    _roadEmis.wrapS = _roadEmis.wrapT = THREE.RepeatWrapping;
+    _roadEmis.colorSpace = THREE.SRGBColorSpace;
+    _roadEmis.needsUpdate = true;
+    return _roadTex;
+  }
+
+  // ============================================================== THE GLAZING ==
+  // The roster brief singles out "a glass curtain-wall section that reflects the
+  // sunset", and the first cut photographed four blank white rectangles: mean
+  // [0.800, 0.731, 0.645], min 0.114, max 0.957, with NO internal structure at
+  // all. A pane seen at a grazing angle against a bright sky is a mirror, and a
+  // mirror with nothing on it is a hole in the image.
+  //
+  // Real site glazing is six months into an install: it has never been cleaned,
+  // it still has protective film on some lights, it carries the installer's
+  // suction-cup rings, a manufacturer's sticker, rain streaks off every transom
+  // and a squeegee arc where somebody wiped one pane to look through it. That is
+  // VALUE STRUCTURE, and value structure is what a pane needs to survive being
+  // photographed against a sunset.
+  var _glazeTex = null, _glazeAlpha = null, _glazeRough = null, _glazeTried = false;
+  function buildGlazingMaps(rng) {
+    if (_glazeTried) return _glazeTex;
+    _glazeTried = true;
+    if (typeof document === 'undefined' || !document.createElement) return null;
+    var S = 512;
+    var cvA = document.createElement('canvas'), cvM = document.createElement('canvas');
+    cvA.width = cvA.height = S; cvM.width = cvM.height = S;
+    var a = cvA.getContext('2d'), m = cvM.getContext('2d');
+    if (!a || !m) return null;
+    var i, k;
+
+    // albedo: near white, because what the dirt does is SCATTER, and the
+    // coverage map below is what decides how much of the pane it hides.
+    a.fillStyle = '#c9c7c0'; a.fillRect(0, 0, S, S);
+    // coverage (used as alphaMap): black = clear glass, white = filthy
+    m.fillStyle = '#2c2c2c'; m.fillRect(0, 0, S, S);
+
+    // dust film, heaviest at the bottom of every light
+    var gr = m.createLinearGradient(0, 0, 0, S);
+    gr.addColorStop(0, 'rgba(255,255,255,0.10)');
+    gr.addColorStop(0.55, 'rgba(255,255,255,0.24)');
+    gr.addColorStop(1, 'rgba(255,255,255,0.66)');
+    m.fillStyle = gr; m.fillRect(0, 0, S, S);
+
+    // rain streaks running down off the transom
+    for (i = 0; i < 90; i++) {
+      var sx = rng.range(0, S), sw = rng.range(1.5, 9);
+      var sg = m.createLinearGradient(0, 0, 0, S);
+      var al = rng.range(0.14, 0.52);
+      sg.addColorStop(0, 'rgba(255,255,255,' + al.toFixed(3) + ')');
+      sg.addColorStop(rng.range(0.5, 0.95), 'rgba(255,255,255,' + (al * 0.35).toFixed(3) + ')');
+      sg.addColorStop(1, 'rgba(255,255,255,0)');
+      m.fillStyle = sg;
+      m.fillRect(sx, rng.range(-S * 0.1, S * 0.25), sw, S);
+      a.fillStyle = 'rgba(150,146,134,' + (al * 0.5).toFixed(3) + ')';
+      a.fillRect(sx, rng.range(-S * 0.1, S * 0.25), sw, S);
+    }
+    // cement splashes: a facade installed off a scaffold gets slurry on it
+    for (i = 0; i < 120; i++) {
+      var px = rng.gaussian(S * 0.5, S * 0.30), py = rng.gaussian(S * 0.62, S * 0.30);
+      var pr = Math.pow(rng.next(), 2.4) * 13 + 1.2;
+      m.fillStyle = 'rgba(255,255,255,' + rng.range(0.35, 0.9).toFixed(3) + ')';
+      m.beginPath(); m.ellipse(px, py, pr, pr * rng.range(0.6, 1.4), rng.range(0, 3.14), 0, 6.28318); m.fill();
+      a.fillStyle = 'rgba(208,204,194,0.85)';
+      a.beginPath(); a.ellipse(px, py, pr, pr * rng.range(0.6, 1.4), rng.range(0, 3.14), 0, 6.28318); a.fill();
+    }
+    // suction-cup rings from the glazing robot - four per light, dead giveaway
+    for (i = 0; i < 4; i++) {
+      var cx = S * (i % 2 ? 0.68 : 0.32), cy = S * (i < 2 ? 0.34 : 0.66);
+      m.strokeStyle = 'rgba(255,255,255,0.55)'; m.lineWidth = 5;
+      m.beginPath(); m.arc(cx, cy, S * 0.075, 0, 6.28318); m.stroke();
+      m.strokeStyle = 'rgba(255,255,255,0.22)'; m.lineWidth = 12;
+      m.beginPath(); m.arc(cx, cy, S * 0.075, 0, 6.28318); m.stroke();
+    }
+    // the squeegee arc where somebody wiped a hole to look through
+    m.globalCompositeOperation = 'destination-out';
+    for (i = 0; i < 5; i++) {
+      m.strokeStyle = 'rgba(0,0,0,' + rng.range(0.4, 0.85).toFixed(3) + ')';
+      m.lineWidth = rng.range(14, 40);
+      m.lineCap = 'round';
+      m.beginPath();
+      var ay = rng.range(S * 0.35, S * 0.8);
+      m.moveTo(rng.range(-20, S * 0.2), ay);
+      m.quadraticCurveTo(S * 0.5, ay - rng.range(20, 90), rng.range(S * 0.8, S + 20), ay + rng.range(-30, 30));
+      m.stroke();
+    }
+    m.globalCompositeOperation = 'source-over';
+    // manufacturer's sticker, still on, bottom corner
+    m.fillStyle = 'rgba(255,255,255,0.97)';
+    m.fillRect(S * 0.06, S * 0.80, S * 0.20, S * 0.11);
+    a.fillStyle = '#dfe4e6'; a.fillRect(S * 0.06, S * 0.80, S * 0.20, S * 0.11);
+    a.fillStyle = '#2d5f86';
+    for (k = 0; k < 4; k++) a.fillRect(S * 0.075, S * 0.822 + k * S * 0.020, S * (0.12 + (k % 2) * 0.05), 3);
+    // protective-film tape along the head
+    m.fillStyle = 'rgba(255,255,255,0.72)';
+    m.fillRect(0, S * 0.02, S, S * 0.045);
+    a.fillStyle = 'rgba(206,208,198,0.9)'; a.fillRect(0, S * 0.02, S, S * 0.045);
+
+    _glazeTex = new THREE.CanvasTexture(cvA);
+    _glazeTex.wrapS = _glazeTex.wrapT = THREE.RepeatWrapping;
+    _glazeTex.colorSpace = THREE.SRGBColorSpace;
+    _glazeTex.needsUpdate = true;
+    // alphaMap and roughnessMap are DATA. NoColorSpace, always.
+    _glazeAlpha = new THREE.CanvasTexture(cvM);
+    _glazeAlpha.wrapS = _glazeAlpha.wrapT = THREE.RepeatWrapping;
+    _glazeAlpha.colorSpace = THREE.NoColorSpace;
+    _glazeAlpha.needsUpdate = true;
+    _glazeRough = new THREE.CanvasTexture(cvM);
+    _glazeRough.wrapS = _glazeRough.wrapT = THREE.RepeatWrapping;
+    _glazeRough.colorSpace = THREE.NoColorSpace;
+    _glazeRough.needsUpdate = true;
+    return _glazeTex;
+  }
+
   // ---- debris netting --------------------------------------------------------
   // Orange scaffold sheeting/netting: alpha-tested, so it writes depth, needs no
   // sorting and still appears in the shadow map - which is the only reason a net
@@ -1151,25 +1691,52 @@
     if (_netTried) return _netTex;
     _netTried = true;
     if (typeof document === 'undefined' || !document.createElement) return null;
-    var S = 256;
+    var S = 512;
     var cv = document.createElement('canvas');
     cv.width = cv.height = S;
     var g = cv.getContext('2d');
     if (!g) return null;
     g.clearRect(0, 0, S, S);
-    // a knitted diamond mesh: two crossing sets of thick threads
-    var n = 10, p = S / n;
+    // A knitted diamond mesh. The tile is 1.4 world metres (see the quad UVs at
+    // every call site), so n is the mesh pitch: at n = 10 the diamonds were
+    // 140 mm across and the net read as a lattice PAINTED ON GLASS at 4x zoom.
+    // Real debris netting is 10-20 mm; 24 puts it at 58 mm, which is as fine as
+    // an alpha-tested card can go before mip-mapping starts eating the threads
+    // and the whole panel fades out at 30 m.
+    var n = 24, p = S / n;
     g.lineCap = 'round';
     // Thin threads, not ribbons: a knitted debris net is roughly 60% open, and
     // at p*0.40 the "net" was an opaque orange sheet with a pattern on it.
     for (var pass = 0; pass < 2; pass++) {
       g.strokeStyle = pass ? 'rgba(208,96,26,0.95)' : 'rgba(160,66,16,0.95)';
-      g.lineWidth = pass ? p * 0.13 : p * 0.20;
+      g.lineWidth = pass ? p * 0.16 : p * 0.26;
       for (var i = -n; i <= n * 2; i++) {
         g.beginPath(); g.moveTo(i * p, -S); g.lineTo(i * p + 2 * S, S); g.stroke();
         g.beginPath(); g.moveTo(i * p, S * 2); g.lineTo(i * p + 2 * S, 0); g.stroke();
       }
     }
+    // The knots. A knitted net is not two sets of straight threads: it is a
+    // mesh with a bar at every crossing, and the knots are what give it a
+    // texture rather than a moire.
+    g.fillStyle = 'rgba(224,112,34,0.95)';
+    for (i = -1; i <= n + 1; i++) {
+      for (var j = -1; j <= n + 1; j++) {
+        g.beginPath();
+        g.arc((i + (j % 2 ? 0.5 : 0)) * p, j * p * 0.5, p * 0.17, 0, 6.28318);
+        g.fill();
+      }
+    }
+    // and a bit of wear: a net that has been up all winter has holes in it
+    g.globalCompositeOperation = 'destination-out';
+    for (i = 0; i < 26; i++) {
+      g.globalAlpha = 0.9;
+      g.beginPath();
+      g.arc(rngLike(i * 7.13) * S, rngLike(i * 3.71 + 2.2) * S,
+        2 + rngLike(i * 11.9) * 9, 0, 6.28318);
+      g.fill();
+    }
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = 'source-over';
     var tex = new THREE.CanvasTexture(cv);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -1212,9 +1779,14 @@
     B.box('slab', X1 - X0, 0.70, 0.46, 0, -0.35 - 0.02, Z1 - 0.23, 0.04);
     B.box('slab', 0.46, 0.70, Z1 - Z0, X0 + 0.23, -0.35 - 0.02, 0, 0.04);
     B.box('slab', 0.46, 0.70, Z1 - Z0, X1 - 0.23, -0.35 - 0.02, 0, 0.04);
-    // and the underside itself, so looking over the edge sees a soffit
+    // And the underside itself, so looking over the edge sees a soffit. In the
+    // SOFFIT bucket, not the slab one: a merged slab-key entry is forced onto
+    // the slab wear mode (trowel polish BRIGHTENS), so 2200 m2 of underside was
+    // being painted as a power-floated floor and photographed in the
+    // establishing shot as a sheet of white card under every plate. That is
+    // most of why the tower read as stacked flying carpets.
     B.paint = 'soffit';
-    B.box('slab', X1 - X0, 0.06, Z1 - Z0, 0, -SLAB_T - 0.03, 0, 0.02);
+    B.box('soffit', X1 - X0, 0.06, Z1 - Z0, 0, -SLAB_T - 0.03, 0, 0.02);
     B.paint = 'slab';
 
     // ---- edge upstand + starter bars ---------------------------------------
@@ -1252,6 +1824,39 @@
       if (i === 2) B.tube('rebar', X0 + 0.16, hy, Z0 + 0.6, X0 + 0.16, hy, 2.4, 0.009, 5);
       if (i === 3) B.tube('rebar', X1 - 0.16, hy, -5.0, X1 - 0.16, hy, 11.0, 0.009, 5);
     }
+
+    // ---- continuity bars projecting OUT of the slab edge --------------------
+    // The next bay is cast off this one, so the reinforcement runs straight out
+    // of the edge and waits there. At 300 mm centres over the two barrier gaps
+    // and along the open west edge this is the silhouette that says UNFINISHED,
+    // it is what hero3's foreground is missing, and it is the one detail on the
+    // level that reads at a hundred metres in the establishing shot.
+    B.paint = 'steel';
+    function outBars(along, a0, a1, fixed, dir) {
+      var n2 = Math.max(2, Math.round((a1 - a0) / 0.30));
+      for (var q = 0; q <= n2; q++) {
+        var t2 = q / n2;
+        var px2 = along === 'x' ? M.lerp(a0, a1, t2) : fixed;
+        var pz2 = along === 'x' ? fixed : M.lerp(a0, a1, t2);
+        var ex = along === 'x' ? 0 : dir, ez = along === 'x' ? dir : 0;
+        var len = rng.range(0.34, 0.62);
+        var by = -0.10 - rng.range(0, 0.05);
+        B.tube('rebar', px2, by, pz2,
+          px2 + ex * len, by + rng.range(-0.03, 0.05), pz2 + ez * len, 0.010, 5);
+        // half of them are bent up into a hook - a straight forest is a comb
+        if (q % 2 === 0) {
+          B.tube('rebar', px2 + ex * len, by, pz2 + ez * len,
+            px2 + ex * (len - 0.03), by + 0.17, pz2 + ez * (len - 0.03), 0.010, 5);
+        }
+      }
+    }
+    // the two deliberate gaps in the north edge protection, where the drop is
+    // legible and therefore where the eye goes
+    outBars('x', -12.5, -3.5, Z0 - 0.04, -1);
+    outBars('x', 6.0, 9.0, Z0 - 0.04, -1);
+    // and the open west edge, seen end-on from hero2 and edge-on from overview
+    outBars('z', Z0 + 1.0, -4.0, X0 - 0.04, -1);
+    B.paint = 'slab';
 
     // ---- the slab void ------------------------------------------------------
     // A double-height opening into floor 46: the level's walkable verticality,
@@ -1504,6 +2109,7 @@
   // every one of them draws a 23 m shadow.
   function buildColumns(L, B, rng, N) {
     var out = [];
+    var ci = 0;
     for (var i = 0; i < COLX.length; i++) {
       for (var k = 0; k < COLZ.length; k++) {
         var x = COLX[i], z = COLZ[k];
@@ -1517,11 +2123,20 @@
         B.paint = 'wall';
         // Two lifts with a construction joint between them: a column is not one
         // extrusion, and the joint line is where all the staining starts.
-        B.box('column', w, h * 0.42, w, x, y0 + h * 0.21, z, 0.035);
-        B.box('column', w - 0.012, h * 0.58, w - 0.012, x, y0 + h * 0.42 + h * 0.29, z, 0.035);
+        //
+        // The bevel is 55 mm, not 35. A formed concrete column carries a 20-25
+        // mm chamfer fillet, but bevelBox pushes the CORNER VERTEX in rather
+        // than adding a facet, so the visible chamfer band is roughly half the
+        // number - and at 35 mm the arrises photographed as razor-sharp 90
+        // degree corners at 4 m, which is the single loudest "this is a box"
+        // tell on the largest repeated object in the level.
+        B.box('column', w, h * 0.42, w, x, y0 + h * 0.21, z, 0.055);
+        B.box('column', w - 0.012, h * 0.58, w - 0.012, x, y0 + h * 0.42 + h * 0.29, z, 0.055);
         B.box('column', w + 0.030, 0.028, w + 0.030, x, y0 + h * 0.42, z, 0.008);
-        // kicker at the base - the 75 mm upstand the column was cast off
+        // kicker at the base - the 75 mm upstand the column was cast off, with
+        // the grout run that always squeezes out under it
         B.box('column', w + 0.09, 0.075, w + 0.09, x, y0 + 0.037, z, 0.012);
+        B.box('column', w + 0.13, 0.022, w + 0.13, x, y0 + 0.011, z, 0.006);
         // formwork tie holes, plugged
         for (var t = 0; t < 6; t++) {
           var ty = y0 + 0.55 + t * 0.58;
@@ -1533,12 +2148,29 @@
               Math.PI * 0.5, 0, 0, 6);
           }
         }
-        // head: starter cage for the column above, poking through the soffit
+        // head: starter cage for the column above, poking through the soffit.
+        // Eight bars on the perimeter, not four on the diagonal - a real column
+        // cage has a bar at every corner AND at every face centre, and the
+        // difference between four and eight is the difference between a stub
+        // and a silhouette.
         B.paint = 'steel';
-        for (var a = -1; a <= 1; a += 2) {
-          for (var b = -1; b <= 1; b += 2) {
-            B.cyl('rebar', 0.012, 0.012, 0.55, x + a * 0.30, SOFFIT_Y + 0.10, z + b * 0.30, 0, 0, 0, 5);
-          }
+        var cageR = 0.30;
+        for (var a = 0; a < 8; a++) {
+          var ca = a / 8 * 6.28318 + 0.3927;
+          var bx0 = x + Math.cos(ca) * cageR * 1.41, bz0 = z + Math.sin(ca) * cageR * 1.41;
+          bx0 = x + M.clamp(bx0 - x, -cageR, cageR);
+          bz0 = z + M.clamp(bz0 - z, -cageR, cageR);
+          var bh = rng.range(0.48, 0.72);
+          B.cyl('rebar', 0.012, 0.012, bh, bx0, SOFFIT_Y + 0.10 + bh * 0.5 - 0.275,
+            bz0, rng.range(-0.05, 0.05), 0, rng.range(-0.05, 0.05), 5);
+        }
+        // the links binding the cage, at two levels
+        for (a = 0; a < 2; a++) {
+          var ly2 = SOFFIT_Y + 0.22 + a * 0.26;
+          B.tube('rebar', x - cageR, ly2, z - cageR, x + cageR, ly2, z - cageR, 0.008, 4);
+          B.tube('rebar', x + cageR, ly2, z - cageR, x + cageR, ly2, z + cageR, 0.008, 4);
+          B.tube('rebar', x + cageR, ly2, z + cageR, x - cageR, ly2, z + cageR, 0.008, 4);
+          B.tube('rebar', x - cageR, ly2, z + cageR, x - cageR, ly2, z - cageR, 0.008, 4);
         }
         // plywood corner protector, on about half of them
         if (rng.bool(0.45)) {
@@ -1550,19 +2182,52 @@
           B.box('timber', 0.018, 1.24, w * 0.9, x + ox * (w * 0.5 + 0.012), cy, z, 0.003);
           B.box('timber', w * 0.9, 1.24, 0.018, x, cy, z + oz * (w * 0.5 + 0.012), 0.003);
         }
-        // markings: grid reference at eye height on the face that gets seen
+        // ---- markings -------------------------------------------------------
+        // Indexed by column, never rolled: with one cell, one height and one
+        // face the whole grid carried the identical mark, which is the
+        // instant-fail "perfectly uniform anything" delivered by the level's own
+        // storytelling element - and a stencil is high contrast, so it is the
+        // first thing a player notices. Three independent strides (mark, height,
+        // face) coprime with their own counts guarantee no two adjacent columns
+        // agree on all three, and 30% carry no mark at all because in reality
+        // the setting-out engineer never got to them.
         B.paint = 'flat';
-        decalCard(B, CELL.gridref, x - w * 0.5 - 0.008, y0 + 1.62, z, 0.60, 0.60, 'x-',
-          tint(0xffffff, 0), rng.range(-0.03, 0.03));
+        if ((ci * 7 + 3) % 10 >= 3) {
+          var mkCell = GRIDREFS[(ci * 3 + 1) % GRIDREFS.length];
+          var mkY = y0 + 1.62 + ((ci % 5) - 2) * 0.125;
+          var mkS = 0.50 + ((ci * 5) % 4) * 0.075;
+          var face = (ci * 5 + 2) % 4;         // 0 x-, 1 z-, 2 x+, 3 z+
+          var off = w * 0.5 + 0.008;
+          // The B channel of the wear mask is trowel polish / edge wear. Paint
+          // does not stick to a burnished surface, so the mark FADES where the
+          // concrete is polished and stays where it is rough - which is what
+          // stops it reading as a sticker laid on top of the noise.
+          var polish = M.saturate(N.fbm2(x * 0.30, mkY * 0.30, 2) * 0.5 + 0.5);
+          var mkA = M.clamp(0.62 + polish * 0.38, 0.45, 1.0);
+          if (face === 0) decalCard(B, mkCell, x - off, mkY, z, mkS, mkS, 'x-',
+            tint(0xffffff, 0), rng.range(-0.05, 0.05), mkA);
+          else if (face === 1) decalCard(B, mkCell, x, mkY, z - off, mkS, mkS, 'z-',
+            tint(0xffffff, 0), rng.range(-0.05, 0.05), mkA);
+          else if (face === 2) decalCard(B, mkCell, x + off, mkY, z, mkS, mkS, 'x+',
+            tint(0xffffff, 0), rng.range(-0.05, 0.05), mkA);
+          else decalCard(B, mkCell, x, mkY, z + off, mkS, mkS, 'z',
+            tint(0xffffff, 0), rng.range(-0.05, 0.05), mkA);
+        }
         if (rng.bool(0.4)) {
           decalCard(B, CELL.streak, x, y0 + h * 0.5, z + w * 0.5 + 0.008,
-            w * 0.9, h * 0.85, 'z', tint(0xffffff, 0), 0);
+            w * 0.9, h * 0.85, 'z', tint(0xffffff, 0), 0, 0.72);
         }
         if (rng.bool(0.22)) {
           decalCard(B, CELL.hazard, x, y0 + 1.05, z - w * 0.5 - 0.008,
             w * 1.0, 0.26, 'z-', tint(0xffffff, 0), 0);
         }
+        // pour record, low down, on about a fifth of them
+        if (ci % 5 === 2) {
+          decalCard(B, CELL.pourdate, x + w * 0.5 + 0.008, y0 + 0.62, z, 0.44, 0.30, 'x+',
+            tint(0xffffff, 0), 0.03, 0.80);
+        }
         B.paint = 'wall';
+        ci++;
         L.addCollider(x, y0 + h * 0.5, z, w * 0.5 + 0.02, h * 0.5, w * 0.5 + 0.02, 'concrete');
         out.push({ x: x, z: z, y: y0, w: w, kind: 'column' });
       }
@@ -1664,9 +2329,18 @@
       B.paint = 'steel';
       B.tube('scaff', LOB_X1 + 0.02, 1.10, dz - 1.05, LOB_X1 + 0.02, 1.10, dz + 1.05, 0.024, 7);
       B.tube('scaff', LOB_X1 + 0.02, 0.52, dz - 1.05, LOB_X1 + 0.02, 0.52, dz + 1.05, 0.024, 7);
+      signPlate(B, rng, CELL.danger, LOB_X1 - 0.02, 1.74, dz, 0.56, 'x-', i === 0);
+      // The hazard tape below it follows the surface and is torn at both ends:
+      // four short segments at slightly different heights and rolls read as a
+      // strip somebody stuck on, where one 2.1 m ribbon at a single angle reads
+      // as a flat vinyl decal glued to an undulating wall.
       B.paint = 'flat';
-      decalCard(B, CELL.danger, LOB_X1 - 0.02, 1.72, dz, 0.56, 0.56, 'x-', tint(0xffffff, 0), 0.03);
-      decalCard(B, CELL.tape, LOB_X1 - 0.03, 1.42, dz, 2.10, 0.28, 'x-', tint(0xffffff, 0), -0.04);
+      for (var q4 = 0; q4 < 4; q4++) {
+        var tz4 = dz - 0.90 + q4 * 0.56;
+        decalCard(B, CELL.tape, LOB_X1 - 0.032, 1.42 + Math.sin(q4 * 1.9) * 0.035, tz4,
+          0.58, 0.24, 'x-', tint(0xffffff, 0), rng.range(-0.09, 0.09),
+          rng.range(0.72, 0.95));
+      }
       B.paint = 'wall';
       L.addCollider(LOB_X1 + 0.10, 0.55, dz, 0.10, 0.55, 1.10, 'metal');
     }
@@ -1740,10 +2414,11 @@
       B.box('scaff', 0.34, 0.03, 0.03, LOB_X1 - 0.30, 3.44, cz2, 0.004);
     }
     // markings
+    signPlate(B, rng, CELL.noentry, LOB_X0 + 0.012, 1.80, -7.6, 0.52, 'x+', false);
+    signPlate(B, rng, CELL.label, LOB_X0 + 0.012, 2.32, 1.4, 0.42, 'x+', true);
     B.paint = 'flat';
-    decalCard(B, CELL.noentry, LOB_X0 + 0.012, 1.80, -7.6, 0.52, 0.52, 'x+', tint(0xffffff, 0), 0);
-    decalCard(B, CELL.label, LOB_X0 + 0.012, 2.32, 1.4, 0.72, 0.34, 'x+', tint(0xffffff, 0), 0.02);
-    decalCard(B, CELL.logo, LOB_X0 + 0.012, 2.05, 7.8, 0.80, 0.80, 'x+', tint(0xffffff, 0), -0.02);
+    decalCard(B, CELL.logo, LOB_X0 + 0.012, 2.05, 7.8, 0.80, 0.80, 'x+',
+      tint(0xffffff, 0), -0.02, 0.70);
     for (i = 0; i < 10; i++) {
       var wz = rng.range(CORE_Z0 + 1, CORE_ZI1 - 1);
       decalCard(B, CELL.streak, LOB_X1 - 0.012, rng.range(1.2, 3.2), wz,
@@ -1841,6 +2516,43 @@
   // netting - in RUNS, with gaps. The gaps are the point. A continuous barrier
   // makes the drop safe and therefore invisible; a missing bay at the north-west
   // corner is what makes the level's premise legible from a standing eye.
+  // A sagging debris-net panel. Real netting is tied at the standards and
+  // bellies between them; a flat card with a UV that restarts at 0 every bay is
+  // how eight metres of net ends up looking like one diamond pattern stamped
+  // eight times. uOfs shifts the diamond phase per panel.
+  function netPanel(w, h, uOfs) {
+    var nx = Math.max(3, Math.round(w / 1.0)), ny = 3;
+    var pos = [], nor = [], uvs = [], idx = [];
+    var i, j;
+    for (j = 0; j <= ny; j++) {
+      for (i = 0; i <= nx; i++) {
+        var fx = i / nx, fy = j / ny;
+        // catenary between the ties (every second column is a tie), plus a
+        // slow belly over the whole run
+        var bay = fx * (nx * 0.5);
+        var local = Math.abs((bay % 1) - 0.5) * 2;
+        var sag = (1 - local * local) * 0.028 + Math.sin(fx * Math.PI) * 0.045;
+        pos.push((fx - 0.5) * w, (fy - 0.5) * h, sag * (0.35 + fy * 0.65));
+        nor.push(0, 0, 1);
+        uvs.push(uOfs + fx * (w / 1.4), fy * (h / 1.4));
+      }
+    }
+    for (j = 0; j < ny; j++) {
+      for (i = 0; i < nx; i++) {
+        var a = j * (nx + 1) + i, b = a + 1, c = a + nx + 1, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+    g.setIndex(idx);
+    var out = g.toNonIndexed();
+    g.dispose();
+    return out;
+  }
+
   function buildEdgeProtection(L, B, rng, N) {
     var i;
     // [along, a0, a1, netted]  - 'along' is 'x' (north edge) or 'z' (west edge)
@@ -1886,11 +2598,13 @@
       if (run[3]) {
         B.paint = 'mesh';
         var len = a1 - a0;
-        var uu = len / 1.4, vv = 1.05 / 1.4;
-        var g = quad(len, 1.05, 0, 0, uu, vv);
         var mx = horiz ? (a0 + a1) * 0.5 : fixed - 0.045;
         var mz = horiz ? fixed - 0.045 : (a0 + a1) * 0.5;
-        B.add('debris_net', g, makeM(mx, 0.60, mz, 0, horiz ? 0 : Math.PI * 0.5, 0));
+        // A netted panel sags between its ties and its diamond phase does not
+        // restart at every bay. A flat card with a UV starting at 0 every time
+        // is why it read as a lattice printed on glass.
+        B.add('debris_net', netPanel(len, 1.05, r * 0.37),
+          makeM(mx, 0.60, mz, 0, horiz ? 0 : Math.PI * 0.5, 0));
       }
       B.paint = 'steel';
     }
@@ -1902,19 +2616,35 @@
     B.paint = 'steel';
     B.box('scaff', 0.055, 1.15, 0.055, -11.4, plateY(-11.4, Z0 + 1.7, N) + 0.03, Z0 + 1.7,
       Math.PI * 0.48, 0.6, 0, 0.008);
+    // The tape is strung between two tubes 8.8 m apart, so it SAGS - about
+    // 90 mm at midspan - and each segment tilts to follow the curve. A tape
+    // drawn as a dead-straight ribbon across an 8 m gap is one of the loudest
+    // "this is a UI decal in a 3D scene" tells there is, and this one runs
+    // across the lower left of the signature frame.
     B.paint = 'flat';
-    for (i = 0; i < 3; i++) {
-      decalCard(B, CELL.tape, M.lerp(-11.4, -4.6, (i + 0.5) / 3), 0.64 + Math.sin(i * 2.1) * 0.04,
-        Z0 + 0.34, 2.3, 0.115, 'z', tint(0xffffff, 0), rng.range(-0.05, 0.05));
-    }
+    (function () {
+      var ta = -12.4, tb = -3.6, top = 0.68, sagMax = 0.095;
+      var nSeg = 6;
+      for (var q = 0; q < nSeg; q++) {
+        var t0 = q / nSeg, t1 = (q + 1) / nSeg;
+        var x0 = M.lerp(ta, tb, t0), x1b = M.lerp(ta, tb, t1);
+        var y0t = top - Math.sin(t0 * Math.PI) * sagMax;
+        var y1t = top - Math.sin(t1 * Math.PI) * sagMax;
+        var segW = Math.sqrt((x1b - x0) * (x1b - x0) + (y1t - y0t) * (y1t - y0t));
+        decalCard(B, CELL.tape, (x0 + x1b) * 0.5, (y0t + y1t) * 0.5, Z0 + 0.34,
+          segW * 1.04, 0.115, 'z', tint(0xffffff, 0),
+          Math.atan2(y1t - y0t, x1b - x0), 0.92);
+      }
+    })();
     // The placard needs something to be screwed TO. Hung on nothing it is a
     // white rectangle floating over 176 m of air, which is what the first
     // capture printed on the left of hero3.
     B.paint = 'ply';
     B.box('timber', 0.50, 0.50, 0.016, -12.5, 1.10, Z0 + 0.335, 0.004);
+    signPlate(B, rng, CELL.danger, -12.5, 1.10, Z0 + 0.328, 0.44, 'z', true);
     B.paint = 'flat';
-    decalCard(B, CELL.danger, -12.5, 1.10, Z0 + 0.327, 0.44, 0.44, 'z', tint(0xffffff, 0), 0.04);
-    decalCard(B, CELL.noentry, -12.5, 1.10, Z0 + 0.344, 0.40, 0.40, 'z-', tint(0xffffff, 0), -0.03);
+    decalCard(B, CELL.noentry, -12.5, 1.10, Z0 + 0.348, 0.40, 0.40, 'z-',
+      tint(0xffffff, 0), -0.03, 0.86);
     B.paint = 'steel';
     // the tape's tubes
     B.cyl('scaff', 0.024, 0.024, 1.3, -12.4, 0.65, Z0 + 0.34, 0, 0, 0, 7);
@@ -1960,20 +2690,57 @@
   // shrink wrap on the block packs, the sheeting on the glazing crates - still
   // goes through the merge like everything else.
   function buildSheeting(L, B, rng, N) {
-    // [x, z, yaw, width, height, phase]
+    // [x, z, yaw, width, height, phase, anchorY]
+    // anchorY defaults to the soffit. The last two hang off the NORTH SLAB EDGE
+    // and fall past it, which does three jobs at once: they are the vertical
+    // that runs out of the bottom of the hero1 frame (the cheapest altitude cue
+    // there is), they put a soft moving silhouette on the tower's edge in the
+    // establishing shot, and they are the only thing in the level that is
+    // genuinely backlit by a sun on the horizon.
+    // The yaws were also wrong, and had been from the start: with Euler YXZ a
+    // yaw of PI/2 maps the sheet's local +X onto world -Z, so every panel
+    // labelled "north edge" actually hung PERPENDICULAR to that edge with half
+    // its width cantilevered over 176 m of air, and vice versa on the west. A
+    // sheet spans ALONG the opening it covers.
     var SHEETS = [
-      [X0 + 0.55, -13.2, 0, 4.6, 3.30, 0.0],
-      [X0 + 0.55, -4.2, 0, 3.8, 3.30, 1.7],
-      [-19.0, Z0 + 0.55, Math.PI * 0.5, 5.2, 3.30, 3.1],
-      [-3.2, Z0 + 0.55, Math.PI * 0.5, 4.0, 2.60, 4.6],
-      [12.5, Z0 + 0.55, Math.PI * 0.5, 4.6, 3.30, 5.9],
-      [X1 - 0.55, 5.0, Math.PI, 4.4, 3.30, 2.4]
+      [X0 + 0.55, -13.2, Math.PI * 0.5, 4.6, 3.30, 0.0],
+      [X0 + 0.55, -4.2, Math.PI * 0.5, 3.8, 3.30, 1.7],
+      [-19.0, Z0 + 0.55, 0, 5.2, 3.30, 3.1],
+      [-3.2, Z0 + 0.55, 0, 4.0, 2.60, 4.6],
+      [12.5, Z0 + 0.55, 0, 4.6, 3.30, 5.9],
+      [X1 - 0.55, 5.0, -Math.PI * 0.5, 4.4, 3.30, 2.4],
+      // hung OFF the edge beam and falling past it, outboard of the slab so the
+      // floor cannot occlude them
+      [-8.4, Z0 - 0.34, 0, 3.4, 5.60, 0.9, -0.22],
+      [-15.6, Z0 - 0.34, 0, 3.0, 4.80, 3.8, -0.22],
+      [X0 - 0.34, -8.6, Math.PI * 0.5, 3.2, 5.10, 5.2, -0.22]
     ];
     var out = [];
     for (var i = 0; i < SHEETS.length; i++) {
       var s = SHEETS[i];
       var g = sheetGrid(s[3], s[4], 8, 7);
       var p = g.attributes.position;
+      // ---- torn corners ------------------------------------------------------
+      // A polythene curtain that has been up for a month in a gale is not a
+      // rectangle. The bottom corners are shredded and the free edge is ragged,
+      // and both are done by pulling the mesh in rather than by an alpha map,
+      // because a silhouette against the sky is where a card gets found out.
+      (function () {
+        var pa2 = p.array, nxs = 8, nys = 7;
+        for (var jj = 0; jj <= nys; jj++) {
+          for (var ii = 0; ii <= nxs; ii++) {
+            var vi2 = (jj * (nxs + 1) + ii) * 3;
+            var fy = jj / nys, fx = ii / nxs;
+            var edgeT = Math.max(0, fy - 0.55) / 0.45;
+            if (edgeT <= 0) continue;
+            var corner = Math.max(0, Math.abs(fx - 0.5) * 2 - 0.45) / 0.55;
+            var rag = (rngLike(i * 31.7 + ii * 7.3 + jj * 2.9) - 0.35);
+            pa2[vi2 + 1] += edgeT * (corner * corner * s[4] * 0.30 + rag * 0.16 * edgeT);
+            pa2[vi2] += rag * 0.06 * edgeT;
+          }
+        }
+        p.needsUpdate = true;
+      })();
       // Creases baked as value, plus a warm lift where the sun is behind the
       // sheet. Polythene backlit by a sun on the horizon is the brightest soft
       // thing in the level and it must not read as grey plastic.
@@ -1997,21 +2764,35 @@
       }
       g.setAttribute('color', new THREE.BufferAttribute(col, 3));
       Geo.copyUV1(g);
+      var anchorY = s[6] === undefined ? SOFFIT_Y - 0.16 : s[6];
       out.push({
         geo: g, base: new Float32Array(p.array), phase: s[5],
         w: s[3], h: s[4],
-        matrix: makeM(s[0], SOFFIT_Y - 0.16, s[1], 0, s[2], 0)
+        matrix: makeM(s[0], anchorY, s[1], 0, s[2], 0)
       });
       // the tube it is hung from
       B.paint = 'steel';
       var hx = s[0], hz = s[1];
+      var tubeY = anchorY + 0.02;
       var ax = hx - Math.cos(s[2]) * s[3] * 0.5, az = hz + Math.sin(s[2]) * s[3] * 0.5;
       var bx = hx + Math.cos(s[2]) * s[3] * 0.5, bz = hz - Math.sin(s[2]) * s[3] * 0.5;
-      B.tube('scaff', ax, SOFFIT_Y - 0.14, az, bx, SOFFIT_Y - 0.14, bz, 0.022, 7);
+      B.tube('scaff', ax, tubeY, az, bx, tubeY, bz, 0.022, 7);
+      // ---- grommets and cable ties -------------------------------------------
+      // The head of a polythene curtain is not glued on. It is eyeletted at
+      // ~400 mm centres and cable-tied to the tube, and at 2 m those ties are
+      // the only thing that says "this was hung by a person".
+      var nEye = Math.max(3, Math.round(s[3] / 0.42));
+      for (var q3 = 0; q3 <= nEye; q3++) {
+        var et = q3 / nEye;
+        var ex2 = M.lerp(ax, bx, et), ez2 = M.lerp(az, bz, et);
+        B.cyl('scaff', 0.014, 0.014, 0.006, ex2, anchorY - 0.05, ez2,
+          Math.PI * 0.5, 0, 0, 8);                                  // the eyelet
+        B.tube('scaff', ex2, anchorY - 0.05, ez2, ex2, tubeY + 0.03, ez2, 0.004, 4);
+      }
       // and the batten screwed through it at the head, which is what a sheet is
       // actually fixed with
       B.paint = 'ply';
-      B.boxR('timber', s[3] * 0.98, 0.05, 0.028, hx, SOFFIT_Y - 0.20, hz, 0, s[2], 0, 0.004);
+      B.boxR('timber', s[3] * 0.98, 0.05, 0.028, hx, anchorY - 0.055, hz, 0, s[2], 0, 0.004);
       B.paint = 'steel';
     }
     return out;
@@ -2037,6 +2818,25 @@
         B.box('plant', 0.16, 0.024, 0.16, rows[r], lifts[0] - 0.40, z, 0.004);
       }
     }
+    // A COUPLER IS A CLAMP, NOT A RING. Two 45 mm forged halves round the tube
+    // with a bolt through the ear - a dozen triangles each, and the difference
+    // between "scaffold" and "pipes crossing in mid air" at 3x zoom.
+    function coupler(cx, cy, cz, axis) {
+      B.paint = 'steel';
+      if (axis === 'z') {
+        B.cyl('scaff', 0.046, 0.046, 0.030, cx, cy, cz - 0.020, 0, 0, Math.PI * 0.5, 8);
+        B.cyl('scaff', 0.046, 0.046, 0.030, cx, cy, cz + 0.020, 0, 0, Math.PI * 0.5, 8);
+        B.box('scaff', 0.020, 0.024, 0.086, cx + 0.046, cy, cz, 0.004);
+        B.cyl('plant', 0.011, 0.011, 0.052, cx + 0.052, cy, cz, Math.PI * 0.5, 0, 0, 6);
+      } else {
+        B.cyl('scaff', 0.046, 0.046, 0.030, cx, cy - 0.020, cz, 0, 0, 0, 8);
+        B.cyl('scaff', 0.046, 0.046, 0.030, cx, cy + 0.020, cz, 0, 0, 0, 8);
+        B.box('scaff', 0.086, 0.024, 0.020, cx, cy, cz + 0.046, 0.004);
+        B.cyl('plant', 0.011, 0.011, 0.052, cx, cy, cz + 0.052, Math.PI * 0.5, 0, 0, 6);
+      }
+      B.paint = 'steel';
+    }
+
     for (k = 0; k < lifts.length; k++) {
       var ly = lifts[k];
       // ledgers
@@ -2047,6 +2847,8 @@
       for (i = 0; i <= bays; i++) {
         var tz = SCAF_Z0 + i * pitch;
         B.tube('scaff', rows[0] - 0.30, ly, tz, rows[1] + 0.20, ly, tz, 0.022, 7);
+        // every standard/ledger/transom node carries a right-angle coupler
+        for (r = 0; r < rows.length; r++) coupler(rows[r], ly, tz, 'y');
       }
       if (k > 0) {
         B.paint = 'ply';
@@ -2088,8 +2890,8 @@
       var na = SCAF_Z0 + 0.3 + i * (pitch * 4 + 1.2);
       var nb = Math.min(SCAF_Z1 - 0.3, na + pitch * 3.6);
       if (nb - na < 1) continue;
-      var g2 = quad(nb - na, 8.0, 0, 0, (nb - na) / 1.4, 8.0 / 1.4);
-      B.add('debris_net', g2, makeM(rows[1] + 0.06, 2.1, (na + nb) * 0.5, 0, Math.PI * 0.5, 0));
+      B.add('debris_net', netPanel(nb - na, 8.0, i * 0.61),
+        makeM(rows[1] + 0.06, 2.1, (na + nb) * 0.5, 0, Math.PI * 0.5, 0));
     }
     B.paint = 'steel';
     // the scaffold blocks the east bays
@@ -2581,9 +3383,83 @@
         B.cyl('scaff', 0.030, 0.030, 2.6, tx, uy + SLAB_T + 1.3, tz, 0, 0, 0, 6);
       }
     }
+    // ---- the core, continuing up ---------------------------------------------
+    // It is the tallest solid mass in the level and it stands dead centre of the
+    // establishing shot, where the first cut printed it as a blank white cuboid
+    // - which is item one on the instant-fail list on the most prominent object
+    // in the frame after the crane. A core is climbed with jumpform: the shaft
+    // runs ahead of the floors, it carries the lift line of every pour, and it
+    // wears the climbing screen and the strongbacks of the formwork that made it.
+    // ---- THE BUG THIS BOX WAS, FOR THE WHOLE OF THE FIRST BUILD --------------
+    // coreYb was SLAB_T, i.e. 0.34 - so this solid 14 x 20 x 10.3 m block
+    // started 340 mm above the WORKING FLOOR and swallowed the lift lobby whole.
+    // The `interior` framing stands inside it. Everything buildCore models in
+    // there - the shear walls, the lift-bank wall, the blockwork riser, the
+    // lobby's own soffit - was buried, and what photographed as "the lobby
+    // ceiling and its black-pitted crust" was the INSIDE of this block. Which is
+    // why lowering the soffit's uv, then its triScale, then its AO, then its
+    // normal scale, then its detail normal, then its parallax, changed
+    // absolutely nothing: none of those surfaces were ever on screen.
+    //
+    // The core continues up from the floor ABOVE, which is where it always
+    // should have started.
     B.paint = 'wall';
-    B.box('core_wall', CORE_X1 - CORE_X0, FLOOR_H * 2.4, CORE_Z1 - CORE_Z0,
-      (CORE_X0 + CORE_X1) * 0.5, FLOOR_H * 1.2 + SLAB_T, (CORE_Z0 + CORE_Z1) * 0.5, 0.04);
+    var coreYb = SOFFIT_Y + SLAB_T;
+    var coreH = FLOOR_H * 2.4 - (coreYb - SLAB_T);
+    var coreYt = coreYb + coreH;
+    var ccx = (CORE_X0 + CORE_X1) * 0.5, ccz = (CORE_Z0 + CORE_Z1) * 0.5;
+    var cwx = CORE_X1 - CORE_X0, cwz = CORE_Z1 - CORE_Z0;
+    B.box('core_wall', cwx, coreH, cwz, ccx, coreYb + coreH * 0.5, ccz, 0.04);
+    // pour lifts: a 40 mm proud band at every 1.35 m climb, which is what a
+    // jumpform leaves and the only thing that gives a 10 m shaft any scale
+    for (k = 0; k * 1.35 < coreH - 0.4; k++) {
+      var ly3 = coreYb + 0.35 + k * 1.35;
+      B.box('core_wall', cwx + 0.05, 0.055, cwz + 0.05, ccx, ly3, ccz, 0.012);
+    }
+    // the climbing screen on the two faces that see the camera: a steel frame
+    // with mesh infill, hung off the last completed lift
+    B.paint = 'steel';
+    for (k = 0; k < 2; k++) {
+      var scx = k ? ccx : CORE_X0 - 0.16;
+      var scz = k ? CORE_Z0 - 0.16 : ccz;
+      var sw2 = k ? cwx : 0.10, sd2 = k ? 0.10 : cwz;
+      for (i = 0; i < 5; i++) {
+        var fy2 = coreYb + 0.6 + i * (coreH - 1.2) / 4;
+        B.box('scaff', sw2 + (k ? 0.3 : 0), 0.055, sd2 + (k ? 0 : 0.3),
+          scx, fy2, scz, 0.008);
+      }
+      var nPost = k ? 7 : 6;
+      for (i = 0; i <= nPost; i++) {
+        var pt = i / nPost;
+        var qx = k ? M.lerp(CORE_X0, CORE_X1, pt) : scx;
+        var qz = k ? scz : M.lerp(CORE_Z0, CORE_Z1, pt);
+        B.tube('scaff', qx, coreYb + 0.5, qz, qx, coreYt - 0.5, qz, 0.028, 6);
+      }
+      // and the mesh infill over the lower half
+      B.paint = 'mesh';
+      B.add('debris_net',
+        netPanel(k ? cwx - 0.4 : cwz - 0.4, coreH * 0.52, k * 0.43),
+        makeM(scx - (k ? 0 : 0.05), coreYb + coreH * 0.30, scz - (k ? 0.05 : 0),
+          0, k ? 0 : Math.PI * 0.5, 0));
+      B.paint = 'steel';
+    }
+    // two openings punched in the shaft - a door and a services penetration -
+    // as recessed dark boxes, because a wall with no holes in it is a wall
+    // nobody has ever had to get through
+    B.paint = 'wall';
+    B.box('core_wall', 0.30, 2.10, 1.05, CORE_X0 + 0.06, coreYb + 1.15, ccz - 3.2, 0.02);
+    B.box('core_wall', 0.30, 0.85, 0.85, CORE_X0 + 0.06, coreYb + 5.20, ccz + 2.4, 0.02);
+    // the last pour's kicker, still with the starter bars out of it
+    B.paint = 'steel';
+    for (i = 0; i < 26; i++) {
+      var bt = i / 25;
+      var rx2 = M.lerp(CORE_X0 + 0.2, CORE_X1 - 0.2, bt);
+      var bh2 = rng.range(0.28, 0.55);
+      B.cyl('rebar', 0.011, 0.011, bh2, rx2, coreYt + bh2 * 0.5, CORE_Z0 + 0.16,
+        rng.range(-0.10, 0.10), 0, rng.range(-0.10, 0.10), 5);
+      B.cyl('rebar', 0.011, 0.011, bh2 * 0.9, rx2, coreYt + bh2 * 0.45, CORE_Z1 - 0.16,
+        rng.range(-0.10, 0.10), 0, rng.range(-0.10, 0.10), 5);
+    }
     B.paint = 'steel';
   }
 
@@ -2599,30 +3475,57 @@
     var i, k;
 
     // ---- the ground ---------------------------------------------------------
-    // Wide enough that its rim is past the far plane, and with a low ridge on
-    // it so it never terminates against the sky as a ruled straight line.
+    // GROUND_R is 2600 m, not 900. At 900 the plate terminated in a perfectly
+    // horizontal edge two thirds of the way up the establishing frame, and
+    // beyond it the sky dome's lower hemisphere rendered at sRGB 0.05 - so the
+    // image carried a bright plate, a ruled seam and then a dead black band the
+    // full width of the frame, directly under the sunset glow. That is
+    // simultaneously "perfectly straight anything" and "an unlit ground plane".
+    // The fix is not a higher fog cap (which erases the near city with it) but
+    // pushing the rim out until the fog is AT its cap when it gets there, and
+    // raising distant ground behind the city so the silhouette is a hazy ridge
+    // rather than a ruled line. The far ridge tops out ~55 m BELOW the working
+    // plate, so from every published eye it fills the gap under the horizon and
+    // never crosses it.
     B.paint = 'city';
-    var gnd = gridSurface(-GROUND_R, GROUND_R, -GROUND_R, GROUND_R, GROUND_R / 26,
+    var gnd = gridSurface(-GROUND_R, GROUND_R, -GROUND_R, GROUND_R, GROUND_R / 46,
       function (x, z) {
         var r = Math.sqrt(x * x + z * z);
         var y = CITY_Y - 1.0;
-        // The city sits in a shallow basin with low ground rising past it. This
-        // is the same trick the market's outer plain uses and for the same
-        // reason: a plain that terminates in a ruled straight line reads as a
-        // failure, and a wavy ridge reads as distance.
-        y += (N.fbm2(x * 0.0022 + 4.1, z * 0.0022 - 2.6, 3) * 0.5 + 0.5) * 62 *
-          M.smoothstep(280, 820, r);
+        // the ripple of a real urban floor: rail cuttings, a river valley
         y += (N.fbm2(x * 0.0075 - 1.4, z * 0.0075 + 3.9, 2) * 0.5 + 0.5) * 9 *
           M.smoothstep(120, 420, r);
+        // low ground rising past the built-up area
+        y += (N.fbm2(x * 0.0022 + 4.1, z * 0.0022 - 2.6, 3) * 0.5 + 0.5) * 62 *
+          M.smoothstep(280, 900, r);
+        // ---- the distant hills -----------------------------------------------
+        // Solved, not chosen. From the establishing eye (190 m above the street)
+        // a 2600 m plate's rim sits 4.2 degrees below the horizon, and the band
+        // between the two shows the sky dome's lower hemisphere at sRGB 0.07 -
+        // i.e. the razor-straight black void came back, just further out.
+        // Ground rising to roughly the working plate's own level at the rim
+        // closes that band to a couple of degrees, and because the ridge line
+        // carries 40 m of fbm it closes it as a wavy silhouette rather than as
+        // a second ruled edge. Deliberately NOT taken above the plate: a ridge
+        // that crosses the horizon would cut the sunset glow band, which is the
+        // best thing in the frame.
+        y += (140 + (N.fbm2(x * 0.00085 - 9.2, z * 0.00085 + 6.4, 3) * 0.5 + 0.5) * 40) *
+          M.smoothstep(1250, 2350, r);
         return y;
       });
     B.add('city_ground', gnd, null);
 
     // ---- the street grid ----------------------------------------------------
-    // Two rotated grids, because a single orthogonal one photographs as graph
-    // paper. Everything below is laid out on these lines.
-    var GRID_A = 0.18, GRID_B = GRID_A + 1.22;
-    var BLK = 55.0;
+    // GRID_A is axis-aligned, and that is a decision rather than laziness: the
+    // road network is now BAKED into the ground texture (buildStreetMaps) at a
+    // tile of exactly four block modules, and a texture cannot be rotated per
+    // level without a uv transform this file has no business adding. Aligning
+    // the primary grid to world XZ is what makes the roads actually run between
+    // the buildings. GRID_B is rotated 70 degrees so the second district reads
+    // as a different age of city and the whole thing never photographs as graph
+    // paper - and no published camera bearing is axis-aligned either.
+    var GRID_A = 0.0, GRID_B = 1.22;
+    var BLK = BLK_M;
     var placed = [];
 
     function blockAt(gx, gz, ang, seed) {
@@ -2653,14 +3556,17 @@
       cityBlock(B, rg, wx, wz, yaw, w, d, h, N);
     }
 
+    // Jitter is +/-5 m, not +/-8: the roads in the ground texture are 15 m wide
+    // on a 56 m module, so a footprint of up to 40 m plus 8 m of wander used to
+    // stand a tower in the middle of a carriageway.
     for (i = -11; i <= 11; i++) {
       for (k = -11; k <= 11; k++) {
-        blockAt(i * BLK + rng.range(-8, 8), k * BLK + rng.range(-8, 8), GRID_A);
+        blockAt(i * BLK + rng.range(-5, 5), k * BLK + rng.range(-5, 5), GRID_A);
       }
     }
     for (i = -8; i <= 8; i++) {
       for (k = -8; k <= 8; k++) {
-        blockAt(i * BLK * 1.30 + rng.range(-11, 11), k * BLK * 1.30 + rng.range(-11, 11), GRID_B);
+        blockAt(i * BLK * 1.30 + rng.range(-9, 9), k * BLK * 1.30 + rng.range(-9, 9), GRID_B);
       }
     }
 
@@ -2714,39 +3620,135 @@
       B.paint = 'steel';
     })();
 
+    // ---- the far rim --------------------------------------------------------
+    // Between the modelled city (610 m) and the ground rim (2600 m) the skyline
+    // used to simply STOP. Three rings of cheap slabs - four quads each, no roof
+    // furniture, no windows - recede in steps behind it. At 700-1750 m the fog
+    // is at 64-80% so these are pure silhouette; their whole job is to make the
+    // horizon a city receding rather than an edge.
+    B.paint = 'farcity';
+    (function () {
+      var rings = [
+        { r: FAR_R0, n: 46, hMin: 22, hMax: 72 },
+        { r: 1120, n: 58, hMin: 16, hMax: 54 },
+        { r: FAR_R1, n: 70, hMin: 12, hMax: 40 }
+      ];
+      for (var q = 0; q < rings.length; q++) {
+        var rr = rings[q];
+        for (var s = 0; s < rr.n; s++) {
+          var ang = (s + rng.range(-0.34, 0.34)) / rr.n * 6.28318;
+          var rad = rr.r * rng.range(0.86, 1.16);
+          var bx2 = Math.cos(ang) * rad, bz2 = Math.sin(ang) * rad;
+          var bh = rng.range(rr.hMin, rr.hMax);
+          if (rng.bool(0.10)) bh *= rng.range(1.5, 2.3);
+          farBlock(B, rng, bx2, bz2, rng.range(0, 1.57),
+            rng.range(24, 62), rng.range(24, 62), bh);
+        }
+      }
+    })();
+
     // ---- points of light ----------------------------------------------------
-    // Street lighting, laid on the grid lines, plus the two arterials. From
-    // 176 m up each of these is one to three pixels: their only job is to
-    // survive the haze as a POINT, which is why they are pure emissive cards
+    // Street lighting, laid ON THE ROAD CENTRELINES the ground texture draws,
+    // at 34 m spacing. The previous pass sprayed 1430 cards on two rotated grids
+    // at BLK spacing with nothing under them, so the drop read as random dots
+    // over cream soup instead of as streets running away. A line of points that
+    // agrees with a line of tarmac is the whole depth cue.
+    //
+    // From 176 m up each card is one to three pixels: their only job is to
+    // survive the haze as a POINT, which is why they are pure emissive quads
     // lying flat rather than anything with a normal.
     B.paint = 'flat';
-    var lampGeo = quad(4.6, 4.6, 0, 0, 1, 1);
-    function lampLine(ang, off, n, spacing, tintC) {
-      var ca = Math.cos(ang), sa = Math.sin(ang);
-      for (var q = 0; q < n; q++) {
-        var g0 = (q - n * 0.5) * spacing;
-        var wx = g0 * ca - off * sa, wz = g0 * sa + off * ca;
-        var r = Math.sqrt(wx * wx + wz * wz);
-        if (r > CITY_R * 1.05 || r < 40) continue;
-        var old = B.tint;
-        B.tint = tintC;
-        B.add('city_light', lampGeo, makeM(wx, CITY_Y + 8.0, wz, -Math.PI * 0.5, 0, 0));
-        B.tint = old;
-      }
+    var lampGeo = quad(5.2, 5.2, 0, 0, 1, 1);
+    var bigGeo = quad(8.0, 8.0, 0, 0, 1, 1);
+    // The field runs out to 2.1 km, not 820 m. Between the modelled city and the
+    // ground rim the frame carried a band measuring sRGB 0.065 - the fog colour
+    // looking below the horizon away from the sun is nearly black, and no
+    // albedo can be lifted through an 80% cap. What CAN survive it is emissive:
+    // a real city seen from 176 m up is mostly a carpet of points past the first
+    // kilometre, and 20% of a street lamp is still a street lamp.
+    function lampAt(wx, wz, tintC, big) {
+      var r = Math.sqrt(wx * wx + wz * wz);
+      if (r > 2100 || r < 40) return;
+      var old = B.tint;
+      B.tint = tintC;
+      // past the modelled blocks the lamps stand on ground that rises, so they
+      // are lifted onto it rather than left buried in a hillside
+      var gy2 = CITY_Y + 6.0;
+      if (r > 1250) gy2 += (140 + 20) * M.smoothstep(1250, 2350, r);
+      else if (r > 900) gy2 += 9 * M.smoothstep(900, 1250, r);
+      B.add('city_light', big ? bigGeo : lampGeo,
+        makeM(wx, gy2, wz, -Math.PI * 0.5, 0, 0));
+      B.tint = old;
     }
     var warmL = tint(0xffc487, 0.85), coolL = tint(0xbfd8ff, 0.85);
-    for (i = -8; i <= 8; i++) {
-      lampLine(GRID_A, i * BLK, 46, 22, i % 3 === 0 ? coolL : warmL);
-      lampLine(GRID_A + Math.PI * 0.5, i * BLK, 46, 22, warmL);
+    var hotL = tint(0xffe9c4, 0.92);
+    var SPAN = 34, STEP = 34.0;
+    for (i = -SPAN; i <= SPAN; i++) {
+      // the carriageway centres the texture draws: (i + 0.5) * BLK on both axes
+      var cl = (i + 0.5) * BLK;
+      var arterial = (((i % 4) + 4) % 4) === 1;
+      // thinned past the modelled city so the far field is a scatter of points
+      // rather than a solid emissive carpet
+      var far2 = Math.abs(cl) > CITY_R;
+      if (far2 && (((i % 2) + 2) % 2)) continue;
+      for (k = -52; k <= 52; k++) {
+        var along = k * (arterial ? STEP * 0.45 : STEP);
+        if ((far2 || Math.abs(along) > CITY_R) && (((k % 2) + 2) % 2)) continue;
+        lampAt(along, cl, arterial ? hotL : (i % 3 === 0 ? coolL : warmL), arterial);
+        lampAt(cl, along, arterial ? hotL : warmL, arterial);
+      }
     }
-    for (i = -5; i <= 5; i++) {
-      lampLine(GRID_B, i * BLK * 1.35, 34, 26, warmL);
-    }
-    // two arterials with a denser, brighter run - vehicle light trails
-    var hotL = tint(0xffe9c4, 0.9);
-    lampLine(GRID_A, -1.5 * BLK, 150, 7.0, hotL);
-    lampLine(GRID_A + Math.PI * 0.5, 2.5 * BLK, 150, 7.0, hotL);
+    // the diagonal avenue, matching the one baked into the ground texture
+    (function () {
+      var ca = Math.cos(-0.62), sa = Math.sin(-0.62);
+      for (var q = -34; q <= 34; q++) {
+        var t2 = q * 30.0;
+        lampAt(t2 * ca, t2 * sa, hotL, false);
+      }
+    })();
     B.paint = 'steel';
+  }
+
+  // A rim block: four flat quads and a parapet, no windows, no furniture. At
+  // 700-1750 m under 64-80% haze anything more is triangles spent on a smudge.
+  function farBlock(B, rng, x, z, yaw, w, d, h) {
+    var y0 = CITY_Y, y1 = CITY_Y + h;
+    var ca = Math.cos(yaw), sa = Math.sin(yaw);
+    var hw = w * 0.5, hd = d * 0.5;
+    function P(lx, ly, lz) {
+      return [x + lx * ca - lz * sa, ly, z + lx * sa + lz * ca];
+    }
+    // a setback on one in three, so the rim silhouette is not a row of bars
+    var sb = rng.bool(0.34) ? y0 + h * rng.range(0.6, 0.8) : y1;
+    var q;
+    // Its own window phase. Every rim block sampling the same corner of the tile
+    // is the same repetition problem the near city had, and out here it is a
+    // whole band of the frame.
+    var uO = Math.floor(rng.range(0, CITY_GRID)) / CITY_GRID;
+    var vO = Math.floor(rng.range(0, CITY_GRID)) / CITY_GRID;
+    var corners = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]];
+    for (q = 0; q < 4; q++) {
+      var a = corners[q], b = corners[(q + 1) % 4];
+      var u2 = uO + q * 0.19;
+      B.add('city', quadGeo(P(a[0], y0, a[1]), P(b[0], y0, b[1]),
+        P(b[0], sb, b[1]), P(a[0], sb, a[1]), u2, vO,
+        u2 + w / BAY_W / CITY_GRID,
+        vO + (sb - y0) / BAY_H / CITY_GRID), null);
+    }
+    B.add('city', quadGeo(P(-hw, sb, -hd), P(hw, sb, -hd), P(hw, sb, hd), P(-hw, sb, hd),
+      0, 0, 1, 1), null);
+    if (sb < y1) {
+      var sw = hw * 0.62, sd = hd * 0.62;
+      var sc = [[-sw, -sd], [sw, -sd], [sw, sd], [-sw, sd]];
+      for (q = 0; q < 4; q++) {
+        var a2 = sc[q], b2 = sc[(q + 1) % 4];
+        B.add('city', quadGeo(P(a2[0], sb, a2[1]), P(b2[0], sb, b2[1]),
+          P(b2[0], y1, b2[1]), P(a2[0], y1, a2[1]), 0, 0,
+          sw * 2 / BAY_W / CITY_GRID, (y1 - sb) / BAY_H / CITY_GRID), null);
+      }
+      B.add('city', quadGeo(P(-sw, y1, -sd), P(sw, y1, -sd), P(sw, y1, sd), P(-sw, y1, sd),
+        0, 0, 1, 1), null);
+    }
   }
 
   // One block. Four mapped facades, a parapet, and roof furniture - a plant
@@ -2764,8 +3766,14 @@
     var uO = Math.floor(rng.range(0, CITY_GRID)) / CITY_GRID;
     var vO = Math.floor(rng.range(0, CITY_GRID)) / CITY_GRID;
     var rowsN = Math.max(2, Math.round(h / BAY_H));
-    var setback = h > 110 && rng.bool(0.55);
-    var sbY = setback ? y0 + h * rng.range(0.55, 0.72) : y1;
+    // Setbacks used to need h > 110, which meant one block in fifty had one and
+    // the skyline was a row of extruded boxes with identical roof furniture.
+    // One in four now steps, at any height above 40 m: a setback is what makes a
+    // silhouette read as a building rather than as a bar in a chart.
+    var setback = h > 40 && rng.bool(0.26);
+    var sbY = setback ? y0 + h * rng.range(0.52, 0.76) : y1;
+    // and one in six of the tall ones tapers to a crown
+    var crown = !setback && h > 70 && rng.bool(0.18);
 
     B.paint = flavour === 1 ? 'glasscity' : (flavour === 2 ? 'rawcity' : 'city');
     function facade(x0, z0, x1, z1, ya, yb, uOfs) {
@@ -2790,37 +3798,68 @@
         0, 0, 1, 1), null);
       hw = sw; hd = sd;
     }
+    // ---- a tapered crown ----------------------------------------------------
+    if (crown) {
+      var ch = h * rng.range(0.10, 0.20);
+      var cw = hw * rng.range(0.30, 0.55), cd = hd * rng.range(0.30, 0.55);
+      var cc = [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]];
+      var cs2 = [[-cw, -cd], [cw, -cd], [cw, cd], [-cw, cd]];
+      for (var qc = 0; qc < 4; qc++) {
+        var a3 = cc[qc], b3 = cc[(qc + 1) % 4];
+        var a4 = cs2[qc], b4 = cs2[(qc + 1) % 4];
+        B.add('city', quadGeo(P(a3[0], y1, a3[1]), P(b3[0], y1, b3[1]),
+          P(b4[0], y1 + ch, b4[1]), P(a4[0], y1 + ch, a4[1]), 0, 0, 1, 0.35), null);
+      }
+      B.add('city', quadGeo(P(-cw, y1 + ch, -cd), P(cw, y1 + ch, -cd),
+        P(cw, y1 + ch, cd), P(-cw, y1 + ch, cd), 0, 0, 1, 1), null);
+      y1 += ch; hw = cw; hd = cd;
+    }
     // roof + parapet
     B.add('city', quadGeo(P(-hw, y1, -hd), P(hw, y1, -hd), P(hw, y1, hd), P(-hw, y1, hd),
       0, 0, w / 12, d / 12), null);
     B.paint = 'paint';
-    B.boxR('spandrel', w + 0.8, 1.5, 0.7, x, y1 + 0.6, z + 0, 0, yaw, 0, 0.06);
+    B.boxR('spandrel', hw * 2 + 0.8, 1.5, 0.7, x, y1 + 0.6, z + 0, 0, yaw, 0, 0.06);
     B.add('city', quadGeo(P(-hw - 0.4, y1, -hd - 0.35), P(hw + 0.4, y1, -hd - 0.35),
       P(hw + 0.4, y1 + 1.5, -hd - 0.35), P(-hw - 0.4, y1 + 1.5, -hd - 0.35), 0, 0, 1, 0.12), null);
-    // roof furniture: thin and TALL, because a 1 m cube at 300 m is nothing
+    // ---- roof furniture -----------------------------------------------------
+    // Thin and TALL, because a 1 m cube at 300 m is nothing. It goes in its own
+    // bucket now (city_plant) because city_ground carries a road network.
+    // The plant room is OFF CENTRE and the mast is a CLUSTER on the tall ones:
+    // every roof carrying one cylinder, one box and one mast in the middle is
+    // how a whole skyline ends up with the same silhouette.
     B.paint = 'city';
-    var n = rng.int(2, 5);
+    var n = rng.int(3, 6);
     for (var q = 0; q < n; q++) {
-      var jx = rng.range(-hw * 0.7, hw * 0.7), jz = rng.range(-hd * 0.7, hd * 0.7);
+      var jx = rng.range(-hw * 0.82, hw * 0.82), jz = rng.range(-hd * 0.82, hd * 0.82);
+      var wx2 = x + jx * ca - jz * sa, wz2 = z + jx * sa + jz * ca;
       var kind = rng.next();
       if (kind < 0.34) {
-        var ph = rng.range(4, 9), pw = rng.range(5, 12);
-        B.boxR('city_ground', pw, ph, pw * rng.range(0.6, 1.1), x + jx * ca - jz * sa, y1 + ph * 0.5,
-          z + jx * sa + jz * ca, 0, yaw, 0, 0.2);
+        var ph = rng.range(4, 11), pw = rng.range(5, 14);
+        B.boxR('city_plant', pw, ph, pw * rng.range(0.5, 1.2), wx2, y1 + ph * 0.5,
+          wz2, 0, yaw + rng.range(-0.3, 0.3), 0, 0.2);
+        // the lift overrun beside it, which is always the tallest box up there
+        if (rng.bool(0.4)) {
+          B.boxR('city_plant', pw * 0.42, ph * 1.7, pw * 0.42,
+            wx2 + rng.range(-8, 8), y1 + ph * 0.85, wz2 + rng.range(-8, 8), 0, yaw, 0, 0.2);
+        }
       } else if (kind < 0.62) {
-        var th = rng.range(5, 11);
-        B.cyl('city_ground', rng.range(1.6, 3.4), rng.range(1.6, 3.4), th,
-          x + jx * ca - jz * sa, y1 + th * 0.5, z + jx * sa + jz * ca, 0, 0, 0, 8);
+        var th = rng.range(5, 13);
+        B.cyl('city_plant', rng.range(1.6, 3.6), rng.range(1.6, 3.6), th,
+          wx2, y1 + th * 0.5, wz2, 0, 0, 0, 8);
       } else {
-        var mh2 = rng.range(9, 26);
-        B.cyl('city_ground', 0.35, 0.55, mh2, x + jx * ca - jz * sa, y1 + mh2 * 0.5,
-          z + jx * sa + jz * ca, 0, 0, 0, 5);
+        var mh2 = rng.range(9, 30);
+        var cluster = rng.bool(0.45) ? 3 : 1;
+        for (var qm = 0; qm < cluster; qm++) {
+          var ox2 = qm === 0 ? 0 : rng.range(-3.5, 3.5);
+          var oz2 = qm === 0 ? 0 : rng.range(-3.5, 3.5);
+          B.cyl('city_plant', 0.35, 0.55, mh2 * (qm ? rng.range(0.5, 0.85) : 1),
+            wx2 + ox2, y1 + mh2 * (qm ? rng.range(0.5, 0.85) : 1) * 0.5, wz2 + oz2, 0, 0, 0, 5);
+        }
         // An obstruction light on every mast makes a red starfield. Only the
         // buildings tall enough to actually need one carry one.
         if (h > 66 && rng.bool(0.45)) {
           B.paint = 'flat';
-          B.cyl('lamp_red', 0.75, 0.75, 1.2, x + jx * ca - jz * sa, y1 + mh2 + 0.8,
-            z + jx * sa + jz * ca, 0, 0, 0, 6);
+          B.cyl('lamp_red', 0.75, 0.75, 1.2, wx2, y1 + mh2 + 0.8, wz2, 0, 0, 0, 6);
         }
         B.paint = 'city';
       }
@@ -2984,6 +4023,10 @@
       m = this._netMaterial();
     } else if (key === 'city' || key === 'shell') {
       m = this._cityMaterial(key);
+    } else if (key === 'glazing') {
+      m = this._glazingMaterial();
+    } else if (key === 'city_ground') {
+      m = this._streetMaterial();
     } else if (lib && typeof lib.get === 'function') {
       var opts = { vertexColors: true, wearMode: surf.wear ? 'wear' : 'multiply' };
       if (surf.albedoTarget !== undefined) opts.albedoTarget = surf.albedoTarget;
@@ -2996,8 +4039,35 @@
         opts.emissive = surf.emissive;
         opts.emissiveIntensity = surf.emissiveIntensity || 1.0;
       }
+      // Triplanar scale + a private cache key. See the note on SURF.slab: this
+      // is the ONLY control a consumer has over the world tile size of a
+      // triplanar surface, and without it the concrete family is locked at
+      // 2.04 m per tile no matter what the level's uv says.
+      if (surf.triScale !== undefined) opts.triScale = surf.triScale;
+      if (surf.variant !== undefined) opts.variant = surf.variant;
+      if (surf.noPom) opts.parallax = false;
+      // A 5 cm detail normal is right on a wall at normal incidence and
+      // catastrophic on a ceiling: the eye is 2.3 m under a 54 x 42 m soffit, so
+      // most of it is seen at 85-89 degrees, and at that incidence a fine normal
+      // layer resolves into long streaky flakes - the "burnt toast" the critic
+      // measured over the top third of every framing. Off on the soffit only.
+      if (surf.noDetail) { opts.detail = false; opts.detail2 = false; }
       try { m = lib.get(surf.base || 'concrete', opts); }
       catch (e) { GAME.logError('highrise.material:' + key, e); m = null; }
+      // Safe to mutate: `variant` makes the cache key unique to this surface on
+      // this level, so nothing else can be holding this instance.
+      if (m && surf.variant !== undefined) {
+        try {
+          // A 2 m blowhole is a texture bug; a 2 m blowhole with full ambient
+          // occlusion in it is a hole punched through the wall. Halving the AO
+          // and the normal scale on the two concrete_wall surfaces is what takes
+          // the pitting from "volcanic scoria" to "formed concrete".
+          if (surf.ao !== undefined && m.aoMap) m.aoMapIntensity = surf.ao;
+          if (surf.ns !== undefined && m.normalScale && m.normalScale.set) {
+            m.normalScale.set(surf.ns, surf.ns);
+          }
+        } catch (e2) { /* a nicety, never a frame */ }
+      }
     }
     if (!m || !m.isMaterial) m = this._fallbackMaterial(key);
     this._matCache[key] = m;
@@ -3085,6 +4155,64 @@
     return m;
   };
 
+  // ---- the curtain wall's glass -------------------------------------------
+  // Not materials.js's glass(): that one authors its own grime story at its own
+  // repeat and cannot be handed a map, and what this pane needs is a SITE
+  // glazing story - never cleaned, protective film still on, suction-cup rings,
+  // slurry off the scaffold. The coverage map is bound to BOTH alphaMap and
+  // roughnessMap, so the dirty parts are simultaneously more opaque and rougher,
+  // which is exactly how a filthy pane behaves: it stops being a mirror where
+  // the dirt is, and that is where the value structure comes from.
+  LevelHighrise.prototype._glazingMaterial = function () {
+    var tex = null;
+    try { tex = buildGlazingMaps(this.rng.fork ? this.rng.fork(0x61A55) : this.rng); }
+    catch (e) { GAME.logError('highrise.glazing', e); tex = null; }
+    this._glazeOk = !!tex;
+    var m = new THREE.MeshStandardMaterial({
+      map: tex, color: 0xffffff,
+      roughness: tex ? 1.0 : 0.12, metalness: 0.0,
+      roughnessMap: _glazeRough || null,
+      alphaMap: _glazeAlpha || null,
+      // 0.86 with the alphaMap on top: the clean glass reads at ~0.09 coverage
+      // (a hole with a reflection in it) and the dirty parts at ~0.82 (a pale
+      // scattering film). One number cannot do both, which is the whole reason
+      // the first pass photographed as blank paper.
+      transparent: true, opacity: 0.86, depthWrite: false,
+      side: THREE.DoubleSide, vertexColors: true,
+      envMapIntensity: 2.0
+    });
+    if (!tex) { m.opacity = 0.34; }
+    this._anisotropy(tex, 8);
+    this._anisotropy(_glazeAlpha, 8);
+    m.name = 'highrise_glazing';
+    return m;
+  };
+
+  // ---- the street plane -----------------------------------------------------
+  LevelHighrise.prototype._streetMaterial = function () {
+    var tex = null;
+    try { tex = buildStreetMaps(this.rng.fork ? this.rng.fork(0x5713E7) : this.rng, this.noise); }
+    catch (e) { GAME.logError('highrise.street', e); tex = null; }
+    this._streetOk = !!tex;
+    if (!tex) return this._fallbackMaterial('city_ground');
+    var m = new THREE.MeshStandardMaterial({
+      map: tex, color: 0xffffff,
+      roughness: 0.90, metalness: 0.04,
+      vertexColors: true, envMapIntensity: 0.30
+    });
+    if (_roadEmis) {
+      m.emissiveMap = _roadEmis;
+      m.emissive = new THREE.Color(1, 1, 1);
+      // The street lighting has to survive 250-450 m of haze as a POINT without
+      // metering the frame. 0.62 puts it a stop under the lit windows, which is
+      // the right relationship: a window is a room, a street lamp is a bulb.
+      m.emissiveIntensity = 0.62;
+    }
+    this._anisotropy(tex, 8);
+    m.name = 'highrise_street';
+    return m;
+  };
+
   LevelHighrise.prototype._anisotropy = function (tex, max) {
     try {
       var caps = this.ctx && this.ctx.renderer && this.ctx.renderer.capabilities;
@@ -3155,15 +4283,22 @@
         // photographed a white void with a handrail in front of it.
         ctx.sky.setFog({
           baseY: CITY_Y + 2.0,
-          heightScale: 260.0,
-          density: 0.0026,
-          startDistance: 3.0,
-          // 0.93, not 0.86. Nothing inside 450 m ever reaches the cap, so this
-          // is purely about the far rim: at 0.86 the outermost 150 m of city
-          // kept 14% of its own dark albedo and drew a straight horizontal seam
-          // against the sky, which is the "perfectly straight anything" the
-          // instant-fail list means. At 0.93 the rim dissolves.
-          maxOpacity: 0.93,
+          // 380, not 260. A wider e-folding height is how you make the FAR rim
+          // reach the cap without also erasing the near city - raising the cap
+          // does both at once, which is what went wrong.
+          heightScale: 380.0,
+          // 0.0019, not 0.0026. Measured consequence of the old pair: the
+          // background median across four depth bands on hero3 was 0.465 /
+          // 0.486 / 0.475 / 0.425 - near buildings and far buildings at the SAME
+          // value, i.e. no aerial perspective at all, only a contrast collapse.
+          // The value ramp IS the depth cue, and it only exists if the near city
+          // keeps a real fraction of its own albedo. At 0.0019 / 380 the numbers
+          // are:
+          //   40 m across the plate at y = 0        -> ~5%   (concrete crisp)
+          //   300 m down to the street at -30 deg   -> ~38%  (near city dark)
+          //   635 m to the city rim                 -> ~64%
+          //   1500 m to the silhouette band         -> capped
+          maxOpacity: 0.80,
           // 0.55, not 0.70. Two of the five framings look within 20 degrees of
           // the sun's azimuth, and at 0.70 the Henyey-Greenstein lobe put so
           // much forward scatter into those frames that the city 176 m below
@@ -3174,11 +4309,15 @@
           desaturate: 0.24     // distance eats chroma before it eats luminance
         });
       }
-      // 78 m of cascade over a 68 m plate is the whole building; without this
-      // the CSM would try to cover a 600 m frustum and the column shadows -
-      // the level's subject - would arrive soft and low-resolution.
+      // 78 m of cascade over a 68 m plate is the whole building for an
+      // eye-level pose; update() widens it when the camera stands outside the
+      // bounds box, because the establishing shot is 69 m from its own subject
+      // and the far elevation is 110 m out, i.e. entirely past this limit - and
+      // a subject beyond the last cascade receives no shadows at all, which is
+      // why the top plate photographed with no column shadows on it.
       if (ctx && ctx.lighting && typeof ctx.lighting.setShadowDistance === 'function') {
         ctx.lighting.setShadowDistance(78);
+        self._shadowDist = 78;
       }
     });
 
@@ -3257,11 +4396,62 @@
   // lighting.js gives every entry an emissive bulb and an additive halo for
   // free, so this file builds only the FIXTURES - the catenary, the guards, the
   // tripods, the batten bodies.
+  //
+  // ---------------------------------------------------------------------------
+  // 3. AND THE ONE THAT ACTUALLY MATTERED: THE NUMBERS WERE A STOP AND A HALF
+  //    OUT, TWICE OVER.
+  //
+  // Measured on the first capture of lv_interior: floor directly beneath a
+  // hanging festoon bulb = 0.0460 linear luminance. Floor six metres away in the
+  // same band = 0.0460 linear. Identical to four decimal places. The soffit
+  // above a bulb was 0.1211 against 0.1043 away - a 16% lift from a light that
+  // is 400 mm from it.
+  //
+  // The cause is a units error, not a design one. These are POINT AND SPOT
+  // lights with decay 2, so irradiance at the floor is intensity / d^2. A
+  // festoon bulb hanging at 3.58 m over a floor at 0 was pushing 5.4 / 12.8 =
+  // 0.42 - against a sky ambient that was already delivering more than that. The
+  // market's own cone practical runs intensity 78 at distance 14 and the
+  // harbour's masts run 104-128; this level was running FIFTEEN BRIGHT EMISSIVE
+  // BULBS WITH BLOOM HALOES THAT LIT NOTHING, which is precisely the
+  // emissiveLamps:0 failure DEVELOPMENT.md names as the highest-value finding of
+  // the whole build, and it is the direct cause of the crushed shaded half of
+  // every framing.
+  //
+  // Every number below is now solved for a target irradiance at the surface the
+  // fixture is meant to light, and the target is stated next to it.
+  // ---------------------------------------------------------------------------
+  // THE HARD CAP NOBODY DOCUMENTED, AND THE SILENT FAILURE IT CAUSED
+  //
+  // lighting.js's _buildPracticals runs `for (i = 0; i < defs.length && i < cap;
+  // i++)` with MAX_PRACTICALS_RIG = 24 for a declarative rig. A level that
+  // publishes more than twenty-four practicals does not get them dimmed or
+  // merged - the tail is simply never built, in ORDER, with no warning.
+  //
+  // This level published thirty-seven. The first twenty-four were all festoon
+  // bulbs, so the lobby battens, the floods, the shaft worklights, the lamp on
+  // floor 46, the cabin and the stair were all silently absent - which is why
+  // the `interior` framing came back as an unlit tube after the intensities were
+  // fixed. The fix is not fewer bulbs (the FIXTURES are geometry and cost
+  // nothing) but fewer LIGHTS per string: one practical per two or three bulbs,
+  // at a proportionally longer throw, so a string still reads as a string of
+  // overlapping pools.
+  //
+  // The budget below is exact, and _buildLamps asserts it.
+  //   festoon 11  lobby 4  floods 4  shafts 2  below 1  cabin 1  stair 1  = 24
+  var MAX_LAMPS = 24;
   var FESTOON = [
-    // [x0, z0, x1, z1, bulbs, sag]
-    [X0 + 3.0, 6.0, CORE_X0 - 1.5, 6.0, 5, 0.42],
-    [X0 + 3.0, -12.0, CORE_X0 - 1.5, -12.0, 5, 0.42],
-    [-6.0, Z1 - 3.0, -6.0, Z0 + 3.0, 5, 0.46]
+    // [x0, z0, x1, z1, bulbs, sag, lights]
+    [X0 + 3.0, 6.0, CORE_X0 - 1.5, 6.0, 5, 0.42, 2],
+    [X0 + 3.0, -12.0, CORE_X0 - 1.5, -12.0, 5, 0.42, 2],
+    [-6.0, Z1 - 3.0, -6.0, Z0 + 3.0, 5, 0.46, 3],
+    // a fourth run down the shaded east half, which had no source at all
+    [16.0, -14.5, 25.0, -14.5, 4, 0.38, 2],
+    // and a fifth down the glazed south-west aisle. That corner is enclosed by
+    // the curtain wall on two sides, so no sun reaches it and no other fitting
+    // was within fifteen metres: the near floor in the hero2 framing measured
+    // 16.8% of the frame under sRGB 0.06 with nothing lighting it at all.
+    [-23.4, 5.0, -23.4, 19.0, 5, 0.44, 2]
   ];
 
   LevelHighrise.prototype._buildLamps = function (B, N) {
@@ -3294,6 +4484,7 @@
     for (i = 0; i < FESTOON.length; i++) {
       var f = FESTOON[i];
       var n = f[4];
+      var nLights = f[6] || 1;
       // the cable, as a real catenary of short segments
       var prevX = f[0], prevY = hangY, prevZ = f[1];
       for (k = 1; k <= n * 3; k++) {
@@ -3327,8 +4518,22 @@
         B.paint = 'flat';
         B.cyl('lamp_glass', 0.030, 0.030, 0.075, bx, by - 0.02, bz, 0, 0, 0, 8);
         B.paint = 'steel';
-        push('hr_festoon_' + i + '_' + k, 'tungsten', bx, by - 0.04, bz,
-          2450, 5.4, 13.0, 1.15, [bx, plateY(bx, bz, N), bz], { haloGain: 0.85 });
+        // ---- and the LIGHT, on one bulb in two or three -------------------
+        // 54, not 5.4. Hung at 3.42 m over a floor at 0, decay 2:
+        // 54 / 3.42^2 = 4.6 irradiance directly under the bulb and 1.5 at 5 m,
+        // so two lights on a 20 m string still overlap at the rim. That is a
+        // run of POOLS, which is what a festoon looks like and what the shaded
+        // two thirds of this plate needs to stop crushing. The bulbs that do
+        // not carry a light are still emissive geometry, so the string reads
+        // unbroken - see the MAX_LAMPS note.
+        var lightHere = false;
+        for (var lq = 0; lq < nLights; lq++) {
+          if (Math.round((lq + 0.5) * n / nLights - 0.5) === k) lightHere = true;
+        }
+        if (lightHere) {
+          push('hr_festoon_' + i + '_' + k, 'tungsten', bx, by - 0.04, bz,
+            2450, 54.0, 18.0, 1.15, [bx, plateY(bx, bz, N), bz], { haloGain: 0.85 });
+        }
       }
     }
 
@@ -3345,7 +4550,11 @@
       B.paint = 'steel';
       B.tube('scaff', lx, SOFFIT_Y - 0.02, lz - 0.5, lx, 3.50, lz - 0.5, 0.006, 4);
       B.tube('scaff', lx, SOFFIT_Y - 0.02, lz + 0.5, lx, 3.50, lz + 0.5, 0.006, 4);
-      push('hr_lobby_' + i, 'fluoro', lx, 3.36, lz, 4300, 4.2, 9.0, 1.30,
+      // 27, not 4.2. At 3.36 m that is 2.4 under the batten and about 0.4 at
+      // the wall five metres away, which is the tube-of-light-with-dark-ends
+      // the `interior` framing is built on. At 4.2 it was 0.37 under the
+      // fitting, i.e. below the ambient it was supposed to beat.
+      push('hr_lobby_' + i, 'fluoro', lx, 3.36, lz, 4300, 34.0, 11.0, 1.42,
         [lx, 0, lz], { haloGain: 0.55, haloMax: 1.5 });
     }
 
@@ -3353,10 +4562,13 @@
     // The one warm-white source with any throw. Aimed ACROSS the shaded half of
     // the plate rather than down, so they model the columns instead of pooling
     // at their own feet.
+    // The fourth stands at the vanishing point of hero2's mullion run, which
+    // that framing needed anyway: a leading line has to arrive somewhere.
     var FLOODS = [
       [-1.6, 10.8, 1.90, [-16.0, 1.2, 2.0], 3350],
       [6.2, -6.4, 1.85, [-6.0, 1.4, -17.0], 3350],
-      [19.6, 5.2, 1.80, [11.0, 1.6, -8.0], 3200]
+      [19.6, 5.2, 1.80, [11.0, 1.6, -8.0], 3200],
+      [-23.2, 2.6, 1.95, [-21.0, 1.0, 14.0], 3300]
     ];
     for (i = 0; i < FLOODS.length; i++) {
       var fl = FLOODS[i];
@@ -3383,7 +4595,12 @@
       B.tube('scaff', fx, gy0 + 0.02, fz, fx + Math.cos(i * 2.1) * 3.0, gy0 + 0.02,
         fz + Math.sin(i * 2.1) * 3.0, 0.012, 5);
       this.addCollider(fx, gy0 + fy * 0.5, fz, 0.28, fy * 0.5, 0.28, 'metal');
-      push('hr_flood_' + i, 'halogen', fx, gy0 + fy, fz, fl[4], 15.0, 30.0, 0.62,
+      // 98, not 15. A 1 kW site halogen throws: at 15 it delivered 0.15
+      // irradiance at 10 m against the market cone practical's 0.78, i.e. it
+      // was a torch. 98 at distance 34 lands 0.98 at 10 m and 0.24 at 20 m,
+      // which is a flood ACROSS the shaded half rather than a puddle at its
+      // own feet - and it is what models the columns in there.
+      push('hr_flood_' + i, 'halogen', fx, gy0 + fy, fz, fl[4], 74.0, 34.0, 0.62,
         fl[3], { haloGain: 0.75, haloMax: 2.6, shadow: false });
     }
 
@@ -3398,7 +4615,9 @@
       B.paint = 'flat';
       B.cyl('lamp_glass', 0.055, 0.055, 0.13, sx3, 0.95, sz3, 0, 0, 0, 8);
       B.paint = 'steel';
-      push('hr_shaft_' + i, 'tungsten', sx3, 0.95, sz3, 2700, 6.5, 11.0, 0, null,
+      // 42, not 6.5: it is 0.95 m off the shaft mouth and its whole job is to
+      // uplight the reveal so the drop reads as a drop.
+      push('hr_shaft_' + i, 'tungsten', sx3, 0.95, sz3, 2700, 42.0, 13.0, 0, null,
         { haloGain: 0.8, haloMax: 2.0 });
     }
 
@@ -3412,20 +4631,34 @@
       B.paint = 'steel';
       B.cyl('scaff', 0.020, 0.020, 1.2, vx, LOWER_Y + 0.60, vz, 0, 0, 0, 6);
       B.box('plant', 0.30, 0.03, 0.30, vx, LOWER_Y + 0.02, vz, 0.004);
-      push('hr_below', 'tungsten', vx, LOWER_Y + 1.30, vz, 2600, 9.0, 14.0, 0, null,
+      // 56, not 9: it is the ONLY source below the player and it has 4.3 m of
+      // floor 46 to carry on its own. 56 / 1.3^2 = 33 at the lamp, 1.4 at 6 m.
+      push('hr_below', 'tungsten', vx, LOWER_Y + 1.30, vz, 2600, 56.0, 17.0, 0, null,
         { haloGain: 0.9, haloMax: 2.4 });
     })();
 
     // ---- the crane cab and the site cabin -----------------------------------
-    push('hr_cabin', 'tungsten', 23.0, 1.60, 14.3, 2900, 5.0, 9.0, 0, null,
+    push('hr_cabin', 'tungsten', 23.0, 1.60, 14.3, 2900, 30.0, 11.0, 0, null,
       { haloGain: 0.7, haloMax: 1.8 });
-    push('hr_stair', 'fluoro', (STR_X0 + STR_X1) * 0.5, 3.20, -6.0, 4200, 3.4, 7.5, 0, null,
+    push('hr_stair', 'fluoro', (STR_X0 + STR_X1) * 0.5, 3.20, -6.0, 4200, 22.0, 9.0, 0, null,
       { haloGain: 0.5, haloMax: 1.4 });
     B.paint = 'flat';
     B.cyl('lamp_glass', 0.06, 0.06, 0.16, (STR_X0 + STR_X1) * 0.5, 3.20, -6.0, 0, 0, 0, 8);
     B.paint = 'steel';
 
+    // ---- THE BUDGET, ASSERTED ----------------------------------------------
+    // lighting.js takes the first MAX_PRACTICALS_RIG (24) and silently discards
+    // the rest. Overflowing that is invisible in code review, invisible in
+    // check.py, and costs a whole framing - so it is checked here, and if it
+    // ever does overflow the tail that gets cut is the least important lamp
+    // rather than whatever happened to be last in the file.
+    if (lamps.length > MAX_LAMPS) {
+      GAME.logError('highrise.lamps',
+        new Error('published ' + lamps.length + ' practicals, cap is ' + MAX_LAMPS));
+      lamps.length = MAX_LAMPS;
+    }
     this.practicalLights = lamps;
+    this.lampCount = lamps.length;
 
     // ---- volumetric shafts ---------------------------------------------------
     // lighting.js solves a shaft's axis mostly-downward, so the entries below are
@@ -3486,7 +4719,8 @@
       // The city and the ground are 176 m below and 470 m out. Frustum culling
       // on a single merged mesh that large is a coin flip against the bounding
       // sphere, and losing it for one frame is a hole in the world.
-      if (key === 'city' || key === 'city_ground' || key === 'city_light') {
+      if (key === 'city' || key === 'city_ground' || key === 'city_light' ||
+          key === 'city_plant') {
         mesh.frustumCulled = false;
       }
       this.root.add(mesh);
@@ -3528,7 +4762,14 @@
     var pos = geo.attributes.position, nrm = geo.attributes.normal;
     var pa = pos.array, na = nrm.array;
     var Nv = pos.count;
-    var col = new Float32Array(Nv * 3);
+    // The decal bucket carries a FOUR component colour. three.js turns that into
+    // USE_COLOR_ALPHA, so vColor.a multiplies diffuseColor.a - which is the only
+    // way a per-card opacity can exist inside one merged mesh, and therefore the
+    // only way a sprayed mark can fade where the concrete is polished instead of
+    // sitting on top of the noise at full strength everywhere.
+    var alphaCol = (key === 'decal');
+    var CS = alphaCol ? 4 : 3;
+    var col = new Float32Array(Nv * CS);
     var noise = this.noise;
     var surf = SURF[key] || SURF.slab;
     var isWear = !!surf.wear;
@@ -3539,6 +4780,7 @@
       var cnt = vertCount(ent.geometry);
       var tr = 1, tg = 1, tb = 1;
       if (ent.tint) { tr = ent.tint.r; tg = ent.tint.g; tb = ent.tint.b; }
+      var ta = ent.alpha === undefined ? 1 : ent.alpha;
       var dk = ent.dark ? Math.max(0.05, 1 - ent.dark) : 1;
       var mode = ent.paint || 'steel';
       // Force the mode to agree with the surface's shader: a multiplier written
@@ -3556,15 +4798,18 @@
         mode = 'flat';
         if (key !== 'decal' && key !== 'city_light') { tr = 1; tg = 1; tb = 1; }
       } else if (key === 'city') {
-        if (mode !== 'glasscity' && mode !== 'rawcity') mode = 'city';
+        if (mode !== 'glasscity' && mode !== 'rawcity' && mode !== 'farcity') mode = 'city';
       } else if (key === 'shell') { mode = 'shell'; }
       else if (key === 'city_ground') { mode = 'cityground'; }
+      else if (key === 'city_plant') { mode = 'cityplant'; }
       else if (key === 'debris_net') { mode = 'net'; }
       else if (key === 'sheeting') { mode = 'sheet'; }
       else if (key === 'glazing') { mode = 'glass'; }
+      else if (key === 'mullion') { mode = 'anod'; }
 
       for (i = 0; i < cnt; i++) {
         j = (vi + i) * 3;
+        var jc = (vi + i) * CS;
         var x = pa[j], y = pa[j + 1], z = pa[j + 2];
         var nx = na[j], ny = na[j + 1], nz = na[j + 2];
         var r, g, b;
@@ -3600,13 +4845,29 @@
           // the form release agent, and it stains from every penetration. It is
           // also the top third of every framing, so its value is what keeps
           // vertical_imbalance under control.
+          //
+          // The map's uv went from 0.38 to 0.98 to stop the blowholes reading at
+          // 5-10 cm; the macro story it used to carry by accident now has to be
+          // authored HERE, at a scale that is actually a metre rather than a
+          // texture repeat. That is the correct division of labour: the map
+          // supplies millimetres, the wear mask supplies metres.
           var down = M.saturate(-ny);
           var gs = M.saturate(0.20 + 0.30 * (noise.fbm3(x * 0.24, y * 0.5, z * 0.24, 3) * 0.5 + 0.5) +
             down * 0.14);
           // form-face blotching: ply that had been used four times
           gs += M.smoothstep(0.58, 0.92, noise.fbm2(x * 0.55 + 9, z * 0.55 - 3, 2) * 0.5 + 0.5) * 0.16;
+          // the 1.22 m plywood sheet grid, as a stain rather than as geometry:
+          // grout bleeds through every joint in the formwork and leaves a line
+          var jx2 = Math.abs(((x + 0.6) % 1.22 + 1.22) % 1.22 - 0.61);
+          var jz2 = Math.abs(((z + 0.2) % 1.22 + 1.22) % 1.22 - 0.61);
+          gs += M.smoothstep(0.055, 0.0, Math.min(jx2, jz2)) * 0.14 * down;
           var es = M.smoothstep(0.62, 0.94, noise.fbm3(x * 0.9, y * 0.8, z * 0.9, 2) * 0.5 + 0.5) * 0.20;
-          r = 1 - M.saturate(gs) * 0.62; g = 1; b = 1 - es;
+          // 0.46, not 0.62. The soffit is the top third of every framing and it
+          // never sees the sky; darkening its albedo by up to 62% on top of a
+          // 0.24 base put it at 0.041 linear, i.e. it was the reason the frame
+          // had a black lid on it. A soffit is darker than its floor. It is not
+          // four times darker.
+          r = 1 - M.saturate(gs) * 0.38; g = 1; b = 1 - es;
         } else if (mode === 'wall') {
           // Shear walls and columns. Lift lines, honeycombing at the base, and
           // the grey film that climbs the first metre off the floor.
@@ -3614,9 +4875,27 @@
           gw += M.smoothstep(1.1, 0.02, y) * 0.24;                 // splash zone
           gw += M.smoothstep(0.55, 0.92, noise.fbm2((Math.abs(nx) > Math.abs(nz) ? z : x) * 1.9,
             y * 0.16, 3) * 0.5 + 0.5) * M.saturate(1 - Math.abs(ny)) * 0.20;
+          // ---- POUR LIFT LINES, every 1.2 m ------------------------------------
+          // A wall is poured in lifts and every lift leaves a horizontal seam
+          // where the top of one pour met the bottom of the next: a dark line
+          // with a pale bleed under it. This is the strongest horizontal on a
+          // concrete wall and it is the thing that gives a 4 m surface scale.
+          var lift = Math.abs((y % 1.20 + 1.20) % 1.20 - 0.60);
+          var side = M.saturate(1 - Math.abs(ny));
+          gw += M.smoothstep(0.035, 0.0, lift) * 0.17 * side;
+          // ---- FORM-TIE HOLES, on a 600 mm grid --------------------------------
+          // Plugged, and the plug is always a different colour from the wall.
+          var tu = Math.abs((((Math.abs(nx) > Math.abs(nz) ? z : x) + 0.3) % 0.60 + 0.60) % 0.60 - 0.30);
+          var tv = Math.abs(((y + 0.15) % 0.60 + 0.60) % 0.60 - 0.30);
+          var tie = M.smoothstep(0.045, 0.012, Math.sqrt(tu * tu + tv * tv));
+          gw += tie * 0.22 * side;
           var ew = M.smoothstep(0.66, 0.95, noise.fbm3(x * 1.1, y * 0.9, z * 1.1, 2) * 0.5 + 0.5) * 0.26;
           ew += M.saturate(ny) * 0.10;                             // arrises catch the light
-          r = 1 - M.saturate(gw) * 0.62; g = 1; b = 1 - M.saturate(ew);
+          ew += tie * 0.18 * side;                                 // the plug is proud
+          // 0.50, not 0.62 - see the soffit note. The core walls are the whole
+          // right-hand half of the `interior` framing and they measured 0.096
+          // linear with the pits in them at 0.02.
+          r = 1 - M.saturate(gw) * 0.50; g = 1; b = 1 - M.saturate(ew);
         } else if (mode === 'block') {
           var gb = M.saturate(0.14 + 0.30 * (noise.fbm3(x * 0.8, y * 0.8, z * 0.8, 3) * 0.5 + 0.5));
           r = 1 - gb * 0.55; g = 1; b = 1 - M.saturate(ny) * 0.22;
@@ -3649,7 +4928,26 @@
           var pn = (Math.sin(bay * 12.9898) * 43758.5453) % 1;
           if (pn < 0) pn += 1;
           band *= 0.74 + pn * 0.52;
-          r = band * 1.24; g = band * 0.99; b = band * 0.86;
+          // A LATERAL gradient as well as a vertical one. The sunset is a
+          // BAND on one bearing, not a dome: the reflection in a west-facing
+          // pane is brightest where the pane faces the glow and falls away
+          // along the run, and that lateral ramp is what turns a row of panes
+          // into a wall that is reflecting something. Without it the vertical
+          // ramp alone repeats identically on every light in the run.
+          var along = (Math.abs(nx) > Math.abs(nz)) ? z : x;
+          var lat = M.saturate((along - CW_SOUTH_X0) / 48.0);
+          band *= 0.80 + 0.42 * (1 - lat);
+          r = band * 1.26; g = band * 0.98; b = band * 0.82;
+        } else if (mode === 'anod') {
+          // Anodised dark-bronze mullion. Deliberately NEUTRAL and dark: the
+          // generic 'paint' path pushed rust into the red channel and the run
+          // photographed as mid-brown timber rather than as a metal extrusion.
+          // The only thing that makes an extrusion read as an extrusion is a
+          // hard specular line down its full length, and a rust bloom kills it.
+          var fa = 0.90 + (noise.fbm3(x * 0.6, y * 0.55, z * 0.6, 2) * 0.5 + 0.5) * 0.20;
+          // the proud pressure-plate catches the sky and is a shade lighter
+          fa *= 1 + M.saturate(ny) * 0.10;
+          r = fa * 0.99; g = fa * 1.00; b = fa * 1.03;
         } else if (mode === 'sheet') {
           // Polythene. Backlit, so the multiplier is high and warm where the sun
           // is behind it, and the creases are baked in as value.
@@ -3666,7 +4964,8 @@
           // loudest wrong note in an establishing frame made of concrete.
           var nv = 0.54 + (noise.fbm2(x * 1.2, y * 1.2, 2) * 0.5 + 0.5) * 0.24;
           r = nv * 1.10; g = nv * 0.62; b = nv * 0.40;
-        } else if (mode === 'city' || mode === 'glasscity' || mode === 'rawcity') {
+        } else if (mode === 'city' || mode === 'glasscity' || mode === 'rawcity' ||
+                   mode === 'farcity') {
           // ---- AERIAL PERSPECTIVE, in the albedo --------------------------------
           // The fog does the atmosphere. What it cannot do is make a distant
           // block DIFFERENT from a near one in value and chroma before the fog
@@ -3693,19 +4992,58 @@
           } else if (mode === 'rawcity') {
             vv *= 0.80;
             r = vv * 1.02; g = vv * 1.00; b = vv * 0.98;
+          } else if (mode === 'farcity') {
+            // The rim rings sit under 64-80% haze, so only a fifth to a third of
+            // their albedo ever reaches the lens. At 0.58 they contributed
+            // nothing at all and the band between the modelled city and the
+            // horizon photographed as an empty dark shelf. PALE and cool is what
+            // a hazed skyline actually is, and it is the value step that makes
+            // the near city read as near.
+            vv *= 1.30;
+            r = vv * 0.98; g = vv * 1.00; b = vv * 1.08;
           } else {
-            r = vv * (1.05 + lam * 0.22 - shade * 0.10);
-            g = vv * (0.99 - shade * 0.02);
-            b = vv * (0.92 - lam * 0.12 + shade * 0.20);
+            // ---- DISTRICTS -------------------------------------------------
+            // Three albedo families chosen by a spatial hash on the BLOCK, not
+            // per vertex, so a whole building belongs to one of them and the
+            // districts read differently: pale precast, dark glass, warm brick.
+            // One beige for an entire metropolis is why the skyline read as a
+            // single extruded material.
+            var bhx = Math.floor(x / 84) * 73856093 ^ Math.floor(z / 84) * 19349663;
+            var fam = ((bhx % 3) + 3) % 3;
+            if (fam === 0) {                       // pale precast
+              r = vv * (1.08 + lam * 0.22 - shade * 0.08);
+              g = vv * (1.04 - shade * 0.02);
+              b = vv * (0.97 - lam * 0.10 + shade * 0.18);
+            } else if (fam === 1) {                // dark glass
+              vv *= 0.68;
+              r = vv * (0.92 + lam * 0.42 - shade * 0.06);
+              g = vv * (0.96 + lam * 0.10);
+              b = vv * (1.12 - lam * 0.18 + shade * 0.26);
+            } else {                               // warm brick / stone
+              vv *= 0.88;
+              r = vv * (1.18 + lam * 0.24 - shade * 0.10);
+              g = vv * (0.94 - shade * 0.03);
+              b = vv * (0.76 - lam * 0.08 + shade * 0.16);
+            }
           }
           // and a slow desaturation toward the rim so the far city is one value
           var mix = far * 0.55;
           var lum = (r + g + b) / 3;
           r = M.lerp(r, lum, mix); g = M.lerp(g, lum, mix); b = M.lerp(b, lum, mix);
+          // ---- THE VALUE RAMP THAT IS AERIAL PERSPECTIVE ---------------------
+          // Measured on the first cut: near, mid and far bands all sat at 0.47
+          // background median - there was no value separation between depth
+          // layers at all, and value separation between layers IS what aerial
+          // perspective is. The fog cannot supply it on its own because it
+          // multiplies toward one colour; the albedo has to start lower at the
+          // near end so the fog has something to lift.
+          var depth = M.saturate((rr - 90) / (CITY_R - 90));
+          var dep2 = 0.64 + depth * 0.40;
+          r *= dep2; g *= dep2; b *= dep2;
           // never let a roof go to nothing - a black city under a bright sky is
           // a silhouette, not a city
           var up = M.saturate(ny);
-          r += up * 0.10; g += up * 0.10; b += up * 0.12;
+          r += up * 0.08; g += up * 0.08; b += up * 0.10;
         } else if (mode === 'shell') {
           // Our own tower. Same map, but it is 20 m away rather than 300, so it
           // keeps its value and gets the strong directional read the sun gives a
@@ -3718,18 +5056,32 @@
             noise.fbm2(x * 0.9 + z * 0.9, y * 0.055, 3) * 0.5 + 0.5) * 0.22;
           r = vs * (1.10 + lamS * 0.30); g = vs * 0.99; b = vs * (0.90 - lamS * 0.14);
         } else if (mode === 'cityground') {
-          // The street plane AND the rooftop plant that shares its material.
-          // Dark, but never black - a city floor at sunset is full of sodium and
-          // headlights, and the lower third of three framings is made of it.
+          // ---- THE STREET PLANE ------------------------------------------------
+          // It has to sit BELOW the building faces in value. In the first cut the
+          // plate was brighter than the blocks standing on it, which inverts the
+          // depth read the city albedo was deliberately darkened to preserve and
+          // is why the tower photographed as standing in a snowfield. The map
+          // now carries the roads, so this is only value and a little chroma.
           var rg2 = Math.sqrt(x * x + z * z);
-          var vg = 0.56 + (noise.fbm2(x * 0.022 + 5, z * 0.022 - 2, 3) * 0.5 + 0.5) * 0.38;
-          vg += (noise.fbm2(x * 0.11 - 3, z * 0.11 + 8, 2) * 0.5 + 0.5) * 0.18;
-          // rooftop plant sits hundreds of metres up and is lit, not shadowed
-          var roofF = M.smoothstep(CITY_Y + 12, CITY_Y + 40, y);
-          vg *= 1 + roofF * 0.55;
-          vg *= 1 - M.smoothstep(320, 900, rg2) * 0.16;
-          var lamG = M.saturate(nx * SUN_X + nz * SUN_Z) * roofF;
-          r = vg * (1.06 + lamG * 0.30); g = vg * 0.98; b = vg * (0.94 - lamG * 0.14);
+          var vg = 0.60 + (noise.fbm2(x * 0.0022 + 5, z * 0.0022 - 2, 3) * 0.5 + 0.5) * 0.34;
+          vg += (noise.fbm2(x * 0.011 - 3, z * 0.011 + 8, 2) * 0.5 + 0.5) * 0.14;
+          // ---- the far hills ---------------------------------------------------
+          // Ground, not city, and MUCH paler. The fog colour looking below the
+          // horizon away from the sun measured 0.0066 linear - effectively
+          // black - so at an 80% cap only a fifth of the surface survives, and a
+          // dark asphalt albedo out there renders as a void whatever the fog
+          // does. Distant land under haze is pale and cool; taking the albedo up
+          // by a factor of three is what makes the band between the city and the
+          // rim read as terrain instead of as nothing.
+          var hill = M.smoothstep(1050, 2100, rg2);
+          vg *= 1 + hill * 2.3;
+          r = vg * (1.00 - hill * 0.10); g = vg * 0.99; b = vg * (0.94 + hill * 0.22);
+        } else if (mode === 'cityplant') {
+          // Rooftop plant. Hundreds of metres up, lit rather than shadowed.
+          var vp = 0.62 + (noise.fbm2(x * 0.03 + 5, z * 0.03 - 2, 3) * 0.5 + 0.5) * 0.36;
+          var lamG = M.saturate(nx * SUN_X + nz * SUN_Z);
+          vp *= 1 + lamG * 0.45;
+          r = vp * (1.06 + lamG * 0.30); g = vp * 0.98; b = vp * (0.94 - lamG * 0.14);
         } else if (mode === 'flat') {
           r = 1; g = 1; b = 1;
         } else {
@@ -3748,14 +5100,15 @@
         }
 
         if (isWear) {
-          col[j] = M.saturate(r); col[j + 1] = M.saturate(g); col[j + 2] = M.saturate(b);
+          col[jc] = M.saturate(r); col[jc + 1] = M.saturate(g); col[jc + 2] = M.saturate(b);
         } else {
-          col[j] = r * tr * dk; col[j + 1] = g * tg * dk; col[j + 2] = b * tb * dk;
+          col[jc] = r * tr * dk; col[jc + 1] = g * tg * dk; col[jc + 2] = b * tb * dk;
         }
+        if (alphaCol) col[jc + 3] = ta;
       }
       vi += cnt;
     }
-    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, CS));
   };
 
   // ---- walkable surfaces ---------------------------------------------------------
@@ -3771,8 +5124,13 @@
 
   LevelHighrise.prototype._walkRects = function () {
     var R = [{ x0: X0 + 0.5, x1: X1 - 0.5, z0: Z0 + 0.5, z1: Z1 - 0.5, plate: true }];
-    // floor 46, under the void, reachable by the temporary stair
-    R.push({ x0: VOID_X0 - 9, x1: VOID_X1 + 9, z0: VOID_Z0 - 8, z1: VOID_Z1 + 8, y: LOWER_Y });
+    // Floor 46, under the void, reachable by the temporary stair. Clamped to the
+    // slab that is ACTUALLY down there (26 x 24 centred on the void, see
+    // buildPlate) rather than to a guessed rectangle - the old numbers ran a
+    // metre and a half past the east and north edges of it, which is walkable
+    // ground published over thin air.
+    var lcx = (VOID_X0 + VOID_X1) * 0.5 - 2, lcz = (VOID_Z0 + VOID_Z1) * 0.5 + 1;
+    R.push({ x0: lcx - 12.4, x1: lcx + 12.4, z0: lcz - 11.4, z1: lcz + 11.4, y: LOWER_Y });
     return R;
   };
 
@@ -3806,8 +5164,33 @@
           if (ry > y) y = ry;
         }
         if (y < -1e8) continue;
+        // ---- THE PLATE POLYGON, ENFORCED --------------------------------------
+        // A cell whose CENTRE is off the plate, in the slab void or in a lift
+        // shaft is not walkable, full stop. lv_firefight photographed a complete
+        // soldier silhouette floating in mid air beyond the north slab edge with
+        // no floor under him, and the chain that produced him starts here: the
+        // scenario asks navGrid.at() whether a squad position stands up, and
+        // anything this grid says yes to had better be concrete. Rechecked
+        // explicitly rather than relying on the rect list, because the rects are
+        // a convenience and this is the contract.
+        var onPlate = (x > X0 + 0.45 && x < X1 - 0.45 && z > Z0 + 0.45 && z < Z1 - 0.45);
+        var inVoid = (x > VOID_X0 - 0.2 && x < VOID_X1 + 0.2 &&
+                      z > VOID_Z0 - 0.2 && z < VOID_Z1 + 0.2);
+        var inShaft = (x > LIFT_X0 - 0.2 && x < LIFT_X1 + 0.2 &&
+                       ((z > CORE_ZI0 - 0.2 && z < -0.30) || (z > 0.30 && z < CORE_ZI1 + 0.2)));
+        var lowerOk = (y < LOWER_Y + 0.5 && y > LOWER_Y - 0.5);
         var ok = 1;
-        for (i = 0; i < obst.length; i++) {
+        if (lowerOk) {
+          // floor 46: the slab under the void, and nothing outside it
+          if (Math.abs(x - ((VOID_X0 + VOID_X1) * 0.5 - 2)) > 12.4 ||
+              Math.abs(z - ((VOID_Z0 + VOID_Z1) * 0.5 + 1)) > 11.4) ok = 0;
+        } else if (!onPlate || inVoid || inShaft) {
+          ok = 0;
+        } else if (Math.abs(y - PLATE_Y) > 0.35) {
+          // the slab dips by at most 80 mm; anything further off is not the slab
+          ok = 0;
+        }
+        for (i = 0; ok && i < obst.length; i++) {
           var o = obst[i];
           if (x < o[0] || x > o[1] || z < o[2] || z > o[3]) continue;
           if (o[5] > y + 0.35 && o[4] < y + 1.75) { ok = 0; break; }
@@ -3836,14 +5219,32 @@
 
   LevelHighrise.prototype._buildSpawns = function () {
     var self = this;
+    var MIN_SEP = 1.45;              // a character is ~0.62 m across the shoulders
+    var rejected = 0;
     function sp(x, z, yaw) {
+      // ---- REJECT ANYTHING NOT ON THE SLAB ----------------------------------
+      // Two failures were photographed off this list: a figure standing over the
+      // void with no floor under him, and two enemies interpenetrating at the
+      // same yaw. Both are cheap to make impossible.
+      var y = self.sampleGround(x, z);
+      if (!isFinite(y) || Math.abs(y - PLATE_Y) > 0.35) { rejected++; return; }
+      if (x < X0 + 0.9 || x > X1 - 0.9 || z < Z0 + 0.9 || z > Z1 - 0.9) { rejected++; return; }
+      for (var q = 0; q < self.spawnPoints.length; q++) {
+        var p = self.spawnPoints[q].position;
+        var dx = p.x - x, dz = p.z - z;
+        if (dx * dx + dz * dz < MIN_SEP * MIN_SEP) { rejected++; return; }
+      }
       self.spawnPoints.push({
-        position: new THREE.Vector3(x, self.sampleGround(x, z) + 0.02, z), yaw: yaw
+        position: new THREE.Vector3(x, y + 0.02, z), yaw: yaw
       });
     }
     // [0] is the player: in the shade at the mouth of the core lobby, looking
     // west-north-west up the open run into the light. Every level should open on
     // its own best idea, and this level's idea is "look at that".
+    //
+    // The yaws are all different on purpose. Four men at the same yaw in the
+    // same idle pose is a mannequin display, and it is what the firefight
+    // capture printed.
     sp(4.0, 13.4, -0.62);
     sp(-6.0, 8.5, -0.30);    sp(-16.0, 2.0, 0.90);
     sp(-22.0, -10.0, 1.80);  sp(-10.5, -17.5, 2.60);
@@ -3852,6 +5253,8 @@
     sp(10.5, 6.0, 0.20);     sp(10.5, -7.0, 3.10);
     sp(-2.0, 18.0, -1.10);   sp(-20.0, 17.5, -1.60);
     sp(-24.0, 10.0, 1.30);
+    sp(6.5, -10.5, 1.05);    sp(-14.0, -11.0, -2.10);
+    this._spawnsRejected = rejected;
 
     // ---------------------------------------------------------------- framings --
     // Every pose is solved, not guessed: a position plus a look-at target that
@@ -3871,31 +5274,42 @@
     var gy;
 
     // ---- HERO1 : the signature image ---------------------------------------
-    // RE-SOLVED, and the reason the first mark failed is the whole lighting
-    // lesson of this level. It stood 30 m INBOARD, in the shade, looking out at
-    // the openings. From there the openings are small, distant and four stops
-    // over the floor, so the frame metered on a dark plate with three white
-    // rectangles in it: no rake, no shadows, no city - the sunlight was 25 m
-    // away and edge-on to the lens.
+    // RE-SOLVED AGAIN, and this time against the brief rather than against the
+    // light. The previous mark stood at (-18.5, -17.4): 3.6 m inboard of the
+    // north edge, BEHIND a 1.15 m guard rail with debris netting on it, at eye
+    // 1.72 looking level-ish east. From that standoff and that eye height the
+    // sightline clears the slab edge entirely, so the frame contained zero
+    // pixels of anything below the horizon - no slab section, no drop, no
+    // street, no altitude. A level whose entire premise is a 176 m fall
+    // photographed as a foggy field at ground level.
     //
-    // The eye now stands IN THE LIGHT, 3.6 m off the north edge, and looks EAST
-    // along the sunlit strip:
+    // The eye now stands INSIDE THE DELIBERATE GAP in the edge protection at
+    // x -12.5..-3.5 (the one buildEdgeProtection leaves open on purpose, with
+    // the snapped post and the strung tape), 1.30 m off the slab edge, and
+    // pitches 10.5 degrees down:
     //
-    //   * the sun is 135 degrees behind the left shoulder at 8.8 degrees of
-    //     elevation, so the whole floor from here to the scaffold is lit and
-    //     every column between is modelled - lit left face, black right face
-    //   * six columns on the z = -16 and z = -8 grid lines throw 25 m shadows
-    //     that run forward and slightly right, converging toward the vanishing
-    //     point: the leading line IS the shadows
-    //   * the open north edge runs away down the left of frame with its posts,
-    //     guard rails and orange netting in silhouette, and the hazed city
-    //     beyond it - the drop, without having to pitch down for it
-    //   * the scaffold and hoist close the far end at 45 m as a lattice against
-    //     the sky, and the soffit's downstand beams cap the top third
+    //   * the lower left of the frame is the slab edge itself, the continuity
+    //     bars projecting out of it, the barrier tape strung across the gap -
+    //     and then 176 m of city falling away under real aerial perspective.
+    //     A fifth of the frame width is over the void, and the polythene hung
+    //     off the edge at x -8.4 runs down out of the bottom of frame: a
+    //     vertical that continues past the frame edge is the cheapest altitude
+    //     cue there is
+    //   * the upper two thirds keep the raking columns, their 25 m shadows and
+    //     the coffered soffit with its downstand beams
+    //   * the bearing is 24 degrees south of east rather than dead east. That is
+    //     not taste: lv_firefight, lv_ads, lv_muzzleflash and lv_explosion all
+    //     borrow this pose, and scenarios.js's squad mark walks 10.2 m in world
+    //     -Z from wherever the view axis lands it. A due-east bearing from the
+    //     north edge puts three of four men off the plate, which is exactly the
+    //     figure that photographed floating over the void. At this bearing the
+    //     mark reaches z >= -10 by 23 m and the whole squad stands on concrete
+    //   * the shadows still run away from the lens, 18 degrees right of the view
+    //     axis, so they are still the leading line
     //   * no sun disc, no white rectangle: the brightest thing in the frame is
     //     concrete at grazing incidence, which is what the level is made of
-    gy = this.sampleGround(-18.5, -17.4);
-    var hero1 = pose(-18.5, gy + 1.72, -17.4, 16.0, -2.05, -19.5);
+    gy = this.sampleGround(-11.0, -19.70);
+    var hero1 = pose(-11.0, gy + 1.72, -19.70, 16.40, gy + 1.72 - 5.56, -7.50);
 
     // ---- HERO2 : the curtain wall ------------------------------------------
     // Inside the glazed south-west corner, looking north along the installed
@@ -3904,13 +5318,26 @@
     // pattern is laid across the slab toward the camera, and the run of
     // mullions is the leading line straight out to where the glazing stops and
     // the open edge begins. Different space, different depth, different subject.
-    // RE-SOLVED: the first mark put the column at (-22.5, 16) 2.8 m dead ahead,
-    // so an 0.86 m concrete post filled the middle of the frame and the run it
-    // was supposed to be looking down was on either side of it. From 2.4 m off
-    // the glass the same column row becomes the RIGHT wall of a corridor and
-    // the glazing becomes the left one.
-    gy = this.sampleGround(-24.6, 18.4);
-    var hero2 = pose(-24.6, gy + 1.68, 18.4, -25.6, 2.05, -8.0);
+    // RE-SOLVED TWICE. The first mark put the column at (-22.5, 16) 2.8 m dead
+    // ahead. The second stood 2.2 m off the glass and aimed slightly WEST, which
+    // put the mullion run's vanishing point - the stated leading line - directly
+    // behind the weapon, left the whole left third a featureless near-white void
+    // and gave the crosshair an empty grey mid-distance to sit on.
+    //
+    // Now in the MIDDLE of the 4.3 m aisle between the glazing at x -26.82 and
+    // the x -22.5 column row - 1.9 m off the glass, 2.4 m off the columns, and
+    // critically not ON the column line, which a first attempt at this fix was
+    // and which put an 0.86 m concrete post dead down the centre of the frame
+    // for the third time.
+    //
+    // The bearing is 26 degrees east of north, which does three things at once:
+    // the glazing run's vanishing point lands 26 degrees LEFT of centre and
+    // therefore clear of the weapon in the lower right; the near column at
+    // (-22.5, 16) becomes a foreground right-hand frame at 3 m instead of an
+    // obstruction; and a halogen flood on a tripod (FLOODS[3]) stands 15 m down
+    // the leading line, so it arrives somewhere readable.
+    gy = this.sampleGround(-24.9, 17.8);
+    var hero2 = pose(-24.9, gy + 1.70, 17.8, -13.5, gy + 2.15, -5.6);
 
     // ---- HERO3 : the drop ---------------------------------------------------
     // At the missing guard-rail bay on the north edge, pitched 34 degrees down
@@ -3962,13 +5389,23 @@
     // west elevations are both lit rather than silhouetted - which is what an
     // establishing frame needs and what a shot into the sun cannot give.
     //
-    // RE-SOLVED. The first mark stood 7.8 m off the crane's mast, which put a
-    // 2 m lattice column dead down the centre of the frame with the entire
-    // building behind it. From 55 m out and 22 m north the same mast sits 34
-    // degrees left - a vertical on the left third, framing rather than
-    // blocking - and 22 m of eye height finally gets over the plate's own
-    // parapet to see INTO the floor.
-    var overview = pose(-22.0, 16.0, -74.0, 2.0, -6.0, -2.0);
+    // RE-SOLVED TWICE.
+    //
+    // The first mark stood 7.8 m off the crane's mast, which put a 2 m lattice
+    // column dead down the centre of the frame. The second stood NORTH-WEST at
+    // (-22, 16, -74) - and the sun arrives from west-north-west, so the north
+    // elevation AND the west elevation were both frontally lit. An establishing
+    // shot needs one lit face and one shaded face; two lit faces is a card
+    // model, which is exactly what it photographed as.
+    //
+    // The standpoint is now NORTH-EAST. The sun sits 93 degrees off the view
+    // axis, so the north elevation takes the rake and the east elevation - the
+    // one carrying the scaffold and the hoist mast, i.e. the level's densest
+    // silhouette - goes into shade. The hoist mast runs down the near right as a
+    // foreground vertical, the crane stands clear beyond the far corner with its
+    // jib crossing the top of the frame, and the sightline to the crane passes
+    // NORTH of the tower rather than through it.
+    var overview = pose(46.0, 14.0, -50.0, 2.0, -4.0, 0.0);
 
     this.cameraPoses = {
       overview: overview, hero1: hero1, hero2: hero2, hero3: hero3,
@@ -4070,12 +5507,58 @@
       this._hourPinned = true;
       try {
         var sk = ctx && ctx.sky;
+        // ---- THE AEROSOL, ONCE --------------------------------------------
+        // The env profile asks for turbidity 0.03, the lowest number in the
+        // whole LEVELS table (snowbound 0.09, jungle 0.07, ruins 0.06, refinery
+        // 0.05). An atmosphere that thin produces almost no chromatic
+        // separation between sun and sky, and the measured consequence was a
+        // level that is greyer than the golden-hour level it is supposed to look
+        // nothing like: whole-frame saturation 0.219 / 0.236 / 0.274 against the
+        // shipped market street's 0.277, an achromatic upper sky at
+        // [0.297,0.303,0.317], and a shadow chroma of [-0.000,-0.001,+0.001] -
+        // perfectly neutral. grade_split was positive only because the
+        // highlights are warm; the shadow half of it was doing nothing at all.
+        //
+        // A clear sunset works because 2500 K direct sits against 12000 K
+        // skylight. That needs real blue photons in the shade, and no postfx
+        // lift curve can invent them - it has to come from Rayleigh dominating
+        // an aerosol thick enough to redden the low disc. 0.062 thickens the
+        // haze, reddens the sun and pushes actual blue into the sky ambient.
+        //
+        // Guarded and one-shot, exactly like the hour below: setTurbidity is
+        // public API, it rebuilds the LUT and re-runs the PMREM, and only this
+        // level calls it - the market and the harbor cannot move.
+        if (sk && typeof sk.setTurbidity === 'function') sk.setTurbidity(TURBIDITY);
         if (sk && typeof sk.setTimeOfDay === 'function' && sk.sunWorldDirection &&
             sk.sunWorldDirection.y <= 0.005) {
           sk.setTimeOfDay(TIME_OF_DAY);
         }
       } catch (e) { GAME.logError('highrise.hour', e); }
     }
+
+    // ---- the shadow cascade, against the ACTIVE camera -----------------------
+    // 78 m of cascade is right for the four eye-level poses, and completely
+    // wrong for the establishing shot: that eye stands 69 m from its target with
+    // the far side of the tower at 110 m+, so the entire subject sat at or
+    // beyond the cascade limit and the top plate photographed with no column
+    // shadows on it at all, no shadow of the upper plate on the lower one, and
+    // every face a flat sky-ambient wash. Solved from the camera rather than
+    // pinned to a number, and only written when it actually changes so the
+    // cascades are not marked dirty every frame.
+    try {
+      var cam = ctx && ctx.camera;
+      var lg = ctx && ctx.lighting;
+      if (cam && lg && typeof lg.setShadowDistance === 'function') {
+        var cp = cam.position;
+        var outside = (cp.x < X0 - 6 || cp.x > X1 + 6 ||
+                       cp.z < Z0 - 6 || cp.z > Z1 + 6 || cp.y > 10);
+        var want = outside ? 150 : 78;
+        if (want !== this._shadowDist) {
+          lg.setShadowDistance(want);
+          this._shadowDist = want;
+        }
+      }
+    } catch (e2) { /* a cascade limit is not worth a frame */ }
 
     var sheets = this.sheets;
     if (!sheets || !sheets.length) return;
