@@ -1135,23 +1135,40 @@
   // Bracket fungus - shelves stepping up a trunk.  The one place in the level
   // where something pale grows on something dark, which is what makes a trunk
   // read as rotting rather than as a pole.
+  // A STACK OF NEAR-FLAT DISCS IS NOT A BRACKET. The old kit lathed three to
+  // five level plates and gave them a -0.05 to -0.22 rad pitch, i.e. tilted
+  // DOWN, so even correctly placed they photographed as pale ellipses lying on
+  // the log like stickers. A bracket fungus is a half-disc that grows OUT of
+  // the trunk and tilts UP: it has a thick attached root, a thin free edge, a
+  // concave gilled underside and concentric growth banding.
   K.fungus = function (rng) {
     var P = [];
-    var n = rng.int(4, 6);
+    var n = rng.int(3, 5);
     for (var i = 0; i < n; i++) {
-      var y = i * rng.range(0.045, 0.10);
-      var r = rng.range(0.055, 0.135) * (1 - i * 0.08);
-      var a = rng.range(-0.7, 0.7);
-      var g = cyl(r, r * 0.62, 0.022, 9);
+      var y = i * rng.range(0.055, 0.115);
+      var r = rng.range(0.075, 0.165) * (1 - i * 0.09);
+      var a = rng.range(-0.9, 0.9);
+      // A half-disc lathed from a profile: thick at the trunk, feathering to a
+      // wavy lip, with the underside dished so the shelf reads as a shelf from
+      // below as well as from above.
+      var g = cyl(r, r * 0.55, 0.030 + r * 0.10, 11);
       var p = g.attributes.position;
       for (var v = 0; v < p.count; v++) {
-        var z = p.getZ(v);
-        if (z < 0) p.setZ(v, z * 0.16);
-        p.setY(v, p.getY(v) + Math.max(0, -z) * 0.10);
+        var vx = p.getX(v), vy = p.getY(v), vz = p.getZ(v);
+        // collapse the back half into the trunk face
+        if (vz < 0) p.setZ(v, vz * 0.14);
+        // the free edge falls away and ripples; the attached edge thickens
+        var rad = Math.sqrt(vx * vx + vz * vz) / Math.max(r, 1e-4);
+        var wave = Math.sin(Math.atan2(vx, vz) * 5.0 + i * 1.7) * 0.16;
+        p.setY(v, vy * (1.0 + (1 - rad) * 1.4) +
+          Math.max(0, vz) * (0.30 + wave * 0.1) - rad * 0.012);
+        p.setX(v, vx * (1 + wave * 0.10));
       }
       p.needsUpdate = true;
       g.computeVertexNormals();
-      P.push(part(g, Tn(Math.sin(a) * 0.02, y, r * 0.34, rng.range(-0.22, -0.05), a, 0)));
+      // +0.28 rad: it grows UPWARD off the flank, which is what makes a shelf
+      // catch light on top and go dark underneath.
+      P.push(part(g, Tn(Math.sin(a) * 0.02, y, r * 0.42, rng.range(0.24, 0.52), a, 0)));
     }
     var out = mergeParts(P, 4.0);
     disposeParts(P);
@@ -3083,19 +3100,27 @@
     var i, p;
     var deck = py + 0.10;
 
-    // left corner: a crate with the sentry's kit on it
-    p = W(-Rr * 1.05, Rr * 0.95);
+    // THE PLATFORM IS THE ESTABLISHING SHOT'S NEAR PLANE, so what stands on it
+    // is composed rather than distributed. Local +Z is the direction the
+    // OVERVIEW pose looks (level_jungle turns the tower so its clear parapet
+    // edge faces the shot), and everything solid used to sit on that edge: a
+    // sagging wire of four dark ration tins ran straight across the middle of
+    // the frame with a crate, an ammo can, a jerrycan and a helmet under it.
+    // Kit goes to the REAR corners now - behind the lens, where a sentry would
+    // actually keep it out of his own way - and the only thing left forward is
+    // the poncho, which is a soft, warm, hanging near-plane and the one prop
+    // here that a wide shot wants.
+    p = W(-Rr * 1.05, -Rr * 0.95);
     if (B.crate) B.crate.add(T(p[0], deck, p[1], 0, yaw + 0.3, 0, 0.9, 0.9, 0.9), wearTint(R));
     if (B.canteen) B.canteen.add(T(p[0] + 0.1, deck + 0.36, p[1], 0, 1.1, 0), wearTint(R));
-    p = W(-Rr * 0.75, Rr * 1.15);
+    p = W(-Rr * 0.75, -Rr * 1.15);
     if (B.ammoCan) B.ammoCan.add(T(p[0], deck, p[1], 0, yaw + 1.2, 0), wearTint(R));
-    // right corner: a jerrycan of water and the helmet
-    p = W(Rr * 1.05, Rr * 0.9);
+    p = W(Rr * 1.05, -Rr * 0.9);
     if (B.jerry) B.jerry.add(T(p[0], deck, p[1], 0, yaw - 0.4, 0), wearTint(R));
-    p = W(Rr * 0.8, Rr * 1.2);
+    p = W(Rr * 0.8, -Rr * 1.2);
     if (B.helmet) B.helmet.add(T(p[0], deck, p[1], 0.05, R.range(0, 6.28), 0.03), wearTint(R));
-    // the tins on the wire, strung between the two forward posts
-    var a0 = W(-Rr * 1.3, Rr * 1.3), a1 = W(Rr * 1.3, Rr * 1.3);
+    // the tins on the wire, strung between the two REAR posts
+    var a0 = W(-Rr * 1.3, -Rr * 1.3), a1 = W(Rr * 1.3, -Rr * 1.3);
     this._static('rope', tubePath(sagStations(a0[0], deck + 0.95, a0[1],
       a1[0], deck + 0.95, a1[1], 0.09, 0.007, 6), 4), null);
     for (i = 0; i < 4; i++) {
@@ -3108,10 +3133,11 @@
           0.7, 0.7, 0.7), wearTint(R));
       }
     }
-    // a poncho over the parapet on the shaded side
-    var pp = W(Rr * 1.28, -Rr * 0.2);
-    this._static('canvas', K.clothPanel(1.15, 0.95, 0.08, 0.05, 4, 4),
-      Tn(pp[0], deck + 0.62, pp[1], 0, yaw + Math.PI * 0.5, 0.06));
+    // the poncho, hung off the forward-right corner post so it hangs into the
+    // right edge of the establishing shot and gives it a near plane
+    var pp = W(Rr * 1.24, Rr * 0.85);
+    this._static('canvas', K.clothPanel(1.30, 1.05, 0.08, 0.05, 4, 4),
+      Tn(pp[0], deck + 0.68, pp[1], 0, yaw + Math.PI * 0.5 - 0.25, 0.06));
 
     // and the stores at the foot of the ladder, where they get carried up from
     var lp = W(-Rr * 0.9, Rr * 2.4);
@@ -3796,16 +3822,40 @@
       var ax = lg.a.x, az = lg.a.z, bxx = lg.b.x, bzz = lg.b.z;
       var axis = Math.atan2(bxx - ax, bzz - az);
       var lup = this._uphill((ax + bxx) * 0.5, (az + bzz) * 0.5);
+      // BRACKET FUNGUS IS DERIVED FROM THE LOG, NOT FROM THE TERRAIN. The
+      // shelves used to sit at `ground + range(0.10, 0.55)` with a lateral
+      // offset of r * 0.85, while the log AXIS sits at ground + r * (1 - sink)
+      // with r = 0.46-0.62 - so a shelf at ground + 0.10 was inside the trunk
+      // and one at ground + 0.55 was hovering beside it. At four metres in
+      // enemy_closeup they read exactly as they were: stickers.
+      //
+      // Sample the axis at t, offset perpendicular by r * 0.95, and put the
+      // shelf at axisY + r * sin(theta) for a theta in the LOWER hemisphere so
+      // the growth clings to the shaded flank. Four or five per log, in one or
+      // two clusters rather than distributed on R.next() - fungus fruits where
+      // the mycelium already is.
       if (B.fungus) {
-        for (j = 0; j < 8; j++) {
-          var t2 = R.next();
-          var fx = ax + (bxx - ax) * t2, fz = az + (bzz - az) * t2;
-          var side = R.bool() ? 1.5708 : -1.5708;
-          B.fungus.add(T(fx + Math.sin(axis + side) * (lg.r || 0.5) * 0.85,
-            this._ground(fx, fz) + R.range(0.10, 0.55),
-            fz + Math.cos(axis + side) * (lg.r || 0.5) * 0.85,
-            0, axis + side, 0, R.range(0.8, 1.5), R.range(0.8, 1.5), R.range(0.8, 1.5)),
-            hueTint(R, 1.0, 0.92, 0.74));
+        var lr = lg.r || 0.5;
+        var ay0 = lg.a.y, by0 = lg.b.y;
+        var clusters = R.int(1, 2);
+        for (var cl = 0; cl < clusters; cl++) {
+          var ct = R.range(0.18, 0.82);
+          var cside = R.bool() ? 1.5708 : -1.5708;
+          var cn = R.int(2, 3);
+          for (j = 0; j < cn; j++) {
+            var t2 = M.clamp(ct + R.gaussian(0, 0.055), 0.06, 0.94);
+            var fx = ax + (bxx - ax) * t2, fz = az + (bzz - az) * t2;
+            var axisY = ay0 + (by0 - ay0) * t2;
+            // lower hemisphere: -0.95 .. -0.05 rad off horizontal
+            var th = R.range(-0.95, -0.05);
+            var fy = axisY + Math.sin(th) * lr;
+            var perp = lr * 0.95 * Math.cos(th);
+            B.fungus.add(T(fx + Math.sin(axis + cside) * perp, fy,
+              fz + Math.cos(axis + cside) * perp,
+              0, axis + cside + R.range(-0.35, 0.35), 0,
+              R.range(0.8, 1.5), R.range(0.8, 1.5), R.range(0.8, 1.5)),
+              hueTint(R, 1.0, 0.92, 0.74));
+          }
         }
       }
       if (B.tuft) {
