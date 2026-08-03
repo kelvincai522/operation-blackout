@@ -178,8 +178,20 @@
     // its smile at 25 m in any light.
     carve:      { uv: 0.42, cast: true,  recv: true, base: 'stone',
                   alb: 0x39332a, rough: 0.95, hue: 0.55 },
+    // MOSS HAS TO BE AUTHORED AGAINST THIS LEVEL'S ILLUMINANT, NOT AGAINST A
+    // COLOUR PICKER. Measured off the delivered frame, the light in here -
+    // sky.js's civil-twilight key at (1.00 0.44 0.17), the horizon-glow half
+    // of the IBL and postfx's dawn volumetrics, which are the same orange -
+    // has a red:green ratio of about 3:1. Run a physically honest moss albedo
+    // (0x5d6647, linear G/R = 1.21) through that and it comes out BROWN: the
+    // whole level measured 0.15% of pixels with G above both R and B, against
+    // the shipped market's 3.2%, and 66% of hero1's saturated pixels landed in
+    // one 30-degree hue bin. The albedo has to carry a linear G/R above ~3 for
+    // green to survive to the print at all. 0x3c7a2c measures 4.31, which
+    // lands the rendered surface at G/R ~1.4 - unmistakably moss, and nowhere
+    // near lurid once the orange key has had its way with it.
     mossy:      { uv: 0.42, cast: true,  recv: true, base: 'stone',
-                  alb: 0x5d6647, rough: 0.94, hue: 0.85 },
+                  alb: 0x2a5417, rough: 0.94, hue: 0.98 },
     laterite:   { uv: 0.36, cast: true,  recv: true, base: 'rubble',
                   alb: 0x7d5f49, rough: 0.94, hue: 0.75 },
     paving:     { uv: 0.34, cast: false, recv: true, base: 'stone',
@@ -191,8 +203,15 @@
     // and stays on 'wear'.
     earth:      { uv: 0.30, cast: false, recv: true, base: 'dirt', mult: true,
                   alb: 0x6f6650, rough: 0.96, hue: 0.55 },
-    bark:       { uv: 0.62, cast: true,  recv: true, base: 'wood_plank',
-                  alb: 0x796f5e, rough: 0.94, hue: 0.75 },
+    // BARK IS ITS OWN MATERIAL, generated in this file. It used to point at
+    // materials.js's 'wood_plank' - a SAWN TIMBER recipe - on a worldUV
+    // cylinder, which produced regular horizontal ring seams down every
+    // strangler-fig root and made them read as corrugated hose. wood_plank is
+    // also the wrong VALUE: at 0x796f5e the roots measured 0.354 mean against
+    // 0.232 for the masonry behind them, i.e. the second-brightest mass in
+    // hero2. This recipe is vertical fibre with deep fissures, mapped off
+    // limb()'s own arc-length uv, at 0x5f5648 so a root sits BELOW the stone.
+    bark:       { uv: 1.40, cast: true,  recv: true, own: 'bark', keepUV: true },
     timber:     { uv: 0.85, cast: true,  recv: true, base: 'wood_plank',
                   alb: 0x594736, rough: 0.90 },
     tarp:       { uv: 0.70, cast: true,  recv: true, base: 'canvas_awning',
@@ -214,11 +233,11 @@
     sandstone:  [0xa2988a, 0.86, 0.0],
     sandstone_d:[0x645b4b, 0.90, 0.0],
     carve:      [0x39332a, 0.95, 0.0],
-    mossy:      [0x5d6647, 0.94, 0.0],
+    mossy:      [0x2a5417, 0.94, 0.0],
     laterite:   [0x7d5f49, 0.94, 0.0],
     paving:     [0x8e8778, 0.88, 0.0],
     earth:      [0x4a4030, 0.96, 0.0],
-    bark:       [0x796f5e, 0.94, 0.0],
+    bark:       [0x5f5648, 0.94, 0.0],
     timber:     [0x594736, 0.90, 0.0],
     tarp:       [0x6e6450, 0.94, 0.0],
     metal:      [0x6a5044, 0.86, 0.55],
@@ -247,9 +266,15 @@
   }
 
   var _boxCache = new Map();
+  // The default chamfer was 18 mm. On a 1.6 m sandstone block that is a razor
+  // arris - the single loudest "this is a computer model" tell in the first
+  // capture round, and the one thing on the list that costs NOTHING to fix:
+  // bevelBox insets the corner vertices of a 12-triangle box, so a 45 mm
+  // chamfer is exactly as expensive as an 18 mm one and every course in the
+  // level suddenly catches a highlight along its top arris.
   function box(w, h, d, bevel) {
     w = Math.max(w, 0.004); h = Math.max(h, 0.004); d = Math.max(d, 0.004);
-    if (bevel === undefined) bevel = Math.min(0.018, Math.min(w, Math.min(h, d)) * 0.24);
+    if (bevel === undefined) bevel = Math.min(0.048, Math.min(w, Math.min(h, d)) * 0.20);
     var k = w.toFixed(3) + ',' + h.toFixed(3) + ',' + d.toFixed(3) + ',' + bevel.toFixed(3);
     var g = _boxCache.get(k);
     if (!g) {
@@ -367,12 +392,39 @@
     return g;
   }
 
-  // A tapered, slightly bent limb - tree trunks, buttress roots, the roots
+  // A tapered, bent, FLUTED limb - tree trunks, buttress roots, the roots
   // pouring over the gallery wall. `pts` is [[x,y,z,r], ...].
-  function limb(pts, seg) {
-    seg = seg || 6;
-    var pos = [], nor = [], i, j;
-    var rings = [];
+  //
+  // Round one emitted these at 6 radial segments with a constant per-station
+  // radius, and every strangler-fig root in hero2 photographed as plastic
+  // drainpipe: a visibly hexagonal tube of constant diameter with the sawn
+  // horizontal ring seams of the 'wood_plank' recipe running across it. Three
+  // things fix that and all three are in here now:
+  //
+  //   * 14+ radial segments, so the silhouette is a curve and not a hexagon;
+  //   * a per-STATION radius driven by noise - a real aerial root bulges and
+  //     pinches every 30-60 cm where it has gripped and let go - plus 3-5
+  //     longitudinal flutes at a per-limb phase, so the cross-section is lobed
+  //     and the silhouette has lobes to catch the rim light;
+  //   * REAL UVS IN METRES. u runs around the circumference, v runs along the
+  //     limb's own arc length, so the bark's vertical fibre runs along the
+  //     root instead of a world-planar projection banding it into rings.
+  function limb(pts, seg, opt) {
+    seg = seg || 14;
+    opt = opt || {};
+    var uvm = opt.uv || 0.55;            // metres per uv unit
+    var phase = opt.phase || 0;
+    var lobes = opt.lobes === undefined ? 4 : opt.lobes;
+    var flute = opt.flute === undefined ? 0.13 : opt.flute;
+    var bulge = opt.bulge === undefined ? 0.16 : opt.bulge;
+    var N = opt.noise || null;
+    var pos = [], nor = [], uvs = [], i, j;
+    var rings = [], vlen = [0];
+    for (i = 1; i < pts.length; i++) {
+      var ddx = pts[i][0] - pts[i - 1][0], ddy = pts[i][1] - pts[i - 1][1],
+        ddz = pts[i][2] - pts[i - 1][2];
+      vlen.push(vlen[i - 1] + Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz));
+    }
     for (i = 0; i < pts.length; i++) {
       var p = pts[i];
       var nx, ny, nz;
@@ -387,31 +439,40 @@
       var sl = Math.sqrt(sx * sx + sy * sy + sz * sz) || 1;
       sx /= sl; sy /= sl; sz /= sl;
       var tx = ny * sz - nz * sy, ty = nz * sx - nx * sz, tz = nx * sy - ny * sx;
+      // per-station swell: a root is never a cone
+      var sw = 1;
+      if (N) sw = 1 + N.fbm2(vlen[i] * 2.1 + phase * 3.7, phase * 1.9, 2) * bulge * 2;
+      else sw = 1 + Math.sin(vlen[i] * 4.6 + phase) * bulge;
       var ring = [];
-      for (j = 0; j < seg; j++) {
-        var ang = j / seg * Math.PI * 2;
+      for (j = 0; j <= seg; j++) {
+        var jj = j % seg;
+        var ang = jj / seg * Math.PI * 2;
         var ca = Math.cos(ang), sa = Math.sin(ang);
-        // gentle fluting so a trunk is not a smooth pipe
-        var rr = p[3] * (1 + 0.10 * Math.cos(ang * 5 + i * 0.7));
+        // longitudinal flutes, phase-locked along the limb so a groove RUNS
+        var rr = p[3] * sw * (1 + flute * Math.cos(ang * lobes + phase) +
+          0.05 * Math.cos(ang * (lobes * 2 + 1) - phase * 0.6 + vlen[i] * 0.5));
         var dx = (sx * ca + tx * sa), dy = (sy * ca + ty * sa), dz = (sz * ca + tz * sa);
-        ring.push([p[0] + dx * rr, p[1] + dy * rr, p[2] + dz * rr, dx, dy, dz]);
+        ring.push([p[0] + dx * rr, p[1] + dy * rr, p[2] + dz * rr, dx, dy, dz,
+          (j / seg) * (Math.PI * 2 * Math.max(0.05, p[3])) / uvm, vlen[i] / uvm]);
       }
       rings.push(ring);
     }
     for (i = 0; i + 1 < rings.length; i++) {
       var r0 = rings[i], r1 = rings[i + 1];
       for (j = 0; j < seg; j++) {
-        var k = (j + 1) % seg;
-        var A = r0[j], B = r0[k], C = r1[k], D = r1[j];
+        var A = r0[j], B = r0[j + 1], C = r1[j + 1], D = r1[j];
         pos.push(A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2]);
         nor.push(A[3], A[4], A[5], B[3], B[4], B[5], C[3], C[4], C[5]);
+        uvs.push(A[6], A[7], B[6], B[7], C[6], C[7]);
         pos.push(A[0], A[1], A[2], C[0], C[1], C[2], D[0], D[1], D[2]);
         nor.push(A[3], A[4], A[5], C[3], C[4], C[5], D[3], D[4], D[5]);
+        uvs.push(A[6], A[7], C[6], C[7], D[6], D[7]);
       }
     }
     var g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
     g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
     return g;
   }
 
@@ -432,6 +493,9 @@
     this.buckets = Object.create(null);
     this._stack = [new THREE.Matrix4()];
     this.wear = null;          // {grime, wet, edge} multipliers for this piece
+    // Set while a carved face is being emitted. _paint uses it to bake
+    // CONCAVITY OCCLUSION into the vertex colours - see the note there.
+    this.faceTag = null;
     this.count = 0;
   }
   Builder.prototype.top = function () { return this._stack[this._stack.length - 1]; };
@@ -447,7 +511,7 @@
     var b = this.buckets[key] || (this.buckets[key] = []);
     var wm = new THREE.Matrix4();
     if (local) wm.multiplyMatrices(this.top(), local); else wm.copy(this.top());
-    var e = { geometry: geo, matrix: wm, wear: this.wear };
+    var e = { geometry: geo, matrix: wm, wear: this.wear, face: this.faceTag };
     b.push(e); this.count++;
     return e;
   };
@@ -481,6 +545,14 @@
     m.elements[13] = (ay + by) * 0.5;
     m.elements[14] = (az + bz) * 0.5;
     return this.add(key, box(w, len, d || w), m);
+  };
+  // A limb between two points, in the WORLD frame. Bark geometry carries its
+  // own metre-scale uv, so anything in the bark bucket has to come through
+  // limb() rather than through box()/cyl() or its uv is a 0..1 face square
+  // stretched over three metres of root.
+  Builder.prototype.stick = function (key, ax, ay, az, bx, by, bz, r, seg, opt) {
+    return this.add(key, limb([[ax, ay, az, r], [bx, by, bz, r * 0.92]],
+      seg || 8, opt || { flute: 0.10, bulge: 0.10 }));
   };
   Builder.prototype.rod = function (key, ax, ay, az, bx, by, bz, r, seg) {
     var dx = bx - ax, dy = by - ay, dz = bz - az;
@@ -550,8 +622,12 @@
   // 0 moss sheet   1 lichen rosettes   2 water stain    3 worn dirt
   // 4 black algae  5 crack             6 leaf litter    7 efflorescence
   // 8 root hair    9 moss fringe      10 silt          11 wet sheen
+  // 2048, not 1024. At a 256 px cell a 2.4 m moss mark carries 107 texels/m;
+  // photographed at 4 m in a 107-degree frame that is 0.6 texels per pixel and
+  // the mark reads as a flat patch of green PAINT, which is exactly how the
+  // tier faces in the near field of hero1 came out. 512 px cells double it.
   function buildDecalAtlas(rng) {
-    var S = 1024, C = S / ATLAS_N;
+    var S = 2048, C = S / ATLAS_N;
     var g = ctx2d(S);
     if (!g) return null;
     g.clearRect(0, 0, S, S);
@@ -560,23 +636,44 @@
     function cellOrigin(k) { return [(k % ATLAS_N) * C, ((k / ATLAS_N) | 0) * C]; }
 
     // ---- 0: moss sheet - the level's most-used mark -------------------------
+    // TWO THINGS CHANGED AND BOTH WERE STRUCTURAL FAILURES, not tuning.
+    //
+    // (1) THE HUE. See the note on SURF.mossy: this level's illuminant runs
+    //     about 3:1 red-to-green, so an honest moss albedo at linear G/R 1.85
+    //     photographed as brown. These greens run 6-9:1 in linear, which is
+    //     what it takes for the mark to still be moss after the key, the IBL's
+    //     horizon half and the dawn volumetrics have all had a go at it.
+    // (2) THE ALPHA. The decal material is alpha-blended, so a mark at 0.3-0.85
+    //     is 15-70% of the WARM STONE UNDERNEATH. Compositing green over
+    //     salmon at half strength gives olive, and olive is in hue bin 30, not
+    //     in bin 90 - which is exactly why the "green pass" measured 0.53%
+    //     while looking green to the eye. The core of a moss sheet is now
+    //     opaque and only its frontier is transparent, which is also what a
+    //     real moss sheet looks like.
     var o = cellOrigin(0);
-    for (i = 0; i < 46; i++) {
-      var mx = o[0] + rng.range(C * 0.18, C * 0.82);
-      var my = o[1] + rng.range(C * 0.18, C * 0.82);
-      var mr = rng.range(C * 0.06, C * 0.20);
+    for (i = 0; i < 54; i++) {
+      var mx = o[0] + rng.range(C * 0.14, C * 0.86);
+      var my = o[1] + rng.range(C * 0.14, C * 0.86);
+      var mr = rng.range(C * 0.07, C * 0.24);
       var v = rng.range(0, 1);
-      g.globalAlpha = rng.range(0.30, 0.85);
-      g.fillStyle = 'rgb(' + ((44 + v * 34) | 0) + ',' + ((62 + v * 42) | 0) + ',' +
-        ((28 + v * 22) | 0) + ')';
+      g.globalAlpha = rng.range(0.68, 1.0);
+      g.fillStyle = 'rgb(' + ((28 + v * 30) | 0) + ',' + ((96 + v * 58) | 0) + ',' +
+        ((30 + v * 26) | 0) + ')';
       blob(g, mx, my, mr, rng, 3 + (i % 4), 1.0);
     }
-    // dry, paler crust at the frontier
-    for (i = 0; i < 26; i++) {
-      g.globalAlpha = rng.range(0.10, 0.30);
-      g.fillStyle = 'rgb(118,124,86)';
+    // dry, paler crust at the frontier - still green, just lighter and drier
+    for (i = 0; i < 30; i++) {
+      g.globalAlpha = rng.range(0.22, 0.55);
+      g.fillStyle = rng.bool(0.5) ? 'rgb(112,158,72)' : 'rgb(78,124,54)';
       blob(g, o[0] + rng.range(C * 0.1, C * 0.9), o[1] + rng.range(C * 0.1, C * 0.9),
-        rng.range(C * 0.03, C * 0.09), rng, 4, 1.2);
+        rng.range(C * 0.03, C * 0.10), rng, 4, 1.2);
+    }
+    // a few near-black shadowed cushions, so the sheet has value range
+    for (i = 0; i < 18; i++) {
+      g.globalAlpha = rng.range(0.35, 0.80);
+      g.fillStyle = 'rgb(18,44,20)';
+      blob(g, o[0] + rng.range(0, C), o[1] + rng.range(0, C),
+        rng.range(C * 0.02, C * 0.07), rng, 4, 1.2);
     }
 
     // ---- 1: lichen rosettes -------------------------------------------------
@@ -585,13 +682,13 @@
       var lx = o[0] + rng.range(C * 0.08, C * 0.92);
       var ly = o[1] + rng.range(C * 0.08, C * 0.92);
       var lr = rng.range(C * 0.012, C * 0.055);
-      g.globalAlpha = rng.range(0.25, 0.70);
+      g.globalAlpha = rng.range(0.35, 0.85);
       var t = rng.next();
-      g.fillStyle = t < 0.45 ? 'rgb(168,174,146)'
-        : (t < 0.8 ? 'rgb(126,140,104)' : 'rgb(196,186,150)');
+      g.fillStyle = t < 0.40 ? 'rgb(150,182,124)'
+        : (t < 0.78 ? 'rgb(104,150,86)' : 'rgb(196,196,150)');
       blob(g, lx, ly, lr, rng, 5, 1.4);
       g.globalAlpha *= 0.5;
-      g.fillStyle = 'rgb(74,82,58)';
+      g.fillStyle = 'rgb(52,84,44)';
       blob(g, lx, ly, lr * 0.45, rng, 4, 1.2);
     }
 
@@ -630,11 +727,13 @@
 
     // ---- 4: black algae - the tide line of standing water --------------------
     o = cellOrigin(4);
-    for (i = 0; i < 40; i++) {
-      g.globalAlpha = rng.range(0.28, 0.80);
-      g.fillStyle = rng.bool(0.6) ? 'rgb(22,28,22)' : 'rgb(34,42,30)';
-      blob(g, o[0] + rng.range(0, C), o[1] + rng.range(C * 0.35, C),
-        rng.range(C * 0.05, C * 0.17), rng, 3, 1.3);
+    for (i = 0; i < 48; i++) {
+      g.globalAlpha = rng.range(0.45, 0.95);
+      var av = rng.next();
+      g.fillStyle = av < 0.45 ? 'rgb(14,34,16)'
+        : (av < 0.80 ? 'rgb(26,62,26)' : 'rgb(40,86,34)');
+      blob(g, o[0] + rng.range(0, C), o[1] + rng.range(C * 0.25, C),
+        rng.range(C * 0.05, C * 0.18), rng, 3, 1.3);
     }
     var grd4 = g.createLinearGradient(0, o[1], 0, o[1] + C);
     grd4.addColorStop(0, 'rgba(0,0,0,0)');
@@ -707,16 +806,16 @@
     // ---- 9: moss fringe - a soft-edged sheet for wall bases -----------------
     o = cellOrigin(9);
     var grd9 = g.createLinearGradient(0, o[1] + C, 0, o[1]);
-    grd9.addColorStop(0, 'rgba(52,68,34,0.88)');
-    grd9.addColorStop(0.45, 'rgba(58,74,40,0.44)');
-    grd9.addColorStop(1, 'rgba(64,80,46,0)');
+    grd9.addColorStop(0, 'rgba(34,96,32,0.98)');
+    grd9.addColorStop(0.45, 'rgba(42,110,38,0.62)');
+    grd9.addColorStop(1, 'rgba(58,124,50,0)');
     g.globalAlpha = 1; g.fillStyle = grd9;
     g.fillRect(o[0], o[1], C, C);
-    for (i = 0; i < 40; i++) {
-      g.globalAlpha = rng.range(0.15, 0.55);
-      g.fillStyle = 'rgb(46,62,30)';
+    for (i = 0; i < 54; i++) {
+      g.globalAlpha = rng.range(0.35, 0.90);
+      g.fillStyle = rng.bool(0.5) ? 'rgb(26,84,28)' : 'rgb(56,128,50)';
       blob(g, o[0] + rng.range(0, C), o[1] + C - Math.abs(rng.gaussian(0, C * 0.30)),
-        rng.range(C * 0.02, C * 0.08), rng, 4, 1.3);
+        rng.range(C * 0.02, C * 0.09), rng, 4, 1.3);
     }
 
     // ---- 10: silt / dried mud rim -------------------------------------------
@@ -737,46 +836,186 @@
         rng.range(C * 0.05, C * 0.18), rng, 3, 0.9);
     }
 
+    // ---- FEATHER EVERY CELL --------------------------------------------------
+    // A decal is a QUAD, and a mark whose alpha is still high where the quad
+    // ends shows the quad. Once the moss cells were made opaque enough to
+    // survive alpha-blending over warm stone (see cell 0) every moss mark on
+    // the level turned into a hard-edged green RECTANGLE - visibly a decal,
+    // pasted on. Erasing the outer eighth of each cell with a
+    // destination-out ramp means the mark always dies out inside its own quad
+    // and the only edge left is the moss's own frontier.
+    (function () {
+      var fp = C * 0.13;
+      for (var fk = 0; fk < ATLAS_N * ATLAS_N; fk++) {
+        var oo = cellOrigin(fk);
+        g.save();
+        g.globalCompositeOperation = 'destination-out';
+        g.globalAlpha = 1;
+        var sides = [
+          [oo[0], oo[1], fp, C, oo[0], 0, oo[0] + fp, 0],
+          [oo[0] + C - fp, oo[1], fp, C, oo[0] + C, 0, oo[0] + C - fp, 0],
+          [oo[0], oo[1], C, fp, 0, oo[1], 0, oo[1] + fp],
+          [oo[0], oo[1] + C - fp, C, fp, 0, oo[1] + C, 0, oo[1] + C - fp]
+        ];
+        for (var sq = 0; sq < 4; sq++) {
+          var sv = sides[sq];
+          var gr = g.createLinearGradient(sv[4], sv[5], sv[6], sv[7]);
+          gr.addColorStop(0, 'rgba(0,0,0,1)');
+          gr.addColorStop(0.55, 'rgba(0,0,0,0.45)');
+          gr.addColorStop(1, 'rgba(0,0,0,0)');
+          g.fillStyle = gr;
+          g.fillRect(sv[0], sv[1], sv[2], sv[3]);
+        }
+        g.restore();
+      }
+    })();
+
     g.globalAlpha = 1;
     return g.canvas;
   }
 
+  // BARK. Vertical fibre and deep longitudinal fissures, tiled at 0.55 m per
+  // uv unit off limb()'s arc-length parameterisation, so the grain runs ALONG
+  // a root wherever that root goes. Returns [albedoCanvas, normalCanvas].
+  function buildBarkTexture(rng, noise) {
+    var S = 512;
+    var g = ctx2d(S);
+    if (!g) return null;
+    var i, j, y;
+    g.fillStyle = 'rgb(84,76,62)';
+    g.fillRect(0, 0, S, S);
+    // long fibres: many thin, slightly wandering vertical strokes
+    for (i = 0; i < 900; i++) {
+      var x = rng.range(0, S);
+      var v = rng.next();
+      var c = v < 0.34 ? 'rgba(52,46,36,' : (v < 0.70 ? 'rgba(104,95,76,' : 'rgba(132,120,94,');
+      g.strokeStyle = c + rng.range(0.16, 0.55).toFixed(3) + ')';
+      g.lineWidth = rng.range(0.8, 3.4);
+      g.beginPath();
+      g.moveTo(x, -4);
+      var xx = x;
+      for (j = 0; j <= 10; j++) {
+        xx += rng.range(-2.2, 2.2);
+        g.lineTo(xx, j / 10 * (S + 8) - 4);
+      }
+      g.stroke();
+    }
+    // fissures: dark, wide, wandering, with a pale lip on one side
+    for (i = 0; i < 26; i++) {
+      var fx = rng.range(0, S);
+      var w = rng.range(3.5, 13.0);
+      g.strokeStyle = 'rgba(30,26,20,' + rng.range(0.45, 0.85).toFixed(3) + ')';
+      g.lineWidth = w;
+      g.beginPath(); g.moveTo(fx, -6);
+      var cx2 = fx;
+      for (j = 0; j <= 12; j++) {
+        cx2 += rng.range(-5.0, 5.0);
+        g.lineTo(cx2, j / 12 * (S + 12) - 6);
+      }
+      g.stroke();
+      g.strokeStyle = 'rgba(146,134,106,0.22)';
+      g.lineWidth = Math.max(1, w * 0.30);
+      g.stroke();
+    }
+    // lichen crust - the only place bark carries any chroma at all
+    for (i = 0; i < 90; i++) {
+      g.globalAlpha = rng.range(0.06, 0.26);
+      g.fillStyle = rng.bool(0.55) ? 'rgb(112,124,86)' : 'rgb(150,148,120)';
+      blob(g, rng.range(0, S), rng.range(0, S), rng.range(S * 0.008, S * 0.05),
+        rng, 5, 1.3);
+    }
+    g.globalAlpha = 1;
+    var alb = g.canvas;
+
+    // normal, derived from the same fibre field
+    var gn = ctx2d(S);
+    if (!gn) return [alb, null];
+    var img = gn.createImageData(S, S);
+    var d = img.data;
+    function h(px, py) {
+      return noise.fbm2(px * 0.32, py * 0.035, 3, 2.2, 0.55) * 1.0 +
+        noise.fbm2(px * 1.20 + 17, py * 0.14 - 5, 2) * 0.42;
+    }
+    for (y = 0; y < S; y++) {
+      for (var x2 = 0; x2 < S; x2++) {
+        var hx = h(x2 + 1, y) - h(x2 - 1, y);
+        var hy = h(x2, y + 1) - h(x2, y - 1);
+        var nx = -hx * 2.4, ny = -hy * 0.9, nz = 1.0;
+        var ln = Math.sqrt(nx * nx + ny * ny + nz * nz);
+        var k = (y * S + x2) * 4;
+        d[k] = ((nx / ln) * 0.5 + 0.5) * 255;
+        d[k + 1] = ((ny / ln) * 0.5 + 0.5) * 255;
+        d[k + 2] = ((nz / ln) * 0.5 + 0.5) * 255;
+        d[k + 3] = 255;
+      }
+    }
+    gn.putImageData(img, 0, 0);
+    return [alb, gn.canvas];
+  }
+
   // Canopy leaf clusters. 2 x 2 variants so no two cards on a tree carry the
   // same silhouette - a canopy of one repeated card reads instantly as cards.
+  //
+  // THE CELL IS 512 PX, NOT 256, AND THE LEAVES ARE SMALLER AND SPARSER.
+  // Round one drew ~760 leaves of 3-7 px into a 256 px cell: 90% coverage, so
+  // the individual leaves MERGED and what the silhouette actually showed was
+  // the holes between them - the 60-100 px kidney beans that wreck the top
+  // left of lv_overview and stamp the Buddha in hero2 with black amoebas.
+  // Halving the leaf size, doubling the count and doubling the cell resolution
+  // takes coverage to ~55%, quadruples texel density on a near card, and turns
+  // both the silhouette and the cast shadow into dapple.
   function buildLeafTexture(rng) {
-    var S = 512, C = S / 2;
+    var S = 1024, C = S / 2;
     var g = ctx2d(S);
     if (!g) return null;
     g.clearRect(0, 0, S, S);
     for (var v = 0; v < 4; v++) {
       var ox = (v % 2) * C, oy = ((v / 2) | 0) * C;
-      var n = 760 + (v * 41) % 120;
+      // twigs first: a real cluster hangs off a visible armature
+      g.globalAlpha = 0.85;
+      g.strokeStyle = 'rgb(62,56,38)';
+      for (var t = 0; t < 16; t++) {
+        var a0 = (t / 16) * Math.PI * 2 + v * 0.4;
+        g.lineWidth = rng.range(1.2, 2.8);
+        g.beginPath();
+        g.moveTo(ox + C * 0.5, oy + C * 0.5);
+        g.lineTo(ox + C * (0.5 + Math.cos(a0) * rng.range(0.24, 0.46)),
+          oy + C * (0.5 + Math.sin(a0) * rng.range(0.24, 0.46)));
+        g.stroke();
+      }
+      var n = 2050 + (v * 71) % 260;
       for (var i = 0; i < n; i++) {
         // clustered along a few twigs rather than scattered
-        var tw = (i % 9) / 9;
-        var bx = ox + C * (0.5 + Math.cos(tw * 6.28 + v) * 0.26);
-        var by = oy + C * (0.55 + Math.sin(tw * 6.28 + v) * 0.24);
-        var lx = bx + rng.gaussian(0, C * 0.20);
-        var ly = by + rng.gaussian(0, C * 0.19);
+        var tw = (i % 16) / 16;
+        var bx = ox + C * (0.5 + Math.cos(tw * 6.28 + v) * 0.28);
+        var by = oy + C * (0.53 + Math.sin(tw * 6.28 + v) * 0.26);
+        var lx = bx + rng.gaussian(0, C * 0.185);
+        var ly = by + rng.gaussian(0, C * 0.175);
         if (lx < ox + 3 || lx > ox + C - 3 || ly < oy + 3 || ly > oy + C - 3) continue;
-        // Leaf size is the scale reference for the whole canopy: a card is
-        // 4-6 m across, so a leaf at 5% of the cell is a 25 cm leaf and the
-        // overview photographed as a hedge pressed against the lens.
-        var lw = rng.range(C * 0.011, C * 0.027);
+        // A card is 3-5 m across and the cell is 512 px, so a leaf at 1.0-2.2%
+        // of the cell is a 4-10 cm leaf - which is what a silk-cotton leaflet
+        // actually is, and small enough that 2000 of them do not merge.
+        var lw = rng.range(C * 0.0095, C * 0.021);
         var la = rng.range(0, Math.PI * 2);
         var sh = rng.next();
         g.save(); g.translate(lx, ly); g.rotate(la);
-        g.globalAlpha = rng.range(0.72, 1.0);
-        g.fillStyle = sh < 0.30 ? 'rgb(58,78,38)'
-          : (sh < 0.62 ? 'rgb(78,100,48)'
-            : (sh < 0.86 ? 'rgb(46,62,32)' : 'rgb(104,120,60)'));
+        g.globalAlpha = rng.range(0.66, 1.0);
+        // Authored against the level's 3:1 orange illuminant, not against a
+        // colour picker - see SURF.mossy. At the honest greens this canopy
+        // measured p90(G-R) = 0 in the delivered frame, i.e. the trees were
+        // brown. These run linear G/R 4-6 and land the foliage at a rendered
+        // G/R near 1.6.
+        g.fillStyle = sh < 0.26 ? 'rgb(38,92,34)'
+          : (sh < 0.55 ? 'rgb(54,124,46)'
+            : (sh < 0.80 ? 'rgb(28,66,26)'
+              : (sh < 0.93 ? 'rgb(82,156,60)' : 'rgb(122,158,52)')));
         g.beginPath();
-        g.ellipse(0, 0, lw, lw * rng.range(0.34, 0.52), 0, 0, Math.PI * 2);
+        g.ellipse(0, 0, lw, lw * rng.range(0.30, 0.46), 0, 0, Math.PI * 2);
         g.fill();
         // midrib
-        g.globalAlpha *= 0.5;
-        g.strokeStyle = 'rgb(112,124,70)';
-        g.lineWidth = 1.1;
+        g.globalAlpha *= 0.55;
+        g.strokeStyle = 'rgb(126,138,78)';
+        g.lineWidth = 1.0;
         g.beginPath(); g.moveTo(-lw, 0); g.lineTo(lw, 0); g.stroke();
         g.restore();
       }
@@ -796,9 +1035,16 @@
     var img = g.createImageData(S, S);
     var d = img.data;
     var f = 1 / S;
+    // Three octaves, not two, and the fine one is nearly three times the
+    // amplitude it was. At 0.38 of normal scale over a two-octave field
+    // nothing in the sheet RESOLVED at 5 m - the pool returned a single flat
+    // value and read as wet concrete. Water this still is still water: it has
+    // a capillary ripple at 3-6 cm and that is the scale that catches a low
+    // sun and tells the eye it is looking at a liquid.
     function h(x, y) {
       return noise.fbm2(x * 0.055, y * 0.055, 3, 2.1, 0.55) * 1.0 +
-        noise.fbm2(x * 0.20 + 31.0, y * 0.20 - 12.0, 2) * 0.32;
+        noise.fbm2(x * 0.20 + 31.0, y * 0.20 - 12.0, 2) * 0.55 +
+        noise.fbm2(x * 0.68 - 7.0, y * 0.68 + 19.0, 2) * 0.30;
     }
     for (var y = 0; y < S; y++) {
       for (var x = 0; x < S; x++) {
@@ -921,16 +1167,27 @@
     // these are what keeps the BOTTOM of every framing lit - the metric that
     // killed the harbor (vertical_imbalance) is solved with geometry here, not
     // with a fill light.
+    // THE TWO COURTYARD SHEETS FLANK THE GREAT STAIR.
+    //
+    // The hero1 comment has always claimed "two sheets of standing water flank
+    // the flight"; measured, court_west ran x -15.8..-2.7 (one wide sheet away
+    // to the left, mostly outside the framing cone) and court_east sat at
+    // x 3.2..12.6 z -6.6..0.8 - a third of which is under the tier-1 retaining
+    // wall at z<-5 and therefore invisible. Neither flanked anything. They are
+    // now a matched pair either side of the stair foot inside the 6.7 m strip
+    // of open courtyard that actually exists between the terrace and the
+    // gallery, which is the only place in this level a sheet CAN sit and be
+    // seen from the courtyard floor.
     P.basins = [
-      { name: 'court_west', x0: -15.8, x1: -2.7, z0: -10.4, z1: -0.4, depth: 0.34, soft: 1.7 },
-      { name: 'court_east', x0: 3.2, x1: 12.6, z0: -6.6, z1: 0.8, depth: 0.28, soft: 1.5 },
+      { name: 'court_west', x0: -13.8, x1: -4.6, z0: -4.6, z1: -0.9, depth: 0.32, soft: 1.4 },
+      { name: 'court_east', x0: 4.6, x1: 12.4, z0: -4.5, z1: -0.8, depth: 0.28, soft: 1.4 },
       { name: 'srah', x0: -23.4, x1: -16.2, z0: -25.0, z1: -13.0, depth: 1.05, soft: 1.2 },
       { name: 'court_ne', x0: 14.6, x1: 21.8, z0: -20.8, z1: -13.4, depth: 0.30, soft: 1.5 },
       { name: 'east_pool', x0: 15.0, x1: 22.6, z0: -34.5, z1: -25.0, depth: 0.85, soft: 1.2 }
     ];
     P.pools = [
-      { name: 'court_west', x0: -15.4, x1: -2.9, z0: -10.0, z1: -0.6, y: -0.115, algae: 0.55 },
-      { name: 'court_east', x0: 3.4, x1: 12.2, z0: -6.2, z1: 0.6, y: -0.095, algae: 0.5 },
+      { name: 'court_west', x0: -13.4, x1: -4.9, z0: -4.3, z1: -1.2, y: -0.130, algae: 0.55 },
+      { name: 'court_east', x0: 4.9, x1: 12.0, z0: -4.2, z1: -1.1, y: -0.115, algae: 0.5 },
       { name: 'srah', x0: -23.0, x1: -16.6, z0: -24.6, z1: -13.4, y: -0.44, algae: 0.85 },
       { name: 'court_ne', x0: 14.9, x1: 21.5, z0: -20.4, z1: -13.8, y: -0.105, algae: 0.6 },
       { name: 'east_pool', x0: 15.4, x1: 22.2, z0: -34.1, z1: -25.4, y: -0.36, algae: 0.9 },
@@ -1054,9 +1311,26 @@
         base: TIER[0].y, kind: 'fig' },
       { name: 'gate_west', x: -16.0, z: 20.6, h: 13.0, r: 0.90, lean: [-0.08, 0.06],
         kind: 'palm' },
-      // the overview's framing device: a trunk at 4 m on the right edge, which
-      // is the only way an elevated standpoint gets a foreground at all
-      { name: 'knoll', x: -36.0, z: 25.0, h: 16.0, r: 0.85, lean: [0.06, 0.10],
+      // THE OVERVIEW'S FRAMING DEVICE, and the one thing in the level that had
+      // to move rather than be tuned. The intent was always "a trunk at the
+      // right edge"; what landed at (-36, 25) was a CANOPY 7.8 m from the
+      // standpoint filling the top-left 12-15% of the establishing frame with
+      // 60-100 px alpha-tested blobs - the first thing the eye hits in the
+      // level. Re-solved against the standpoint (K.x+2, K.z-2) rather than
+      // guessed: at (-36.1, 21.3) the trunk is 6.0 m out at 50 degrees off the
+      // view axis, so it sits hard against the RIGHT edge, and at h 20 the
+      // crown is 47 degrees up - well clear of a frame whose top edge is at
+      // +23. Trunk and buttress in, canopy out, which is what a foreground is
+      // supposed to be.
+      // Re-solved twice. At (-36, 25) h 16 the CANOPY filled the top-left of
+      // the establishing frame; at (-36.1, 21.3) h 20 the canopy cleared but
+      // the six radiating BRANCHES dipped back into the top of the frame as a
+      // row of floating bark strips. Pushed to 55 degrees off the view axis
+      // and 26 m tall, the crown sits at 53 degrees of elevation against a
+      // frame top of 23, and what is left in shot is a single vertical trunk
+      // hard against the right edge, running the full height - which is what
+      // an elevated standpoint needs and what the comment always claimed.
+      { name: 'knoll', x: -35.6, z: 22.6, h: 26.0, r: 0.75, lean: [0.05, 0.09],
         kind: 'fig' }
     ];
 
@@ -1083,7 +1357,16 @@
     // stands on levelled ground and everything around it is jungle hill, so a
     // mound is honest; it also gives the level a second, older ruin.
     P.knoll = { x: -44.0, z: 22.0, r: 17.0, h: 12.5 };
-    P.camp = { x: 9.2, z: -3.6, y: 0.0, yaw: -0.7 };
+    // THE LOOTERS' CAMP IS THE LEVEL'S HUMAN STORY AND IT WAS NEVER IN A
+    // PHOTOGRAPH. At (9.2, -3.6) it sat 66-76 degrees off the view axis of
+    // both hero1 and hero2 - i.e. outside every published framing, built,
+    // collided, navmeshed and invisible. Moved onto the first terrace ring at
+    // (5.5, -6.5) it is 10.6 m from the hero1 standpoint at 34 degrees right,
+    // which puts the brazier squarely in that frame's right third, 74 cm above
+    // the eyeline, as a warm mark against the tier-2 facing behind it. It also
+    // reads better as a story: somebody is camped ON the sanctuary, four
+    // metres below a shrine that is still being lit.
+    P.camp = { x: 5.5, z: -6.5, y: 0.0, yaw: -0.7 };
     P.dig = { x: 19.4, z: -8.0, y: 0.05, yaw: 1.2,
       trench: { x0: 16.4, x1: 22.4, z0: -11.6, z1: -5.2 } };
 
@@ -1165,10 +1448,15 @@
 
         // base: warm damp earth
         var r = 1.02, g = 0.96, b = 0.86;
-        // moss / grass
-        r = M.lerp(r, 0.78, moss * 0.85);
-        g = M.lerp(g, 1.14, moss * 0.85);
-        b = M.lerp(b, 0.60, moss * 0.85);
+        // moss / grass. The 'earth' surface is the one MULTIPLY-mode material
+        // in the level, so these really are tint multipliers on a warm dirt
+        // map - and against a 3:1 orange illuminant a 0.78/1.14/0.60 tint
+        // could never take the ground past olive. Pulling R down hard and G up
+        // hard is what it costs to make a shaded courtyard floor read as moss
+        // rather than as mud.
+        r = M.lerp(r, 0.42, moss * 0.92);
+        g = M.lerp(g, 1.52, moss * 0.92);
+        b = M.lerp(b, 0.46, moss * 0.92);
         // leaf litter warms and lightens
         r = M.lerp(r, r * 1.30, litter * 0.55);
         g = M.lerp(g, g * 1.10, litter * 0.55);
@@ -1261,7 +1549,13 @@
         var th = rng.range(0.13, 0.20);
         var moss = M.saturate(N.fbm2(cx * 0.14 - 12.0, cz * 0.14 + 21.0, 2) * 1.6 + 0.30);
         var yy = follow ? self.sampleGround(cx, cz) + 0.07 : y;
-        var key = (moss > 0.62 || sink < -0.05) ? 'mossy' : 'paving';
+        // `mossBias` lowers the threshold where a slab goes over to the moss
+        // surface. The courtyard and the gallery corridor are the two floors a
+        // published framing actually stands on, and they were coming out as
+        // 100% clean paving because the threshold was tuned before the moss
+        // albedo was authored against this level's orange illuminant.
+        var key = (moss > (0.62 - (opts.mossBias || 0)) || sink < -0.05)
+          ? 'mossy' : 'paving';
         // Only a slab that has sunk enough to hold water is wet, and only a
         // little: see the note in _paint about what the G channel does to a
         // horizontal surface under an open sky.
@@ -1283,24 +1577,42 @@
   // what these actually draw is the dawn sky - which is exactly the point:
   // they are the light in the bottom of the frame.
   function buildWater(self, B, rng) {
-    var P = self.plan;
+    var P = self.plan, N = self.noise;
     for (var i = 0; i < P.pools.length; i++) {
       var p = P.pools[i];
       var w = p.x1 - p.x0, d = p.z1 - p.z0;
-      // subdivided so the ripple normal has vertices to interpolate across and
-      // so the fog term varies over a 30 m sheet instead of being flat
-      var nx = Math.max(1, Math.round(w / 6)), nz = Math.max(1, Math.round(d / 6));
+      // Subdivided at ~1.9 m, not ~6 m. Two reasons, and the second is the one
+      // that matters: the ripple normal needs vertices to interpolate across,
+      // AND a sheet of standing water in a ruin does not have an
+      // axis-aligned rectangular edge. At this cell size the PERIMETER can be
+      // eaten back by noise - the outer cells shrink and some go entirely -
+      // so the margin wanders into a silt shelf instead of ending at a
+      // dead-straight hard line at one value, which is what made hero1's
+      // sheet read as wet concrete rather than as water.
+      var nx = Math.max(1, Math.round(w / 1.9)), nz = Math.max(1, Math.round(d / 1.9));
+      var cw = w / nx, cd = d / nz;
       for (var a = 0; a < nx; a++) {
         for (var b = 0; b < nz; b++) {
-          var cw = w / nx, cd = d / nz;
           var cx = p.x0 + (a + 0.5) * cw, cz = p.z0 + (b + 0.5) * cd;
+          var edge = Math.min(Math.min(a, nx - 1 - a) / Math.max(1, nx * 0.5),
+            Math.min(b, nz - 1 - b) / Math.max(1, nz * 0.5));
+          var bite = N.fbm2(cx * 0.42 + 17.0, cz * 0.42 - 6.0, 3) * 0.5 + 0.5;
+          var sw = cw, sd = cd, sx2 = cx, sz2 = cz;
+          if (edge < 0.30) {
+            if (bite < 0.36) continue;                    // the margin is gone
+            var k = M.lerp(0.55, 1.0, M.saturate((bite - 0.36) * 2.6));
+            sw = cw * k; sd = cd * k;
+            sx2 = cx + (cx < (p.x0 + p.x1) * 0.5 ? 1 : -1) * (cw - sw) * 0.5;
+            sz2 = cz + (cz < (p.z0 + p.z1) * 0.5 ? 1 : -1) * (cd - sd) * 0.5;
+          }
           // uv is 0.55 per metre, i.e. a ripple tile every 1.8 m. The first
           // pass ran 0.09 and stretched one tile over eleven metres, which is
           // a mirror with a smear on it rather than water.
           B.wear = { grime: 1 - p.algae * 0.30 * rng.range(0.5, 1), wet: 1, edge: 1 };
-          B.add('water', quad(cw, cd, (cx - p.x0) * 0.55, (cz - p.z0) * 0.55,
-            (cx - p.x0 + cw) * 0.55, (cz - p.z0 + cd) * 0.55),
-            makeM(cx, p.y, cz, -Math.PI * 0.5, 0, 0));
+          B.add('water', quad(sw, sd, (sx2 - sw * 0.5 - p.x0) * 0.55,
+            (sz2 - sd * 0.5 - p.z0) * 0.55, (sx2 + sw * 0.5 - p.x0) * 0.55,
+            (sz2 + sd * 0.5 - p.z0) * 0.55),
+            makeM(sx2, p.y, sz2, -Math.PI * 0.5, 0, 0));
         }
       }
     }
@@ -1363,19 +1675,49 @@
         var bt = o.batter ? (1 - (c / courses) * o.batter) : 1;
         var wgt = (c === courses - 1 && rng.bool(0.22)) ? 0.55 : 1.0;  // a lost top course
         var bw = step * rng.range(0.90, 0.99);
-        var mossy = (cy - y) < 1.15 && rng.bool(0.42);
+        // Clumped, not sprinkled. rng.bool(0.42) on every block in the bottom
+        // 1.15 m turned the foot of every wall into a random green CHECKERBOARD
+        // once the moss albedo was authored strongly enough to survive the
+        // orange key. Moss grows in patches, so the mask is a noise field
+        // sampled at the block and thresholded - neighbouring blocks agree,
+        // and a patch has a frontier.
+        // Gated hard on height as well as on the noise field. Even clumped,
+        // whole BLOCKS of the moss surface at close range read as painted
+        // green panels - a 1.6 m block is simply too big a unit for a mark
+        // that should have a frontier inside it. The block surface now only
+        // appears low down and sparsely; everything above 1.9 m carries moss
+        // as a feathered DECAL instead, which is the right tool for it.
+        var mAmt = N.fbm2(a * 0.30 + 13.0, cy * 0.62 - 4.0, 2) * 0.5 + 0.5;
+        var mossy = (cy - y) < 1.9 && mAmt > 0.78 && rng.bool(0.38);
         B.wear = {
           grime: 0.78 + N.fbm2(a * 0.31, cy * 0.5, 2) * 0.20 - (cy - y < 0.9 ? 0.10 : 0),
           wet: 1 - M.smoothstep(1.4, 0.05, cy - y) * 0.30,
           edge: 0.88 + rng.range(-0.10, 0.14)
         };
         var kk = mossy ? 'mossy' : key;
+        // PERFECTLY REGULAR COURSING IS THE INSTANT-FAIL. Round two jittered
+        // the yaw by +/-0.006 rad and nothing else, so every joint was a
+        // uniform-width black line and not one arris was spalled. Each block
+        // now carries +/-1.5 cm of settlement in all three axes, +/-0.02 rad
+        // of yaw and a small tilt, and ONE IN TWENTY-FIVE has tipped out of
+        // the wall face - which is what a 900-year-old wall on a subsiding
+        // laterite core actually does.
+        var jx = rng.range(-0.015, 0.015), jy = rng.range(-0.014, 0.014);
+        var jz2 = rng.range(-0.015, 0.015);
+        var yw = rng.range(-0.020, 0.020), tl = rng.gaussian(0, 0.009);
+        var tipped = rng.bool(0.040) && c > 0;
+        if (tipped) {
+          jx += (axis === 'x' ? 0 : 1) * rng.range(0.08, 0.20) * (o.batter ? -1 : 1);
+          jz2 += (axis === 'x' ? rng.range(0.08, 0.20) : 0);
+          yw += rng.range(-0.14, 0.14);
+          tl += rng.gaussian(0, 0.07);
+        }
         if (axis === 'x') {
-          B.boxR(kk, bw, ch * wgt * 0.985, t * bt, x, cy - ch * (1 - wgt) * 0.5, z + jog,
-            0, rng.range(-0.006, 0.006), 0);
+          B.boxR(kk, bw, ch * wgt * 0.985, t * bt, x + jx,
+            cy - ch * (1 - wgt) * 0.5 + jy, z + jog + jz2, tl, yw, tl * 0.6);
         } else {
-          B.boxR(kk, t * bt, ch * wgt * 0.985, bw, x + jog, cy - ch * (1 - wgt) * 0.5, z,
-            0, rng.range(-0.006, 0.006), 0);
+          B.boxR(kk, t * bt, ch * wgt * 0.985, bw, x + jog + jx,
+            cy - ch * (1 - wgt) * 0.5 + jy, z + jz2, tl * 0.6, yw, tl);
         }
       }
       // a lintel over each opening
@@ -1397,9 +1739,40 @@
         if (gapAt(ca)) continue;
         var cset = N.fbm2(ca * 0.085 + 4.0, b * 0.085 - 2.0, 3) * 0.09;
         var cx = axis === 'x' ? ca : b, cz = axis === 'x' ? b : ca;
-        B.wear = { grime: 0.72, wet: 1, edge: 0.80 };
-        if (axis === 'x') B.box('sandstone', cstep * 0.97, capH, t * 1.35, cx, y + cset + h + capH * 0.5, cz);
-        else B.box('sandstone', t * 1.35, capH, cstep * 0.97, cx, y + cset + h + capH * 0.5, cz);
+        B.wear = { grime: 0.72 + rng.range(-0.08, 0.08), wet: 1,
+          edge: 0.80 + rng.range(-0.08, 0.10) };
+        // A REAL CORNICE PROFILE, not one slab. Khmer cornices are a fillet, a
+        // cyma and a drip - three separate planes at three different angles to
+        // the sky, which is why the originals carry a hard bright line along
+        // every run under any light. A single stacked box has ONE plane, and
+        // under a 9-degree key it has one value: this was a large part of why
+        // the near-field stone measured flatter at every block scale than the
+        // empty sky above it. Nine triangles a station buys the level's
+        // longest highlight.
+        var cy0 = y + cset + h;
+        var jy2 = rng.range(-0.012, 0.012), jr2 = rng.range(-0.010, 0.010);
+        if (axis === 'x') {
+          B.boxR('sandstone', cstep * 0.97, capH * 0.34, t * 1.06,
+            cx, cy0 + capH * 0.17 + jy2, cz, 0, jr2, 0);
+          B.boxR('sandstone', cstep * 0.97, capH * 0.46, t * 1.30,
+            cx, cy0 + capH * 0.57 + jy2, cz, 0, jr2, 0);
+          B.boxR('sandstone', cstep * 0.97, capH * 0.30, t * 1.44,
+            cx, cy0 + capH * 0.95 + jy2, cz, 0, jr2, 0);
+          // the drip, undercut on the weather face
+          B.boxR('sandstone', cstep * 0.94, capH * 0.26, t * 0.34,
+            cx, cy0 + capH * 0.42 + jy2, cz + (o.dripSide || 1) * t * 0.70,
+            0.55, jr2, 0);
+        } else {
+          B.boxR('sandstone', t * 1.06, capH * 0.34, cstep * 0.97,
+            cx, cy0 + capH * 0.17 + jy2, cz, 0, jr2, 0);
+          B.boxR('sandstone', t * 1.30, capH * 0.46, cstep * 0.97,
+            cx, cy0 + capH * 0.57 + jy2, cz, 0, jr2, 0);
+          B.boxR('sandstone', t * 1.44, capH * 0.30, cstep * 0.97,
+            cx, cy0 + capH * 0.95 + jy2, cz, 0, jr2, 0);
+          B.boxR('sandstone', t * 0.34, capH * 0.26, cstep * 0.94,
+            cx + (o.dripSide || 1) * t * 0.70, cy0 + capH * 0.42 + jy2, cz,
+            0, jr2, 0.55);
+        }
       }
       B.wear = null;
     }
@@ -1425,6 +1798,48 @@
     }
   }
 
+  // The seven-headed hood that terminates a naga balustrade. `s` is which side
+  // of the causeway it stands on, `face` is +1 for a hood rearing back down
+  // the road and -1 for one rearing toward the gate.
+  function nagaTerminus(self, B, rng, bx, hz, s, face) {
+    B.wear = { grime: 0.70, wet: 1, edge: 0.78 };
+    B.box('sandstone', 0.90, 0.50, 1.5, bx, CW_Y + 0.25, hz);
+    // the coiled body rising into the hood
+    B.add('sandstone', limb([
+      [bx, CW_Y + 0.55, hz - face * 0.80, 0.30],
+      [bx, CW_Y + 0.95, hz + face * 0.10, 0.34],
+      [bx, CW_Y + 1.62, hz + face * 0.34, 0.30],
+      [bx, CW_Y + 2.10, hz + face * 0.22, 0.24]
+    ], 12, { noise: self.noise, phase: hz * 0.7, lobes: 5, flute: 0.15,
+      bulge: 0.08, uv: 0.5 }));
+    B.frus('sandstone', 0.82, 1.20, 0.62, 0.70, 0.55, bx, CW_Y + 0.80, hz);
+    for (var f = -3; f <= 3; f++) {
+      var fa = f * 0.30;
+      // the fanned hood: seven necks, each one a tapered blade
+      B.boxR('sandstone', 0.24, 1.30, 0.30,
+        bx + Math.sin(fa) * 0.62 * s, CW_Y + 2.35, hz - Math.abs(f) * 0.10 * face,
+        -0.12 * face, 0, fa * 0.9);
+      // the head itself: a muzzle, a brow and two eyes, so it is a snake and
+      // not a knob on a stick
+      B.boxR('sandstone', 0.28, 0.30, 0.36,
+        bx + Math.sin(fa) * 0.86 * s, CW_Y + 3.02, hz - Math.abs(f) * 0.12 * face,
+        -0.30 * face, 0, fa * 0.9);
+      B.boxR('sandstone', 0.20, 0.13, 0.30,
+        bx + Math.sin(fa) * 0.94 * s, CW_Y + 2.92,
+        hz - (Math.abs(f) * 0.12 + 0.20) * face, -0.30 * face, 0, fa * 0.9);
+      B.boxR('carve', 0.30, 0.055, 0.10,
+        bx + Math.sin(fa) * 0.90 * s, CW_Y + 3.12,
+        hz - (Math.abs(f) * 0.12 + 0.16) * face, -0.30 * face, 0, fa * 0.9);
+      for (var ey = -1; ey <= 1; ey += 2) {
+        B.boxR('carve', 0.055, 0.055, 0.06,
+          bx + (Math.sin(fa) * 0.86 + ey * 0.07) * s, CW_Y + 3.05,
+          hz - (Math.abs(f) * 0.12 + 0.15) * face, 0, 0, 0);
+      }
+    }
+    B.wear = null;
+    self.addCollider(bx, CW_Y + 1.5, hz, 0.7, 1.5, 0.9, 'stone');
+  }
+
   // =============================================================== causeway ==
   function buildCauseway(self, B, rng) {
     var P = self.plan, N = self.noise, i;
@@ -1440,7 +1855,18 @@
         y: MOAT_Y - 1.0, h: CW_Y - MOAT_Y + 1.0, t: 0.56, key: 'laterite',
         cap: false, batter: 0.10, collide: false
       });
-      // the naga balustrade: a plinth, a rounded serpent body, and posts
+      // THE NAGA BALUSTRADE.
+      //
+      // Round two built this as a plinth, a rounded prism and a plain
+      // pyramidal post: thirty-two metres of chamfered kerb on the ONE leading
+      // line the hero3 framing exists for, with no hood, no scales and no
+      // terminus anywhere in the field of view. What is here now is a real
+      // serpent: a LOBED body (limb at 12 radial with five longitudinal
+      // flutes, so the section is scaly rather than circular), a dorsal ridge
+      // of overlapping scutes that carries a hard highlight along the whole
+      // run, a raised hood every ~7 m, and a seven-headed terminus at BOTH
+      // ends of the causeway - which is also what the originals have, and
+      // which is what finally puts one inside hero3's cone.
       var bx = s * (CW_HALF + 0.34);
       for (i = 0; i < P.naga.length; i++) {
         var nz = P.naga[i].z;
@@ -1454,38 +1880,48 @@
           continue;
         }
         B.box('sandstone', 0.66, 0.34, 3.5, bx, CW_Y + 0.17, nz);       // plinth
-        B.box('sandstone', 0.46, 0.30, 3.4, bx, CW_Y + 0.49, nz);       // body
-        B.cyl('sandstone', 0.19, 0.19, 3.4, bx, CW_Y + 0.66, nz, Math.PI * 0.5, 0, 0, 8);
-        // scales / crest along the serpent's back
-        for (var q = 0; q < 5; q++) {
-          B.boxR('sandstone', 0.11, 0.19, 0.30, bx, CW_Y + 0.80,
-            nz - 1.4 + q * 0.70, 0, 0, rng.range(-0.08, 0.08));
+        // the body: lobed, swelling and pinching along its length
+        B.add('sandstone', limb([
+          [bx, CW_Y + 0.58, nz - 1.78, 0.235],
+          [bx + s * 0.03, CW_Y + 0.60, nz - 0.60, 0.262],
+          [bx - s * 0.02, CW_Y + 0.59, nz + 0.60, 0.248],
+          [bx, CW_Y + 0.57, nz + 1.78, 0.230]
+        ], 12, { noise: self.noise, phase: nz * 0.9 + s, lobes: 5,
+          flute: 0.16, bulge: 0.07, uv: 0.5 }));
+        // dorsal scutes - overlapping, alternating, and the thing that turns a
+        // prism into a snake at 30 m
+        for (var q = 0; q < 9; q++) {
+          var qz = nz - 1.60 + q * 0.40;
+          B.boxR('sandstone', 0.13, 0.17 + (q % 2) * 0.04, 0.24,
+            bx, CW_Y + 0.79, qz, -0.16, 0, rng.range(-0.07, 0.07));
+          // belly / flank scale course
+          B.boxR('sandstone', 0.09, 0.13, 0.34, bx + s * 0.20, CW_Y + 0.50,
+            qz + 0.10, 0, 0, s * 0.22);
+        }
+        // A RAISED HOOD every second station. It breaks 32 m of kerb into a
+        // rhythm, and its silhouette against the moat is the whole point.
+        if ((i % 2) === 1) {
+          B.frus('sandstone', 0.46, 0.62, 0.34, 0.44, 0.72, bx, CW_Y + 1.02, nz);
+          for (var hf = -2; hf <= 2; hf++) {
+            B.boxR('sandstone', 0.13, 0.62, 0.17,
+              bx + Math.sin(hf * 0.34) * 0.30 * s, CW_Y + 1.62,
+              nz - Math.abs(hf) * 0.06, -0.10, 0, hf * 0.28);
+          }
+          B.add('sandstone', revolve([[0.17, 0], [0.22, 0.07], [0.14, 0.20],
+            [0.05, 0.30]], 10), makeM(bx, CW_Y + 1.92, nz));
         }
         // post
         B.box('sandstone', 0.62, 0.98, 0.62, bx, CW_Y + 0.49, nz + 1.75);
         B.frus('sandstone', 0.74, 0.74, 0.40, 0.40, 0.34, bx, CW_Y + 1.15, nz + 1.75);
-        B.add('sandstone', revolve([[0.20, 0], [0.26, 0.10], [0.17, 0.26], [0.05, 0.38]], 8),
+        B.add('sandstone', revolve([[0.20, 0], [0.26, 0.10], [0.17, 0.26], [0.05, 0.38]], 10),
           makeM(bx, CW_Y + 1.32, nz + 1.75));
         self.addCollider(bx, CW_Y + 0.55, nz, 0.36, 0.55, 1.8, 'stone');
       }
       B.wear = null;
 
-      // ---- the seven-headed naga at the head of the causeway ---------------
-      var hz = CW_Z1 - 0.6;
-      B.wear = { grime: 0.70, wet: 1, edge: 0.78 };
-      B.box('sandstone', 0.90, 0.50, 1.5, bx, CW_Y + 0.25, hz);
-      B.frus('sandstone', 0.82, 1.20, 0.62, 0.70, 1.55, bx, CW_Y + 1.25, hz);
-      for (var f = -3; f <= 3; f++) {
-        var fa = f * 0.30;
-        B.boxR('sandstone', 0.24, 1.30, 0.30,
-          bx + Math.sin(fa) * 0.62 * s, CW_Y + 2.35, hz - Math.abs(f) * 0.10,
-          -0.12, 0, fa * 0.9);
-        B.boxR('sandstone', 0.28, 0.30, 0.36,
-          bx + Math.sin(fa) * 0.86 * s, CW_Y + 3.02, hz - Math.abs(f) * 0.12,
-          -0.30, 0, fa * 0.9);
-      }
-      B.wear = null;
-      self.addCollider(bx, CW_Y + 1.5, hz, 0.7, 1.5, 0.9, 'stone');
+      // ---- the seven-headed naga, at BOTH ends of the causeway --------------
+      nagaTerminus(self, B, rng, bx, CW_Z1 - 0.6, s, 1);
+      nagaTerminus(self, B, rng, bx, CW_Z0 + 1.1, s, -1);
     }
 
     // boundary posts marching out into the jungle beyond the moat
@@ -1684,7 +2120,7 @@
         wet: 1 - M.saturate(0.5 - (y - base)) * 0.25,
         edge: 0.78 + rng.range(-0.10, 0.18)
       };
-      B.boxR(moss > 0.58 ? 'mossy' : 'sandstone', w, h, d, x, y, z,
+      B.boxR(moss > 0.46 ? 'mossy' : 'sandstone', w, h, d, x, y, z,
         rng.gaussian(0, 0.22), rng.range(0, Math.PI), rng.gaussian(0, 0.22));
       if (rng.bool(0.22)) {
         self.addCollider(x, y, z, w * 0.45, h * 0.6, d * 0.45, 'stone');
@@ -1752,6 +2188,21 @@
     var dk = 'carve';
     var F = 1.30;                       // front plane of the head, in dp
     function fz(proud, depth) { return (F + proud - depth * 0.5) * dp; }
+
+    // ------------------------------------------------------------------------
+    // BAKED OCCLUSION. This is the fix for the finding that killed round two:
+    // at 9 m the entire head sat inside luminance 0.083-0.207 and the brow,
+    // socket and mouth steps were a few percent apart, because under a 1.05
+    // key at 9 degrees a south elevation is lit by SKY ALONE and flat ambient
+    // does not carve. Dark-by-albedo (SURF.carve) is necessary and it is not
+    // sufficient - it gives the recess a different value, not a TERMINATOR.
+    //
+    // So the concavity is measured here and baked: _paint() reads this tag,
+    // projects each vertex into the head's own frame, and darkens by how far
+    // BEHIND the front plane F it sits. An eye socket 0.9 dp back holds a ~3x
+    // value drop with no light source involved at all, which is what a real
+    // deep-cut relief does and what an ambient-only render never will.
+    B.faceTag = { x: x, z: z, y: y, c: c, s: s, dp: dp, F: F * dp, w: w, h: h };
 
     // ---- the mass: a full jaw, a narrower forehead --------------------------
     putF(key, w * 0.92, dp * 1.50, w * 0.84, dp * 1.32, h * 0.62, 0, h * 0.32, dp * 0.55);
@@ -1824,6 +2275,7 @@
         k * w * 0.175, h * 1.015, dp * (0.70 + Math.abs(k) * 0.05));
     }
     B.wear = null;
+    B.faceTag = null;
   }
 
   // ================================================================ prasats ==
@@ -2043,12 +2495,33 @@
           edge: 0.82 + rng.range(-0.10, 0.12)
         };
         B.box('sandstone', G_PILLAR * 1.35, 0.24, G_PILLAR * 1.35, px, floorY + 0.12, pz);
-        B.box(rng.bool(0.22) ? 'mossy' : 'sandstone', G_PILLAR, ph - 0.24, G_PILLAR,
-          px, floorY + 0.24 + (ph - 0.24) * 0.5, pz);
+        // A PILLAR IS A STACK OF DRUMS, not one extrusion. The colonnade is
+        // the closest object in the `interior` framing and a single 3.5 m box
+        // gave it one value, one joint and one moss state - with the moss
+        // albedo authored strongly enough to survive this level's orange key,
+        // "rng.bool(0.22) ? mossy" turned an entire pillar green. Four drums
+        // course it, take four different per-block values out of _paint, and
+        // let the moss stop where the damp does: heavy at the foot, gone by
+        // shoulder height.
+        var nDr = pl.broken ? 2 : 4;
+        var drH = (ph - 0.24) / nDr;
+        for (var dr = 0; dr < nDr; dr++) {
+          var dy2 = floorY + 0.24 + (dr + 0.5) * drH;
+          var damp = 1 - dr / nDr;
+          B.boxR(rng.bool(0.30 * damp * damp) ? 'mossy' : 'sandstone',
+            G_PILLAR * (1 - dr * 0.012), drH * 0.985, G_PILLAR * (1 - dr * 0.012),
+            px + rng.range(-0.012, 0.012), dy2, pz + rng.range(-0.012, 0.012),
+            rng.gaussian(0, 0.006), rng.range(-0.018, 0.018), rng.gaussian(0, 0.006));
+        }
         if (!pl.broken) {
-          B.frus('sandstone', G_PILLAR, G_PILLAR, G_PILLAR * 1.45, G_PILLAR * 1.45,
-            0.30, px, floorY + 3.85, pz);
-          B.box('sandstone', G_PILLAR * 1.55, 0.16, G_PILLAR * 1.55, px, floorY + 4.08, pz);
+          // a real capital: necking, echinus, abacus - three mouldings where
+          // there used to be one taper and one plate
+          B.frus('sandstone', G_PILLAR * 0.94, G_PILLAR * 0.94, G_PILLAR * 1.06,
+            G_PILLAR * 1.06, 0.10, px, floorY + 3.75, pz);
+          B.frus('sandstone', G_PILLAR * 1.06, G_PILLAR * 1.06, G_PILLAR * 1.45,
+            G_PILLAR * 1.45, 0.24, px, floorY + 3.92, pz);
+          B.box('sandstone', G_PILLAR * 1.55, 0.10, G_PILLAR * 1.55, px, floorY + 4.09, pz);
+          B.box('sandstone', G_PILLAR * 1.40, 0.03, G_PILLAR * 1.40, px, floorY + 4.155, pz);
         } else {
           // the shaft it dropped, lying across the corridor
           B.boxR('sandstone', G_PILLAR, rng.range(1.6, 2.8), G_PILLAR,
@@ -2095,8 +2568,24 @@
           var cy = floorY + 4.62 + settle + k * 0.40;
           for (var sgn = -1; sgn <= 1; sgn += 2) {
             var oa = corrMid + sgn * (off + 0.45);
-            if (axis === 'x') B.box('sandstone_d', sl * 0.99, 0.42, 0.98, sa, cy, oa);
-            else B.box('sandstone_d', 0.98, 0.42, sl * 0.99, oa, cy, sa);
+            var cjit = rng.range(-0.014, 0.014);
+            if (axis === 'x') {
+              B.boxR('sandstone_d', sl * 0.99, 0.42, 0.98, sa, cy + cjit, oa,
+                0, rng.range(-0.012, 0.012), 0);
+              // THE FILLET THAT STOPS A CORBEL VAULT READING AS A STAIRCASE.
+              // Four square steps a side is what a corbel IS, and photographed
+              // dead-on it is a Minecraft staircase; the originals dress the
+              // exposed inner arris of each course back at ~35 degrees so the
+              // profile scallops toward the capstone. One rotated slab per
+              // course per side, 8 triangles, and the vault has a curve.
+              B.boxR('sandstone_d', sl * 0.99, 0.30, 0.30, sa, cy - 0.16,
+                oa - sgn * 0.42, sgn * 0.62, 0, 0);
+            } else {
+              B.boxR('sandstone_d', 0.98, 0.42, sl * 0.99, oa, cy + cjit, sa,
+                0, rng.range(-0.012, 0.012), 0);
+              B.boxR('sandstone_d', 0.30, 0.30, sl * 0.99, oa - sgn * 0.42,
+                cy - 0.16, sa, 0, 0, -sgn * 0.62);
+            }
           }
         }
         var capY = floorY + 4.62 + settle + 4 * 0.40;
@@ -2124,7 +2613,7 @@
       var fr = axis === 'x'
         ? { x0: run.a0, x1: run.a1, z0: Math.min(innerFace, pillarB) - 0.4, z1: Math.max(innerFace, pillarB) + 0.4 }
         : { x0: Math.min(innerFace, pillarB) - 0.4, x1: Math.max(innerFace, pillarB) + 0.4, z0: run.a0, z1: run.a1 };
-      pave(self, B, rng, fr, floorY, { pitch: 1.42, jitter: 0.7 });
+      pave(self, B, rng, fr, floorY, { pitch: 1.42, jitter: 0.7, mossBias: 0.26 });
     }
 
     // the breach spoil - the wall that came down, spread both sides
@@ -2224,17 +2713,48 @@
         var sz = s.z0 + run * f2;
         var sy = s.y0 + rise * f2;
         var broken = rng.bool(0.10);
-        B.wear = {
-          grime: 0.70 + rng.range(-0.08, 0.10), wet: 1 - (sy < 0.9 ? 0.22 : 0),
-          edge: 0.72 + rng.range(-0.10, 0.16)
-        };
         var sth = Math.abs(rise) / n + 0.30;
-        B.boxR(broken ? 'mossy' : 'sandstone',
-          STAIR_HALF * 2 * (broken ? rng.range(0.55, 0.9) : 1.0),
-          sth, Math.abs(run) / n * 1.25,
-          T_CX + (broken ? rng.range(-0.5, 0.5) : 0), sy - sth * 0.5, sz,
-          rng.gaussian(0, 0.012), 0, rng.gaussian(0, 0.010));
-        B.wear = null;
+        var sd2 = Math.abs(run) / n * 1.25;
+        // NINE CENTURIES OF FEET. Round two laid every riser identical, every
+        // nosing razor-straight and unchipped, with no worn hollow in the
+        // tread centres - the roster's own instant-fail. Each step is now cut
+        // ACROSS ITS WIDTH into three blocks: two outer ones the width people
+        // do not walk on, and a middle one that is 2-4 cm lower and slightly
+        // shorter, which is the dished centre a temple stair actually has.
+        // Each of the three carries its own settlement and its own yaw.
+        var seat = rng.range(0.020, 0.042);
+        var parts = broken ? [[0, 1, 0]] : [
+          [-0.335, 0.330, 0], [0, 0.340, -seat], [0.335, 0.330, 0]
+        ];
+        for (var pq = 0; pq < parts.length; pq++) {
+          var pw = STAIR_HALF * 2 * (broken ? rng.range(0.55, 0.9) : parts[pq][1]);
+          var dz2 = parts[pq][2];
+          B.wear = {
+            grime: 0.70 + rng.range(-0.08, 0.10) - (dz2 ? 0.06 : 0),
+            wet: 1 - (sy < 0.9 ? 0.22 : 0),
+            // the middle of a tread is polished by feet, not chipped: less
+            // pale substrate there, which also stops the flight reading as
+            // cold poured concrete against warm sandstone
+            edge: (dz2 ? 0.90 : 0.74) + rng.range(-0.08, 0.14)
+          };
+          B.boxR(broken ? 'mossy' : (rng.bool(0.10) ? 'mossy' : 'sandstone'),
+            pw, sth - (dz2 ? 0.02 : 0), sd2 * (dz2 ? 0.96 : 1.0),
+            T_CX + (broken ? rng.range(-0.5, 0.5) : parts[pq][0] * STAIR_HALF * 2) +
+              rng.range(-0.015, 0.015),
+            sy - sth * 0.5 + dz2 + rng.range(-0.012, 0.012),
+            sz + rng.range(-0.015, 0.015),
+            rng.gaussian(0, 0.014), rng.gaussian(0, 0.020), rng.gaussian(0, 0.012));
+          B.wear = null;
+        }
+        // one step in twenty-five has lost a block off its nosing
+        if (!broken && rng.bool(0.04)) {
+          B.wear = { grime: 0.62, wet: 1, edge: 0.60 };
+          B.boxR('sandstone', rng.range(0.4, 0.9), 0.22, rng.range(0.3, 0.6),
+            T_CX + rng.range(-STAIR_HALF, STAIR_HALF),
+            sy - sth - 0.10, sz + rng.range(0.4, 1.1),
+            rng.gaussian(0, 0.35), rng.range(0, 3), rng.gaussian(0, 0.35));
+          B.wear = null;
+        }
       }
       // cheek walls with a naga rail, both sides
       for (var sgn = -1; sgn <= 1; sgn += 2) {
@@ -2363,28 +2883,42 @@
       ]);
     }
     B.wear = { grime: 0.80, wet: 0.92, edge: 0.90 };
-    B.add('bark', limb(pts, 9));
+    B.add('bark', limb(pts, 16, { noise: self.noise, phase: sp.x * 0.7 + sp.z,
+      lobes: 5, flute: 0.11, bulge: 0.10, uv: 0.62 }));
     var topX = pts[n][0], topY = pts[n][1], topZ = pts[n][2];
 
     // ---- buttress roots ----------------------------------------------------
-    var nr = sp.kind === 'palm' ? 4 : 7;
+    var nr = sp.kind === 'palm' ? 4 : 8;
     for (i = 0; i < nr; i++) {
       var ang = (i / nr) * Math.PI * 2 + rng.range(-0.3, 0.3);
       var reach = R * rng.range(2.6, 4.6);
       var ca = Math.cos(ang), sa = Math.sin(ang);
       var rp = [];
-      for (j = 0; j <= 4; j++) {
-        var u = j / 4;
+      for (j = 0; j <= 6; j++) {
+        var u = j / 6;
         var rr = R * (0.62 - 0.50 * u) * (1 + 0.4 * (1 - u));
         var ry = gy + (1 - u) * (1 - u) * R * 2.1 - 0.30 * u;
-        rp.push([sp.x + ca * reach * u, ry, sp.z + sa * reach * u, Math.max(0.06, rr)]);
+        rp.push([sp.x + ca * reach * u + Math.sin(u * 4.1 + i) * R * 0.22,
+          ry, sp.z + sa * reach * u + Math.cos(u * 3.7 + i) * R * 0.22,
+          Math.max(0.06, rr)]);
       }
-      B.add('bark', limb(rp, 6));
-      // a fin of the buttress standing proud
+      B.add('bark', limb(rp, 14, { noise: self.noise, phase: i * 1.7 + sp.z,
+        lobes: 3 + (i % 3), flute: 0.17, bulge: 0.22, uv: 0.55 }));
+      // a second, thinner root braided over the first - a buttress is a web,
+      // not a spoke. This replaces the flat box fin, which carried a stretched
+      // 0..1 face uv and read as a plywood gusset.
       if (sp.kind !== 'palm') {
-        B.boxR('bark', 0.20, R * 1.5, reach * 0.62,
-          sp.x + ca * reach * 0.30, gy + R * 0.70, sp.z + sa * reach * 0.30,
-          0, Math.atan2(ca, sa) + Math.PI * 0.5, 0);
+        var rp3 = [];
+        for (j = 0; j <= 5; j++) {
+          var u3 = j / 5;
+          rp3.push([
+            sp.x + ca * reach * u3 * 0.86 + sa * R * (0.55 - u3 * 0.30),
+            gy + (1 - u3) * (1 - u3) * R * 1.35 - 0.22 * u3 + R * 0.18,
+            sp.z + sa * reach * u3 * 0.86 - ca * R * (0.55 - u3 * 0.30),
+            Math.max(0.05, R * (0.34 - 0.26 * u3))]);
+        }
+        B.add('bark', limb(rp3, 12, { noise: self.noise, phase: i * 2.3,
+          lobes: 3, flute: 0.20, bulge: 0.26, uv: 0.5 }));
       }
     }
 
@@ -2396,21 +2930,24 @@
         var top = 0.28 + 3.70 + rng.range(-0.6, 1.4);
         var rp2 = [
           [sp.x + rng.range(-0.5, 0.5), gy + rng.range(0.4, 2.6), zo, R * 0.56],
+          [(sp.x + wallX) * 0.5 + 0.7, top * 0.86, zo + rng.range(-0.4, 0.4), R * 0.52],
           [wallX + 1.4, top * 0.75, zo + rng.range(-0.5, 0.5), R * 0.48],
           [wallX + 0.15, top, zo + rng.range(-0.6, 0.6), R * 0.40],
           [(wallX + inner) * 0.5, top - 0.5, zo + rng.range(-0.8, 0.8), R * 0.34],
           [inner + 0.2, 1.8, zo + rng.range(-1.0, 1.0), R * 0.27],
           [inner - 0.6, 0.30, zo + rng.range(-1.2, 1.2), R * 0.19]
         ];
-        B.add('bark', limb(rp2, 6));
+        B.add('bark', limb(rp2, 15, { noise: self.noise, phase: i * 3.1 + zo,
+          lobes: 3 + (i % 3), flute: 0.19, bulge: 0.26, uv: 0.55 }));
         // fingers spreading across the wall face
-        for (j = 0; j < 3; j++) {
+        for (j = 0; j < 4; j++) {
           var fz = zo + rng.range(-2.2, 2.2);
           B.add('bark', limb([
             [wallX + 0.55, top * rng.range(0.5, 0.9), zo, R * 0.16],
             [wallX + 0.50, top * rng.range(0.3, 0.6), fz, R * 0.11],
             [wallX + 0.46, rng.range(0.4, 1.4), fz + rng.range(-1.5, 1.5), R * 0.06]
-          ], 5));
+          ], 10, { noise: self.noise, phase: j * 2.9 + i, lobes: 3,
+            flute: 0.16, bulge: 0.20, uv: 0.42 }));
         }
       }
     }
@@ -2433,7 +2970,8 @@
         ]);
       }
       B.wear = { grime: 0.82, wet: 0.94, edge: 0.90 };
-      B.add('bark', limb(bp, 6));
+      B.add('bark', limb(bp, 12, { noise: self.noise, phase: i * 1.3 + sp.x,
+        lobes: 4, flute: 0.13, bulge: 0.14, uv: 0.5 }));
       B.wear = null;
       tips.push(bp[3]);
     }
@@ -2480,6 +3018,23 @@
       // keep out of the precinct and off the causeway
       if (Math.abs(x) < G_X + 5.5 && z > G_ZN - 5.5 && z < GOP_Z + 6) continue;
       if (Math.abs(x) < 27 && z > 20 && z < 60) continue;
+      // THE KNOLL SUMMIT IS BARE. It is a mound of collapsed boundary shrine
+      // with a metre of soil over it, so nothing big grows on its crown - and
+      // the practical consequence is that the establishing standpoint on top
+      // of it is not standing inside a tree. The forest generator was free to
+      // seed here, and with the new bark recipe two trunks two metres from the
+      // lens became a pair of black verticals across the middle of the frame.
+      var K0 = self.plan.knoll;
+      if (K0) {
+        var kdx = x - K0.x, kdz = z - K0.z;
+        // 17.5 m, i.e. the knoll's own radius: the mound is bare to its foot.
+        // At 10 m the crown was clear but trees at 12-16 m still put their
+        // canopies at 23-27 degrees of elevation from a standpoint 12.5 m up,
+        // which is exactly the top edge of a 64-degree frame - and the wall of
+        // leaf cards came straight back into the top left of the establishing
+        // shot it was moved out of.
+        if (kdx * kdx + kdz * kdz < 306) continue;
+      }
       var d = Math.max(Math.abs(x) - G_X, Math.max(z - GOP_Z, G_ZN - z));
       var dens = M.saturate(N.fbm2(x * 0.05, z * 0.05, 2) * 1.4 + 0.55) *
         M.smoothstep(3.0, 16.0, d);
@@ -2497,7 +3052,8 @@
           R * (1 - 0.55 * t) * (j === 0 ? 1.5 : 1)]);
       }
       B.wear = { grime: 0.80, wet: 0.94, edge: 0.92 };
-      B.add('bark', limb(pts, 5));
+      B.add('bark', limb(pts, 8, { noise: N, phase: x * 0.6 + z * 0.3,
+        lobes: 4, flute: 0.12, bulge: 0.14, uv: 0.6 }));
       B.wear = null;
       var tx = pts[3][0], ty = pts[3][1], tz = pts[3][2];
       var nc = 8;
@@ -2602,8 +3158,8 @@
         0, rng.range(0, 3), 0);
     }
     for (i = 0; i < 4; i++) {
-      B.rod('bark', cp.x + rng.range(-0.5, 0.5), cy + 0.50, cp.z + rng.range(-0.5, 0.5),
-        cp.x + rng.range(-0.7, 0.7), cy + 0.62, cp.z + rng.range(-0.7, 0.7), 0.030, 4);
+      B.stick('bark', cp.x + rng.range(-0.5, 0.5), cy + 0.50, cp.z + rng.range(-0.5, 0.5),
+        cp.x + rng.range(-0.7, 0.7), cy + 0.62, cp.z + rng.range(-0.7, 0.7), 0.030, 6);
     }
     B.wear = null;
     F.brazier = [cp.x, cy + 0.52, cp.z];
@@ -2612,8 +3168,8 @@
     for (i = 0; i < 4; i++) {
       var sx = (i & 1) ? 1 : -1, sz = (i & 2) ? 1 : -1;
       B.wear = { grime: 0.68, wet: 1, edge: 0.78 };
-      B.rod('bark', tpx + sx * 1.5, cy, tpz + sz * 1.4,
-        tpx + sx * 1.42, cy + (sz > 0 ? 2.05 : 1.72), tpz + sz * 1.4, 0.045, 5);
+      B.stick('bark', tpx + sx * 1.5, cy, tpz + sz * 1.4,
+        tpx + sx * 1.42, cy + (sz > 0 ? 2.05 : 1.72), tpz + sz * 1.4, 0.045, 7);
       B.wear = null;
     }
     B.wear = { grime: 0.72, wet: 1, edge: 0.86 };
@@ -2693,6 +3249,14 @@
       B.quad('decal', w, h, x, y, z, 0, yaw, 0, atlasUV(cell));
       B.wear = null;
     }
+    // a horizontal mark at an EXPLICIT height - cornices, tier tops, treads,
+    // wall caps. `ground` cannot do these: they are not on the ground.
+    function flat(cell, x, y, z, w, d, rot, tint) {
+      B.wear = tint || { grime: 1, wet: 1, edge: 1 };
+      B.quad('decal', w, d, x, y, z, -Math.PI * 0.5, 0, rot || 0, atlasUV(cell));
+      B.wear = null;
+    }
+    var GREEN = { grime: 1, wet: 0.80, edge: 1 };
 
     // ---- moss fringe along every wall foot ---------------------------------
     var lines = [
@@ -2733,10 +3297,12 @@
         ground(WORN, px, pz, rng.range(3.0, 4.6), rng.range(2.6, 4.0), rng.range(0, 3));
       }
     }
-    // and the branch to the camp and the dig
-    for (i = 0; i < 10; i++) {
-      ground(WORN, M.lerp(0, P.camp.x, i / 9) + rng.range(-0.6, 0.6),
-        M.lerp(-1.0, P.camp.z, i / 9) + rng.range(-0.6, 0.6), 3.0, 2.6, rng.range(0, 3));
+    // and the branch to the camp - up the first flight and along the tier-1
+    // ring, which is the route a person would actually take now the camp is
+    // on the terrace rather than on the courtyard floor
+    for (i = 0; i < 8; i++) {
+      ground(WORN, M.lerp(0.6, P.camp.x, i / 7) + rng.range(-0.5, 0.5),
+        M.lerp(-5.95, P.camp.z, i / 7) + rng.range(-0.4, 0.4), 2.6, 2.2, rng.range(0, 3));
     }
 
     // ---- algae and silt around every pool ----------------------------------
@@ -2800,6 +3366,244 @@
       ground(CRACK, rng.range(-24, 24), rng.range(-36, 2), rng.range(3, 6),
         rng.range(3, 6), rng.range(0, 3));
     }
+
+    // ========================================================================
+    // THE GREEN PASS.
+    //
+    // The finding: green occupied 0.6% of hero1 and 0.4% of the interior, and
+    // 66% / 85% of their saturated pixels sat in a single 30-degree hue bin -
+    // i.e. the level was a monochrome salmon picture, not the "grey-gold /
+    // moss" the roster specifies. The cause was that everything above only ran
+    // over the gallery's OUTER wall and the tower faces. The terrace tiers,
+    // the great stair, the gopura, the causeway and the whole gallery INTERIOR
+    // - which between them are 100% of the near field of hero1, hero3, hero4
+    // and interior - got no growth at all.
+    //
+    // Everything below follows WATER, because that is where moss actually
+    // grows: the top of every horizontal ledge that holds rain, the vertical
+    // face directly under it where the run-off streaks, the joint at the foot
+    // of every pillar, and the inside of the treads where a stair holds a
+    // puddle. None of it is scattered.
+    var TIERS = TIER, tq, ta, tb;
+
+    // ---- every tier: moss along the cornice top, streaks down the face ------
+    var prevTY = -0.70;
+    for (i = 0; i < TIERS.length; i++) {
+      var T = TIERS[i];
+      var tx0 = T_CX - T.hx, tx1 = T_CX + T.hx;
+      var tz0 = T_CZ - T.hz, tz1 = T_CZ + T.hz;
+      for (tq = 0; tq < 4; tq++) {
+        var horiz = (tq < 2);
+        var span = horiz ? (tx1 - tx0) : (tz1 - tz0);
+        // 1.6 m stations, two marks each, both jittered along the run. At 3.2 m
+        // stations with a fixed size the cornice marks lined up into a
+        // perfectly regular green STRIPE along each tier - and a tier top seen
+        // from a 1.66 m eye is nearly edge-on, so that stripe was one of the
+        // most obviously artificial things in the frame.
+        var nn = Math.max(4, Math.round(span / 1.6));
+        for (k = 0; k < nn; k++) {
+          var u3 = (k + 0.5 + rng.range(-0.34, 0.34)) / nn;
+          var aa2 = horiz ? M.lerp(tx0, tx1, u3) : M.lerp(tz0, tz1, u3);
+          var bb2 = horiz ? (tq === 0 ? tz1 : tz0) : (tq === 2 ? tx0 : tx1);
+          var mx = horiz ? aa2 : bb2, mz = horiz ? bb2 : aa2;
+          var amt2 = N.fbm2(mx * 0.22 + 5.1, mz * 0.22 - 2.2, 2) * 0.5 + 0.5;
+          if (amt2 < 0.34) continue;
+          // the cornice top: where the rain sits
+          var cw2 = rng.range(0.9, 1.8), cd2 = rng.range(0.7, 1.4);
+          flat(rng.bool(0.62) ? MOSS : (rng.bool(0.5) ? FRINGE : ROOTH),
+            mx + (horiz ? rng.range(-0.4, 0.4) : (tq === 2 ? 0.5 : -0.5) + rng.range(-0.2, 0.2)),
+            T.y + 0.028,
+            mz + (horiz ? (tq === 0 ? -0.5 : 0.5) + rng.range(-0.2, 0.2) : rng.range(-0.4, 0.4)),
+            horiz ? cw2 : cd2, horiz ? cd2 : cw2, rng.range(-0.25, 0.25), GREEN);
+          // and the face under it, streaked. SMALL: a 2.9 m mark off a 512 px
+          // atlas cell is 0.6 texels per screen pixel at 4 m and reads as
+          // paint. Under 1.6 m it holds its own frontier.
+          if (!rng.bool(0.88)) continue;
+          var fyaw2 = horiz ? (tq === 0 ? 0 : Math.PI) : (tq === 2 ? -Math.PI * 0.5 : Math.PI * 0.5);
+          var sel2 = rng.next();
+          onWall(sel2 < 0.42 ? MOSS : (sel2 < 0.60 ? FRINGE
+            : (sel2 < 0.82 ? STAIN : LICHEN)),
+            mx + (horiz ? 0 : (tq === 2 ? -0.03 : 0.03)),
+            M.lerp(prevTY, T.y, rng.range(0.16, 0.90)),
+            mz + (horiz ? (tq === 0 ? 0.03 : -0.03) : 0),
+            rng.range(0.7, 1.6), rng.range(0.6, 1.5), fyaw2,
+            sel2 < 0.60 ? GREEN : null);
+        }
+      }
+      // THE FOOT OF THE TIER. Water sheds off 14 m of terrace and stops in
+      // this joint; it is also, from a 1.66 m eye in the courtyard, the one
+      // continuous horizontal line running right across the middle of the
+      // hero1 framing, so it is where growth is both most likely and most
+      // visible. Run at 1.3 m and jittered so it is a damp margin rather than
+      // a painted skirting.
+      for (tq = 0; tq < 4; tq++) {
+        var hz2 = (tq < 2);
+        var sp2 = hz2 ? (tx1 - tx0) : (tz1 - tz0);
+        var nf = Math.max(4, Math.round(sp2 / 1.3));
+        for (k = 0; k < nf; k++) {
+          if (!rng.bool(0.78)) continue;
+          var uf = (k + 0.5 + rng.range(-0.3, 0.3)) / nf;
+          var af = hz2 ? M.lerp(tx0, tx1, uf) : M.lerp(tz0, tz1, uf);
+          var bf = hz2 ? (tq === 0 ? tz1 : tz0) : (tq === 2 ? tx0 : tx1);
+          var ox4 = hz2 ? 0 : (tq === 2 ? -1 : 1) * rng.range(0.35, 0.95);
+          var oz4 = hz2 ? (tq === 0 ? 1 : -1) * rng.range(0.35, 0.95) : 0;
+          var fx4 = (hz2 ? af : bf) + ox4, fz4 = (hz2 ? bf : af) + oz4;
+          if (Math.abs(fx4 - T_CX) < STAIR_HALF + 0.8 && tq === 0) continue;
+          ground(rng.bool(0.55) ? FRINGE : (rng.bool(0.5) ? MOSS : ALGAE),
+            fx4, fz4, rng.range(1.0, 2.0), rng.range(0.8, 1.6),
+            rng.range(0, 3), GREEN);
+        }
+      }
+      prevTY = T.y;
+    }
+
+    // ---- the great stair: mossy stringers, algae in the tread joints -------
+    var segs2 = P.stairSegs || [];
+    for (i = 0; i < segs2.length; i++) {
+      var sg = segs2[i];
+      var nSt = Math.max(3, Math.round(Math.abs(sg.z1 - sg.z0) / 0.75));
+      for (k = 0; k < nSt; k++) {
+        var us = (k + 0.5) / nSt;
+        var szz = M.lerp(sg.z0, sg.z1, us), syy = M.lerp(sg.y0, sg.y1, us);
+        // algae ponding in the joint at the back of the tread
+        if (rng.bool(0.62)) {
+          flat(rng.bool(0.5) ? ALGAE : MOSS,
+            T_CX + rng.range(-STAIR_HALF * 0.92, STAIR_HALF * 0.92), syy + 0.03, szz,
+            rng.range(0.7, 1.9), rng.range(0.4, 0.9), rng.range(-0.2, 0.2), GREEN);
+        }
+        // the cheek walls - the wettest, shadiest stone on the whole flight
+        for (var sgn2 = -1; sgn2 <= 1; sgn2 += 2) {
+          if (!rng.bool(0.66)) continue;
+          flat(rng.bool(0.55) ? MOSS : FRINGE,
+            T_CX + sgn2 * (STAIR_HALF + 0.34), syy + 0.62, szz,
+            0.8, 1.5, 0, GREEN);
+          onWall(rng.bool(0.5) ? MOSS : ROOTH,
+            T_CX + sgn2 * (STAIR_HALF + 0.66), syy + rng.range(0.05, 0.45), szz,
+            1.3, rng.range(0.6, 1.2), sgn2 * Math.PI * 0.5, GREEN);
+        }
+      }
+    }
+
+    // ---- a fringe at the foot of every gallery pillar -----------------------
+    // Run-off off the corbelled vault lands in the colonnade and stops at the
+    // pillar bases; that joint is the greenest thing in the interior framing
+    // and it had nothing in it at all.
+    for (i = 0; i < P.pillars.length; i++) {
+      var pl2 = P.pillars[i];
+      var pout = (pl2.side === 's') ? [0, 1] : (pl2.side === 'n') ? [0, -1]
+        : (pl2.side === 'w') ? [-1, 0] : [1, 0];
+      flat(rng.bool(0.55) ? FRINGE : MOSS,
+        pl2.x + pout[0] * 0.55, 0.315, pl2.z + pout[1] * 0.55,
+        rng.range(1.1, 1.8), rng.range(1.0, 1.6), rng.range(0, 3), GREEN);
+      if (rng.bool(0.55)) {
+        onWall(rng.bool(0.5) ? MOSS : LICHEN,
+          pl2.x + pout[0] * 0.24, 0.28 + rng.range(0.25, 1.1), pl2.z + pout[1] * 0.24,
+          0.55, rng.range(0.5, 1.2),
+          pout[0] ? pout[0] * Math.PI * 0.5 : (pout[1] > 0 ? 0 : Math.PI), GREEN);
+      }
+      // and on the corridor side, against the outer wall
+      if (rng.bool(0.5)) {
+        flat(rng.bool(0.6) ? MOSS : ALGAE,
+          pl2.x - pout[0] * rng.range(1.4, 3.0), 0.312,
+          pl2.z - pout[1] * rng.range(1.4, 3.0),
+          rng.range(1.4, 2.6), rng.range(1.2, 2.2), rng.range(0, 3), GREEN);
+      }
+    }
+
+    // ---- the gallery INTERIOR: the inner face of the outer wall -------------
+    for (i = 0; i < 130; i++) {
+      var e3 = rng.int(0, 3);
+      var ax3, xx3, zz3, yaw3;
+      if (e3 === 0) { ax3 = rng.range(-G_X + 5, G_X - 5); xx3 = ax3; zz3 = G_ZS - G_WALL - 0.02; yaw3 = Math.PI; }
+      else if (e3 === 1) { ax3 = rng.range(G_ZN + 5, G_ZS - 5); xx3 = G_X - G_WALL - 0.02; zz3 = ax3; yaw3 = -Math.PI * 0.5; }
+      else if (e3 === 2) { ax3 = rng.range(G_ZN + 5, G_ZS - 5); xx3 = -G_X + G_WALL + 0.02; zz3 = ax3; yaw3 = Math.PI * 0.5; }
+      else { ax3 = rng.range(-G_X + 5, G_X - 5); xx3 = ax3; zz3 = G_ZN + G_WALL + 0.02; yaw3 = 0; }
+      var hgt3 = rng.next();
+      onWall(hgt3 < 0.42 ? (rng.bool(0.6) ? MOSS : FRINGE)
+        : (hgt3 < 0.72 ? STAIN : (rng.bool(0.5) ? LICHEN : EFFL)),
+        xx3, 0.28 + M.lerp(0.2, 3.6, hgt3), zz3,
+        rng.range(0.8, 1.9), rng.range(0.7, 1.9), yaw3,
+        hgt3 < 0.42 ? GREEN : null);
+      // and the floor joint right under it - the wettest line in the level,
+      // where run-off off the corbelled vault ends up
+      if (hgt3 < 0.42) {
+        flat(rng.bool(0.6) ? FRINGE : MOSS,
+          xx3 + Math.sin(yaw3) * rng.range(0.35, 1.10), 0.318,
+          zz3 + Math.cos(yaw3) * rng.range(0.35, 1.10),
+          rng.range(1.0, 1.9), rng.range(0.8, 1.5), yaw3 + rng.range(-0.3, 0.3),
+          GREEN);
+      }
+    }
+
+    // ---- the gopura, inside and out ----------------------------------------
+    for (i = 0; i < 26; i++) {
+      var gu = rng.next();
+      var gx2 = rng.range(-GOP_HALF_X, GOP_HALF_X);
+      var gz2 = (rng.bool(0.5) ? 1 : -1) * (GOP_HALF_Z + 0.03);
+      onWall(gu < 0.45 ? MOSS : (gu < 0.75 ? STAIN : LICHEN),
+        gx2, 0.30 + rng.range(0.2, 3.4), GOP_Z + gz2,
+        rng.range(1.2, 2.4), rng.range(1.2, 2.8), gz2 > 0 ? 0 : Math.PI,
+        gu < 0.45 ? GREEN : null);
+      if (rng.bool(0.6)) {
+        flat(rng.bool(0.6) ? FRINGE : MOSS, gx2, 0.322, GOP_Z + gz2 * 1.22,
+          2.2, 1.4, 0, GREEN);
+      }
+    }
+    // The GATE TOWER itself, which had no marks of any kind - it is not in
+    // P.towers (that list is the sanctuary quincunx) so the tower staining
+    // pass above skipped it entirely, and it is the whole subject of hero4.
+    for (i = 0; i < 34; i++) {
+      var gq = (i % 4) * Math.PI * 0.5;
+      // The tower TAPERS. A mark laid at a fixed half-width stood proud of the
+      // stone above the first storey and hung in the sky beside the silhouette
+      // as a green flag, so the offset tracks the taper and the run stops at
+      // the top of the face storey.
+      var gy2 = 5.60 + rng.range(0.3, 5.4);
+      var ghw = 3.15 - ((gy2 - 5.60) / 8.6) * 1.35 - (i % 3) * 0.06;
+      var gsel = rng.next();
+      onWall(gsel < 0.34 ? MOSS : (gsel < 0.52 ? LICHEN
+        : (gsel < 0.80 ? STAIN : EFFL)),
+        Math.sin(gq) * (ghw + 0.05) + Math.cos(gq) * rng.range(-1.5, 1.5),
+        gy2,
+        GOP_Z + Math.cos(gq) * (ghw + 0.05) - Math.sin(gq) * rng.range(-1.5, 1.5),
+        rng.range(0.8, 1.7), rng.range(0.9, 2.2), gq,
+        gsel < 0.34 ? GREEN : null);
+    }
+    // the passage interior, where nothing dries out
+    for (i = 0; i < 12; i++) {
+      var pq2 = rng.bool(0.5) ? 1 : -1;
+      onWall(rng.bool(0.6) ? MOSS : ALGAE, pq2 * 1.68,
+        0.30 + rng.range(0.1, 2.2), GOP_Z + rng.range(-GOP_HALF_Z, GOP_HALF_Z),
+        1.0, rng.range(0.8, 1.8), pq2 * Math.PI * 0.5, GREEN);
+    }
+
+    // ---- the causeway: the naga plinths and the deck joints -----------------
+    // The causeway deck is WALKED ON and it is also 3 m of foreground in the
+    // hero3 framing, so the marks here are small, sparse and mostly on the
+    // revetment BELOW the deck where the moat damp is - a 1.5 x 2.4 m sheet of
+    // moss laid on the deck two metres from the lens read as a green tarpaulin.
+    for (i = 0; i < P.naga.length; i++) {
+      for (var cs2 = -1; cs2 <= 1; cs2 += 2) {
+        var cbx = cs2 * (CW_HALF + 0.34);
+        if (rng.bool(0.34)) {
+          flat(rng.bool(0.5) ? MOSS : FRINGE, cbx - cs2 * rng.range(0.5, 0.8),
+            CW_Y + 0.045, P.naga[i].z + rng.range(-1.4, 1.4),
+            rng.range(0.5, 0.95), rng.range(0.7, 1.3), rng.range(0, 3), GREEN);
+        }
+        // the wet band on the revetment, at and below the water line
+        onWall(rng.bool(0.6) ? ALGAE : MOSS, cs2 * (CW_HALF + 0.60),
+          CW_Y - rng.range(0.9, 1.7), P.naga[i].z + rng.range(-1.5, 1.5),
+          rng.range(0.9, 1.6), rng.range(0.8, 1.4), cs2 * Math.PI * 0.5, GREEN);
+      }
+    }
+    // and the outer court, which is the whole near field of hero4
+    for (i = 0; i < 30; i++) {
+      var ox3 = rng.range(-ENC_X + 2, ENC_X - 2), oz3 = rng.range(ENC_ZN, GOP_Z - GOP_HALF_Z);
+      if (Math.abs(ox3) < 3.2 && oz3 > 12) continue;      // keep the worn path clear
+      ground(rng.bool(0.55) ? MOSS : (rng.bool(0.5) ? FRINGE : LITTER),
+        ox3, oz3, rng.range(2.2, 4.2), rng.range(2.0, 3.6), rng.range(0, 3), GREEN);
+    }
+    void ta; void tb;
   }
 
   // =================================================================== mist ==
@@ -2834,9 +3638,34 @@
     // at one alpha, which is a sheet of tracing paper over the level and is
     // exactly how round two photographed. At 11 m they read as discrete
     // patches lying in the hollows, which is what ground mist does.
+    // THE THIRD LAYER IS THE ONE THAT MATTERS AND IT IS NOT HORIZONTAL.
+    //
+    // Round two emitted only the two flat layers below. From a 1.66 m eye
+    // pitched a few degrees they are seen at 5-15 degrees of grazing, present
+    // almost no projected area, and contribute nothing BETWEEN the towers -
+    // so the level's named condition was absent from its signature image and
+    // the long god rays the hero1 framing was designed around had no medium to
+    // exist in. Where a flat card happened to lie over the moat it worked
+    // beautifully, which proved the atlas and the tinting were never the
+    // problem: the ORIENTATION was.
+    //
+    // `tilt` rotates the card back up toward vertical (-PI/2 + 0.9 rad leaves
+    // it about 38 degrees off vertical), jittered per card and yawed randomly,
+    // so a standing eye sees a face of mist instead of an edge. They sit at
+    // 0.9-1.8 m - chest to head height, under the tower cornices - and at a
+    // low opacity so a bank reads as depth rather than as a wall.
+    // A 0.90 rad tilt (51 degrees off horizontal) is too near vertical: a big
+    // soft-vignetted ellipse seen edge-on foreshortens into a narrow bright
+    // column and reads as a steam jet, which is exactly what the first attempt
+    // photographed. 0.52 rad leaves a sloping BANK - it still presents real
+    // area to a 1.66 m eye, but it can never collapse to a sliver - and the
+    // cards are wide and shallow (aspect 0.40) and individually much fainter,
+    // so the layer reads as one body of air rather than as a set of objects.
     var layers = [
-      { y: 0.30, n: seeds.length, s: 11, o: 1.00 },
-      { y: 0.62, n: Math.round(seeds.length * 0.50), s: 15, o: 0.60 }
+      { y: 0.30, n: seeds.length, s: 11, o: 1.00, tilt: 0 },
+      { y: 0.62, n: Math.round(seeds.length * 0.50), s: 15, o: 0.60, tilt: 0 },
+      { y: 1.05, n: Math.round(seeds.length * 1.10), s: 8.5, o: 0.30, tilt: 0.52,
+        aspect: 0.40, spread: 1.1 }
     ];
     var cols = [];
     for (var l = 0; l < layers.length; l++) {
@@ -2846,11 +3675,14 @@
         var x = sd[0] + rng.gaussian(0, 3.5);
         var z = sd[1] + rng.gaussian(0, 3.5);
         var s = L.s * rng.range(0.7, 1.35) * (0.7 + 0.5 * sd[2]);
-        var g = quad(s, s);
+        var g = quad(s, s * (L.aspect ? L.aspect * rng.range(0.82, 1.20) : 1));
         ents.push({
           geometry: g,
-          matrix: makeM(x, L.y + rng.range(-0.18, 0.18), z,
-            -Math.PI * 0.5, 0, rng.range(0, Math.PI * 2))
+          matrix: makeM(x,
+            L.y + rng.range(-0.18, 0.18) * (L.spread || 1) +
+              (L.tilt ? rng.range(-0.30, 0.45) : 0), z,
+            -Math.PI * 0.5 + (L.tilt ? L.tilt + rng.range(-0.16, 0.16) : 0),
+            rng.range(0, Math.PI * 2), 0)
         });
         // warmer toward the sun, cooler away: the mist is the only surface in
         // the level big enough to carry the level's whole colour axis
@@ -3100,6 +3932,7 @@
     var m = null;
     try {
       if (surf.own === 'water') m = this._waterMaterial();
+      else if (surf.own === 'bark') m = this._barkMaterial();
       else if (surf.own === 'leaf') m = this._leafMaterial();
       else if (surf.own === 'lit') m = this._litMaterial();
       else if (surf.own === 'decal') m = this._decalMaterial();
@@ -3161,10 +3994,36 @@
     });
     if (tex) {
       m.normalMap = tex;
-      m.normalScale = new THREE.Vector2(0.38, 0.38);
+      m.normalScale = new THREE.Vector2(0.72, 0.72);
     }
     m.name = 'ruins_water';
     this._waterMat = m;
+    return m;
+  };
+
+  // BARK. Its own recipe rather than materials.js's sawn-plank one, mapped off
+  // limb()'s arc-length uv so the fibre runs along the root. The albedo target
+  // is deliberately BELOW the masonry: a fig root is a dark wet-looking mass
+  // and in hero2 the roots were measuring half a stop brighter than the wall
+  // they are prising apart, which inverted the whole read of the image.
+  LevelRuins.prototype._barkMaterial = function () {
+    var pair = null;
+    try {
+      pair = buildBarkTexture(this.rng.fork ? this.rng.fork(0xBA12) : this.rng, this.noise);
+    } catch (e) { GAME.logError('ruins.barkTex', e); }
+    var m = new THREE.MeshStandardMaterial({
+      color: new THREE.Color().setHex(0x5f5648, THREE.SRGBColorSpace),
+      roughness: 0.95, metalness: 0.0, vertexColors: true, envMapIntensity: 0.85
+    });
+    if (pair && pair[0]) {
+      var a = makeTex(pair[0], true, this._aniso());
+      if (a) { a.repeat.set(1, 1); m.map = a; m.color.setRGB(1, 1, 1); }
+      if (pair[1]) {
+        var n = makeTex(pair[1], false, this._aniso());
+        if (n) { m.normalMap = n; m.normalScale = new THREE.Vector2(1.25, 1.25); }
+      }
+    }
+    m.name = 'ruins_bark';
     return m;
   };
 
@@ -3261,7 +4120,7 @@
       pave(self, B, rng,
         { x0: -G_PX + 0.3, x1: G_PX - 0.3, z0: G_PZN + 0.3, z1: G_PZS - 0.3 },
         0, {
-          follow: true, pitch: 1.66, jitter: 0.9,
+          follow: true, pitch: 1.66, jitter: 0.9, mossBias: 0.22,
           skip: [
             { x0: T_CX - TIER[0].hx - 0.5, x1: T_CX + TIER[0].hx + 0.5,
               z0: T_CZ - TIER[0].hz - 0.5, z1: T_CZ + TIER[0].hz + 0.5 },
@@ -3326,7 +4185,11 @@
       scatterBlocks(self, B, rng, 4.6, 0, -7.4, 2.8, 12, 0.75);
       scatterBlocks(self, B, rng, 19.8, 0, -19.2, 3.0, 16, 0.9);
       scatterBlocks(self, B, rng, 16.2, 0, -24.4, 3.4, 16, 0.8);
-      scatterBlocks(self, B, rng, -3.0, 0, 9.6, 3.0, 14, 0.7);
+      // gate spoil in the outer court - the near foreground of hero4, placed
+      // on that standpoint's sightline at 8-9 m so the frame has something
+      // inside 10 m instead of starting at the gopura plinth
+      scatterBlocks(self, B, rng, -4.5, 0, 14.0, 3.4, 18, 0.85);
+      scatterBlocks(self, B, rng, -2.2, 0, 9.8, 2.6, 12, 0.6);
       // a fallen lintel standing on end, and a toppled colonnette
       B.wear = { grime: 0.66, wet: 1, edge: 0.68 };
       B.boxR('sandstone', 0.72, 3.05, 0.94, -9.6, 1.35, -1.8, 0.10, 0.55, 0.32);
@@ -3405,9 +4268,25 @@
     // mist has to end below the tower cornices so a prasat rises OUT of it.
     try {
       if (this.ctx && this.ctx.sky && this.ctx.sky.setFog) {
+        // mieG 0.70 -> 0.55 and desaturate 0.10 -> 0.22.
+        //
+        // At mieG 0.70 the Henyey-Greenstein lobe is so forward-peaked that
+        // gbFogSun - the burning horizon's own hard orange - was being mixed
+        // over EVERYTHING past about 20 m in a 100-degree cone around the key,
+        // and the level photographed as a monochrome salmon picture: 66% of
+        // hero1's saturated pixels inside one 30-degree hue bin, green at
+        // 0.6%, and the shadows measuring WARM where every other level in the
+        // roster has a cool anchor. Broadening the lobe puts gbFogSky - which
+        // at this hour is the violet-blue zenith - back into the mix
+        // everywhere except a narrow cone straight into the sun, so the moat
+        // streak in hero3 keeps its fire and the courtyard stops being pink.
+        // desaturate goes ABOVE sky.js's 0.18 default rather than below it,
+        // because aerial perspective at dawn in mist really does eat chroma
+        // and because it is the term that stops the fog PAINTING its hue onto
+        // distant stone instead of veiling it.
         this.ctx.sky.setFog({
           density: 0.0175, heightScale: 4.6, baseY: -0.4,
-          startDistance: 1.8, mieG: 0.70, maxOpacity: 0.88, desaturate: 0.10
+          startDistance: 1.8, mieG: 0.55, maxOpacity: 0.88, desaturate: 0.22
         });
       }
     } catch (e) { GAME.logError('ruins.fog', e); }
@@ -3420,6 +4299,24 @@
     return this;
   };
 
+  // Which precinct a piece belongs to, from its world origin. Merging is what
+  // keeps draw calls down; merging EVERYTHING is what defeats frustum culling,
+  // and the measurement that proved it was that an aerial overview of the
+  // whole site and a 1 m interior rendered 680K and 750K triangles - i.e. the
+  // cost was global and the camera made no difference. Six precincts is the
+  // right granularity: each one is a place a player stands in and cannot see
+  // most of the others from, and the split costs at most five extra draws per
+  // material against a 500-call budget the level was using 276 of.
+  function precinctOf(x, y, z) {
+    if (Math.abs(x) > 34 || z > 60 || z < -46) return 'far';
+    if (z >= 24) return 'cway';
+    if (z >= 14) return 'gate';
+    if (z >= 2) return 'court';
+    if (z >= -22) return 'inner';
+    void y;
+    return 'north';
+  }
+
   LevelRuins.prototype._finalize = function (B) {
     var keys = Object.keys(B.buckets);
     for (var k = 0; k < keys.length; k++) {
@@ -3430,24 +4327,44 @@
       if (key === 'decal' || key === 'leaf') {
         this.material(key);                       // force the atlas to exist
       }
-      var geo;
-      try { geo = Geo.mergeAll(entries); }
-      catch (e) { GAME.logError('ruins.merge:' + key, e); continue; }
-      if (!surf.keepUV || !geo.attributes.uv) Geo.worldUV(geo, surf.uv);
-      Geo.copyUV1(geo);
-      try { this._paint(key, entries, geo); }
-      catch (e2) { GAME.logError('ruins.paint:' + key, e2); }
-      geo.computeBoundingSphere();
-      var mesh = new THREE.Mesh(geo, this.material(key));
-      mesh.name = 'ruins_' + key;
-      mesh.castShadow = surf.cast;
-      mesh.receiveShadow = surf.recv;
-      mesh.matrixAutoUpdate = false;
-      mesh.updateMatrix();
-      if (key === 'decal') mesh.renderOrder = 2;
-      if (key === 'water') mesh.renderOrder = 1;
-      this.root.add(mesh);
-      this.meshes.push(mesh);
+      // Below ~220 pieces a bucket is not worth splitting - one merged mesh is
+      // already tiny and six of them would be six draws for nothing.
+      var groups;
+      if (entries.length < 220) {
+        groups = [['all', entries]];
+      } else {
+        var by = Object.create(null);
+        for (var q = 0; q < entries.length; q++) {
+          var em = entries[q].matrix.elements;
+          var pk = precinctOf(em[12], em[13], em[14]);
+          (by[pk] || (by[pk] = [])).push(entries[q]);
+        }
+        groups = [];
+        var gk = Object.keys(by);
+        for (var q2 = 0; q2 < gk.length; q2++) groups.push([gk[q2], by[gk[q2]]]);
+      }
+      for (var gi = 0; gi < groups.length; gi++) {
+        var gname = groups[gi][0], gents = groups[gi][1];
+        if (!gents.length) continue;
+        var geo;
+        try { geo = Geo.mergeAll(gents); }
+        catch (e) { GAME.logError('ruins.merge:' + key, e); continue; }
+        if (!surf.keepUV || !geo.attributes.uv) Geo.worldUV(geo, surf.uv);
+        Geo.copyUV1(geo);
+        try { this._paint(key, gents, geo); }
+        catch (e2) { GAME.logError('ruins.paint:' + key, e2); }
+        geo.computeBoundingSphere();
+        var mesh = new THREE.Mesh(geo, this.material(key));
+        mesh.name = 'ruins_' + key + (gname === 'all' ? '' : '_' + gname);
+        mesh.castShadow = surf.cast;
+        mesh.receiveShadow = surf.recv;
+        mesh.matrixAutoUpdate = false;
+        mesh.updateMatrix();
+        if (key === 'decal') mesh.renderOrder = 2;
+        if (key === 'water') mesh.renderOrder = 1;
+        this.root.add(mesh);
+        this.meshes.push(mesh);
+      }
       B.buckets[key] = null;
     }
   };
@@ -3478,6 +4395,46 @@
       var cnt = vertCount(ent.geometry);
       var w = ent.wear;
       var g0 = w ? w.grime : 1, w0 = w ? w.wet : 1, e0 = w ? w.edge : 1;
+
+      // ---- PER-BLOCK VARIATION ------------------------------------------
+      // The finding this answers: "every block in a course carries the
+      // identical isotropic sandpaper speckle at one scale, because the grime
+      // term is fbm2(x*0.31, z*0.31) - a noise field continuous across the
+      // whole wall, so adjacent blocks get the same value." A CONTINUOUS field
+      // cannot make two neighbouring blocks differ; only a field quantised to
+      // the block can. So the block's own value is drawn here, once, from its
+      // world position, and it is what every vertex of that block carries.
+      //
+      // Two frequencies, deliberately:
+      //   blk   per-block, +/-11% of value with an anti-correlated edge-wear
+      //         term - so one block is dark and dusty, its neighbour paler and
+      //         chipped, which is a hue shift as well as a value shift because
+      //         grime pulls toward 0x4c4338 and edge wear toward 0xb9ae9a.
+      //   ero   0.045/m differential erosion, so whole PANELS of the gallery
+      //         and whole tiers of the terrace sit at different values. This
+      //         is the macro variation the near-field stone measured as
+      //         completely lacking (0.089 at 1 px against street's 0.161).
+      var bx0 = ent.matrix.elements[12], by0 = ent.matrix.elements[13],
+        bz0 = ent.matrix.elements[14];
+      var blk = 0, ero = 0;
+      if (!own) {
+        // hash the block ORIGIN quantised to the 1.6 m coursing module's
+        // eighth, i.e. 20 cm - fine enough that every block is its own draw
+        var q = 5.0;
+        var hqa = Math.sin(Math.floor(bx0 * q) * 12.9898 +
+          Math.floor(by0 * q) * 78.233 + Math.floor(bz0 * q) * 37.719) * 43758.5453;
+        var hqb = Math.sin(Math.floor(bx0 * q) * 39.3468 +
+          Math.floor(by0 * q) * 11.135 + Math.floor(bz0 * q) * 83.155) * 24634.6345;
+        blk = (hqa - Math.floor(hqa)) - 0.5;
+        var blk2 = (hqb - Math.floor(hqb)) - 0.5;
+        ero = noise.fbm2(bx0 * 0.048 + 3.7, bz0 * 0.048 - 9.1, 2) * 0.9 +
+          noise.fbm2(by0 * 0.16 + 21.0, (bx0 + bz0) * 0.055, 2) * 0.5;
+        g0 *= 1 + blk * 0.22 + ero * 0.20;
+        e0 *= 1 - blk * 0.20 + blk2 * 0.14;
+        w0 *= 1 + blk2 * 0.10;
+      }
+
+      var ft = ent.face;
       var hx = 1, hy = 1, hz = 1;
       if (doEdges) {
         var bb = ent.geometry.__rbb;
@@ -3508,9 +4465,42 @@
             // algae is a real green, so the water bucket does tint
             var alg = M.saturate(noise.fbm2(x * 0.16 + 5, z * 0.16 + 2, 3) * 1.3 + 0.35);
             r = g0 * (1 - alg * 0.22); g = g0 * (1 + alg * 0.10); b2 = g0 * (1 - alg * 0.12);
+          } else if (key === 'bark') {
+            // Bark's vertex colour is a straight multiplier on an already-dark
+            // map, so it stays close to 1 - the wear values that suit a
+            // WEAR-shaded stone block would take a root to a silhouette. What
+            // it does carry is a damp, mossy foot (a fig root is black where
+            // it meets the ground) and a per-limb value break.
+            var bv = 1 + noise.fbm2(x * 0.55 + 13, y * 0.30 - 4, 3) * 0.20;
+            var foot = M.smoothstep(1.6, -0.2, y - this.sampleGround(x, z));
+            r = bv * (1 - foot * 0.34);
+            g = bv * (1 - foot * 0.28);
+            b2 = bv * (1 - foot * 0.36);
           }
           col[j] = r; col[j + 1] = g; col[j + 2] = b2;
           continue;
+        }
+
+        // ---- BAKED CONCAVITY OCCLUSION on a carved face -------------------
+        // See the note in carvedFace. oz is the vertex's depth in the head's
+        // own frame; F is the head's front plane. Everything behind F is in a
+        // cut, and how far behind it is, is how dark it gets. Applied to BOTH
+        // grime (darkens ~0.7x and pulls toward the dust colour) and wet
+        // (darkens up to 0.48x), which together give the 2-3x drop that makes
+        // an eye socket read as a socket under nothing but skylight.
+        if (ft) {
+          var ox = (x - ft.x) * ft.c - (z - ft.z) * ft.s;
+          var oz = (x - ft.x) * ft.s + (z - ft.z) * ft.c;
+          var oy2 = y - ft.y;
+          var deep = M.saturate((ft.F - oz) / Math.max(0.05, ft.dp * 1.05));
+          // the outer margin of the head is against the tower and gets the
+          // corner occlusion of an applied mass, the centre does not
+          var lat = M.smoothstep(0.34, 0.52, Math.abs(ox) / Math.max(0.05, ft.w));
+          var vert = M.smoothstep(0.10, -0.02, oy2 / Math.max(0.05, ft.h));
+          var ao = M.saturate(deep * 1.15 + lat * 0.30 + vert * 0.35);
+          r = g0 * (1 - ao * 0.80);
+          g = w0 * (1 - ao * 0.42);
+          b2 = e0 * (1 - ao * 0.30);
         }
 
         // ---- grime: water runs DOWN, and it collects where it stops --------
@@ -3520,7 +4510,13 @@
         var down = M.saturate(-ny * 0.5 + 0.5);         // 1 on an underside
         r *= 1 - streak * 0.16 * (1 - Math.abs(ny)) - down * 0.14;
         r *= 1 - M.smoothstep(1.5, 0.0, hgt) * 0.18;    // the dirty foot
-        r *= 1 + noise.fbm2(x * 0.31, z * 0.31 + 9, 2) * 0.10;
+        // NOT fbm2(x*0.31, z*0.31): that is a 3 m field, continuous across a
+        // whole wall, so it gave every block in a course the same value and is
+        // exactly what made the near-field stone measure flatter than the
+        // empty sky. The block's own value is carried by `blk`/`ero` above;
+        // what is left here is a genuinely per-VERTEX micro break at 1.4 m,
+        // which is smaller than a block and therefore cannot average out.
+        r *= 1 + noise.fbm2(x * 0.72 + 4.0, (y * 0.5 + z * 0.72) + 9, 2) * 0.09;
 
         // ---- wet: the damp band at the foot of a wall ----------------------
         // GATED ON THE NORMAL, and that gate is the whole lesson of the first
@@ -3626,12 +4622,20 @@
       var w = F.worklight;
       var tr = this.plan.dig.trench;
       pl.push({
+        // 96 -> 52 and the halo pulled right in. At the old numbers this
+        // 4300 K spot threw a discrete pale-blue CONE that read across a
+        // quarter of the courtyard: in hero1 it stood as a vertical plume of
+        // light in mid-air at 25 m with no visible cause, which is the exact
+        // "rendering fault rather than light" failure the west breach was
+        // deliberately left unpublished to avoid. At 52 it still pools on the
+        // trench, still reads as the level's one cool source, and stops
+        // being an object in every other framing.
         name: 'dig_worklight', kind: 'tungsten', pos: w.slice(),
-        kelvin: 4300, intensity: 96, distance: 21, dayBase: 0.92,
-        cone: 0.62, penumbra: 0.55,
+        kelvin: 4300, intensity: 52, distance: 15, dayBase: 0.92,
+        cone: 0.52, penumbra: 0.62,
         aimPos: [(tr.x0 + tr.x1) * 0.5, 0.05, (tr.z0 + tr.z1) * 0.5],
-        haloScale: 1.0, haloMax: 2.1, haloGain: 0.6,
-        bulbR: 0.10, bulbFlat: 0.45, fixed: 1
+        haloScale: 0.7, haloMax: 1.25, haloGain: 0.28,
+        bulbR: 0.09, bulbFlat: 0.45, fixed: 1
       });
     }
 
@@ -3740,14 +4744,27 @@
     // pitched to put the horizon of the frame at 4 m, the stair runs from the
     // bottom edge to the tower, a guardian lion sits at each bottom corner,
     // and the two sheets of standing water flank the flight.
-    var h1x = -1.85, h1z = 1.20;
+    // RE-SOLVED AGAIN, and this time against the LIGHT rather than against the
+    // composition alone. At (-1.85, 1.20) aimed at x +0.25 the camera was
+    // 1.85 m west of the axis looking 10 degrees EAST of north: the two sheets
+    // of standing water the comment above claims flank the flight were both
+    // outside the 53.75-degree half-cone (the near one measured 61 degrees
+    // off-axis), the looters' camp was 70 degrees off it, and the corner
+    // prasats were seen close to square-on so neither of their lit WEST faces
+    // opened up. Moving 1.5 m further west and aiming 8 degrees further east
+    // costs nothing on the stair - which stays 7 degrees off centre - and buys
+    // all three: court_west enters bottom-left at 5 m, court_east enters right
+    // at 9-11 m, the brazier lands 31 degrees right, and the south-east
+    // prasat's west face - which the north-west key rakes at 58 degrees - is
+    // now seen at 50 degrees from its own normal instead of nearly square.
+    var h1x = -3.30, h1z = 1.20;
     g = this.sampleGround(h1x, h1z);
     // 12 degrees of pitch, not 16: at 16 the bottom of the frame was 4.3 m
     // out and the two guardian lions at the foot of the stair - the only hard
     // foreground the framing has - sat just under the edge. At 12 they anchor
     // the bottom corners, the sheet of standing water comes in on the left,
     // and the tower apex still clears the top of a 75-degree frame by 3.
-    var hero1 = pose(h1x, g + 1.66, h1z, 0.25, 4.3, -11.0);
+    var hero1 = pose(h1x, g + 1.66, h1z, 0.70, 4.3, -11.0);
 
     // ---- HERO2 : the fig on the east gallery --------------------------------
     // The Ta Prohm image, and deliberately the OPPOSITE lighting to hero1: the
@@ -3759,7 +4776,7 @@
     var h2g = this.sampleGround(h2x, h2z);
     var hero2 = pose(h2x, h2g + 1.66, h2z, 25.8, 4.6, -12.6);
 
-    // ---- HERO3 : the causeway and the gate ----------------------------------
+    // ---- HERO3 : the causeway and the gate, OFF THE CENTRELINE ---------------
     // The arrival. Standing on the causeway deck with the naga balustrade
     // running away on both sides into the mist over the moat, the gate tower
     // and its four faces closing the vista at 18 m. The one framing in the set
@@ -3769,11 +4786,32 @@
     // pitch came out at 23 degrees, which put the bottom of the frame 10 m
     // in front of the camera - i.e. the causeway deck and both naga
     // balustrades, the entire leading line the framing exists for, were
-    // below the picture. Aiming at the lintel instead drops it to 7 and the
+    // below the picture. Aiming at the lintel instead drops it to 6 and the
     // deck runs from the bottom edge to the gate, with the flooded moat in
-    // both lower corners; the tower apex still clears the top by 11 degrees.
-    var h3z = 41.0, h3x = -1.05;
-    var hero3 = pose(h3x, CW_Y + 1.66, h3z, 0.35, 4.6, GOP_Z + GOP_HALF_Z);
+    // both lower corners; the tower apex still clears the top by 17 degrees.
+    //
+    // OFF THE CENTRELINE. At (-1.05, 41) this was the third of three published
+    // framings standing within 2 m of x = 0 and looking due north down the
+    // same axis - the same symmetric one-point photograph three times, all of
+    // them onto SOUTH elevations the key never touches. Standing hard against
+    // the WEST balustrade and aiming across to the east side of the gate makes
+    // the naga run DIAGONALLY out of the bottom-left corner instead of framing
+    // the subject symmetrically, and it swings the sun (31.6 degrees west of
+    // north) round to 49 degrees off the view axis - which puts its specular
+    // streak on the west moat at about 19 m, on the left third rather than
+    // dead centre. The 200 x 100 px of low sun on water that is the best
+    // passage in the level is now a compositional element instead of an
+    // accident.
+    // Aimed slightly EAST of the gate axis from a standpoint on the WEST side
+    // of the deck, which is the one arrangement that puts a LIT balustrade in
+    // the frame: the key is north-west, so both runs show the camera their
+    // inner face and only the EAST run's inner face takes the sun. Aiming at
+    // x +1.75 from x -2.90 swings the lit east naga in from the bottom-right
+    // as the leading line and leaves the unlit west run as a dark diagonal in
+    // the bottom-left corner. The first attempt aimed the other way and filled
+    // three metres of foreground with the unlit run seen from above.
+    var h3z = 46.0, h3x = -2.90;
+    var hero3 = pose(h3x, CW_Y + 1.66, h3z, 1.75, 4.05, GOP_Z + GOP_HALF_Z);
 
     // ---- INTERIOR : the south gallery ---------------------------------------
     // Inside the colonnade, looking east down 40 m of corridor. The corbelled
@@ -3797,11 +4835,42 @@
     var ovy = this.sampleGround(ovx, ovz) + 1.72;
     var overview = pose(ovx, ovy, ovz, 2.0, 6.5, -14.0);
 
-    // A fifth framing, published under the optional `hero4` key scenarios.js
-    // already understands: the central prasat's south face from the courtyard,
-    // close enough to read the carving. The level's signature asset deserves
-    // one framing that is only about it.
-    var hero4 = pose(0.0, CW_Y + 1.66, 32.0, 0.0, 8.95, GOP_Z + 3.05);
+    // ---- HERO4 : the gate tower's LIT corner, from the outer court ----------
+    //
+    // Two separate findings collapse into this one mark, and both of them were
+    // right.
+    //
+    // (1) THE FACES WERE ON THE WRONG SIDE OF THE LIGHT. The old hero4 stood
+    //     at (0, 32) on the causeway looking due north at the gopura's SOUTH
+    //     elevation from 9 m. SUN_X/SUN_Z put the key at azimuth north-WEST,
+    //     so a south elevation is lit by sky alone: the entire head measured
+    //     0.083-0.207 with the brow, socket and mouth steps a few percent
+    //     apart, and it took a 6x zoom to confirm a face was there. Standing
+    //     in the outer court, NORTH of the gate, the camera photographs the
+    //     tower's north face - which the north-west key hits at 32 degrees,
+    //     the most directly lit of its four - plus a raking sliver of the west
+    //     face, and the unlit south elevation is nowhere in the frame.
+    //
+    //     The standpoint is solved, not chosen. A true west 3/4 is
+    //     ARCHITECTURALLY IMPOSSIBLE here and the geometry says so: the west
+    //     wing spans x -9.2..-2.2 at the same z as the passage tower and
+    //     carries its own 11.5 m prasat, so every sightline from the west
+    //     crosses it - the first attempt at (-11.0, 10.5) photographed the
+    //     wing, not the face. The line from (-5.8, 6.6) to the tower crosses
+    //     the wing's z band at x -1.7 and 6.9 m up: clear of the wing mass in
+    //     plan AND over its 5.6 m roof.
+    //
+    // (2) THE OUTER COURT WAS NEVER PHOTOGRAPHED. Both libraries, the
+    //     enclosure wall and the whole outer precinct are built, collided and
+    //     navmeshed, and appeared in no published framing at all - the
+    //     roster's own instant-fail. This standpoint stacks outer-court paving
+    //     and a spill of gate masonry at 5-9 m, the two gopura wings at 11 m,
+    //     the face tower at 12, the RUINED east library at 23 m on the left
+    //     edge and the enclosure's east return at 36 - four depths, and the
+    //     subject 5 degrees off the frame's centre rather than on it.
+    var h4x = -4.80, h4z = 8.40;
+    var hero4 = pose(h4x, this.sampleGround(h4x, h4z) + 1.66, h4z,
+      -0.30, 4.80, 17.20);
 
     this.cameraPoses = {
       overview: overview, hero1: hero1, hero2: hero2, hero3: hero3,

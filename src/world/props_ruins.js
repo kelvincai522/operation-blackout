@@ -215,7 +215,10 @@
     // key; it is lit by SKY, and flat ambient does not carve. These are dark
     // by ALBEDO so a face keeps its expression in any light.
     carve:    { base: 'stone', alb: 0x393227, hue: 0.55, uv: 0.42, cast: 1, recv: 1 },
-    mossy:    { base: 'stone', alb: 0x5d6647, hue: 0.85, uv: 0.42, cast: 1, recv: 1 },
+    // Matched to level_ruins.js's SURF.mossy, and for the same reason: this
+    // level's illuminant is ~3:1 red-to-green, so an honest moss albedo
+    // (linear G/R 1.21) renders brown. 0x3c7a2c measures 4.31 and survives.
+    mossy:    { base: 'stone', alb: 0x2a5417, hue: 0.98, uv: 0.42, cast: 1, recv: 1 },
     laterite: { base: 'rubble', alb: 0x7d5f49, hue: 0.75, uv: 0.36, cast: 1, recv: 1 },
     earth:    { base: 'dirt', alb: 0x6a5f47, hue: 0.55, uv: 0.30, cast: 0, recv: 1, mult: 1 },
     timber:   { base: 'wood_plank', alb: 0x5b4835, uv: 0.85, cast: 1, recv: 1 },
@@ -231,14 +234,17 @@
     // sandstone at first light is the image this place is famous for, and in a
     // frame graded to a narrow rose-gold it is the only hue present that is
     // not stone, moss or sky.
-    // 0xc9791f, not the 0xa2591a a photograph of a robe measures. Every
-    // saffron surface in this level faces SOUTH or EAST - the cloth is tied
-    // where a viewer in the courtyard can see it, and the twilight key comes
-    // from the west-north-west - so all of it is lit by skylight alone. At a
-    // true robe albedo that put the level's one saturated mark at a linear
-    // 0.02 and it photographed as brown. Raising the target is the honest
-    // fix: the cloth reads at the value it would have if the sun were on it.
-    saffron:  { base: 'fabric', alb: 0xc9791f, hue: 0.95, uv: 0.80, cast: 1, recv: 1 },
+    // 0xa2601a, NOT the 0xc9791f round two shipped. That target was chosen to
+    // beat the fact that every saffron surface here faces south or east and is
+    // therefore lit by skylight alone - and it overshot catastrophically: on
+    // the Buddha in hero2 at 3 m the shoulder roll measured p50 0.648 / p95
+    // 0.763 against a frame 99th percentile of 0.601 and a statue torso of
+    // 0.319. It was not a bolt of cloth, it was the single brightest object in
+    // the picture, a hard-edged near-white parallelogram with a one-pixel
+    // shadow terminator, and it read as a rendering artefact. Dropping the
+    // target 1.7 stops in red puts the cloth INSIDE the print - still the only
+    // saturated hue in a grey-gold level, no longer competing with the sky.
+    saffron:  { base: 'fabric', alb: 0xa2601a, hue: 0.95, uv: 0.80, cast: 1, recv: 1 },
     cloth:    { base: 'fabric', alb: 0x6d6a5c, hue: 0.30, uv: 0.80, cast: 1, recv: 1 },
     sack:     { base: 'fabric', alb: 0x8a7a56, hue: 0.35, uv: 0.75, cast: 1, recv: 1 },
     rope:     { base: 'rope', alb: 0x6f6350, uv: 1.60, cast: 1, recv: 1 },
@@ -250,14 +256,14 @@
     stone:    [0x8f8067, 0.88, 0.0],
     stone_d:  [0x6a6050, 0.90, 0.0],
     carve:    [0x393227, 0.94, 0.0],
-    mossy:    [0x5d6647, 0.93, 0.0],
+    mossy:    [0x2a5417, 0.93, 0.0],
     laterite: [0x7d5f49, 0.94, 0.0],
     earth:    [0x6a5f47, 0.96, 0.0],
     timber:   [0x5b4835, 0.90, 0.0],
     bark:     [0x6e6553, 0.94, 0.0],
     bamboo:   [0x9c9257, 0.80, 0.0],
     canvas:   [0x6f6553, 0.94, 0.0],
-    saffron:  [0xc9791f, 0.88, 0.0],
+    saffron:  [0xa2601a, 0.88, 0.0],
     cloth:    [0x6d6a5c, 0.92, 0.0],
     sack:     [0x8a7a56, 0.94, 0.0],
     rope:     [0x6f6350, 0.94, 0.0],
@@ -370,14 +376,14 @@
     for (i = 0; i < 11; i++) {
       frond(g, rng, o[0] + C * 0.5 + rng.range(-C * 0.07, C * 0.07), o[1] + C * 0.97,
         -C * rng.range(0.52, 0.90), rng.range(-1.05, 1.05), C * 0.060,
-        'rgb(46,66,32)', 'rgb(74,98,44)');
+        'rgb(31,84,26)', 'rgb(50,125,35)');
     }
     // ---- 1: fern clump, narrower, with one dead frond ----------------------
     o = O(1);
     for (i = 0; i < 7; i++) {
       frond(g, rng, o[0] + C * 0.5 + rng.range(-C * 0.05, C * 0.05), o[1] + C * 0.97,
         -C * rng.range(0.44, 0.72), rng.range(-0.72, 0.72), C * 0.050,
-        'rgb(52,74,36)', 'rgb(92,116,54)');
+        'rgb(35,95,29)', 'rgb(63,148,43)');
     }
     frond(g, rng, o[0] + C * 0.62, o[1] + C * 0.97, -C * 0.50, 0.9, C * 0.046,
       'rgb(92,72,36)', 'rgb(122,98,50)');
@@ -387,14 +393,14 @@
     for (i = 0; i < 54; i++) {
       blade(g, o[0] + C * 0.5 + rng.gaussian(0, C * 0.10), o[1] + C * 0.98,
         -C * rng.range(0.30, 0.86), rng.range(-0.55, 0.55), C * rng.range(0.012, 0.026),
-        rng.bool(0.30) ? 'rgb(112,116,58)' : (rng.bool(0.5) ? 'rgb(66,86,38)' : 'rgb(86,102,44)'));
+        rng.bool(0.30) ? 'rgb(112,116,58)' : (rng.bool(0.5) ? 'rgb(45,110,30)' : 'rgb(58,131,35)'));
     }
     // ---- 3: grass tuft, low, with seed heads --------------------------------
     o = O(3);
     for (i = 0; i < 40; i++) {
       blade(g, o[0] + C * 0.5 + rng.gaussian(0, C * 0.13), o[1] + C * 0.98,
         -C * rng.range(0.16, 0.46), rng.range(-0.8, 0.8), C * rng.range(0.010, 0.022),
-        rng.bool(0.45) ? 'rgb(126,124,66)' : 'rgb(78,94,42)');
+        rng.bool(0.45) ? 'rgb(126,124,66)' : 'rgb(53,120,34)');
     }
     for (i = 0; i < 7; i++) {
       var sx = o[0] + C * 0.5 + rng.gaussian(0, C * 0.14);
@@ -412,16 +418,16 @@
       g.save();
       g.translate(o[0] + C * 0.5 + rng.range(-C * 0.05, C * 0.05), o[1] + C * 0.97);
       g.rotate(rng.range(-1.15, 1.15) + Math.PI);
-      g.strokeStyle = 'rgb(78,92,44)'; g.lineWidth = C * 0.020;
+      g.strokeStyle = 'rgb(53,118,35)'; g.lineWidth = C * 0.020;
       g.beginPath(); g.moveTo(0, 0); g.lineTo(0, ll * 0.42); g.stroke();
       var w = ll * rng.range(0.36, 0.50);
-      g.fillStyle = i % 2 ? 'rgb(52,76,34)' : 'rgb(70,94,40)';
+      g.fillStyle = i % 2 ? 'rgb(35,97,27)' : 'rgb(48,120,32)';
       g.beginPath();
       g.moveTo(0, ll * 0.40);
       g.bezierCurveTo(w, ll * 0.52, w * 0.92, ll * 0.94, 0, ll);
       g.bezierCurveTo(-w * 0.92, ll * 0.94, -w, ll * 0.52, 0, ll * 0.40);
       g.closePath(); g.fill();
-      g.strokeStyle = 'rgba(126,142,74,0.8)'; g.lineWidth = C * 0.007;
+      g.strokeStyle = 'rgba(86,182,59,0.8)'; g.lineWidth = C * 0.007;
       g.beginPath(); g.moveTo(0, ll * 0.40); g.lineTo(0, ll * 0.98); g.stroke();
       for (j = 1; j <= 6; j++) {
         var vt = 0.40 + (j / 7) * 0.56;
@@ -451,8 +457,8 @@
         var t2 = rng.range(0.06, 0.98);
         leafShape(g, vx + Math.sin(t2 * 9 + i) * C * 0.030 * wob, o[1] + C * t2,
           C * rng.range(0.048, 0.086), C * rng.range(0.016, 0.028),
-          rng.range(-2.4, -0.7), rng.bool(0.5) ? 'rgb(56,78,36)' : 'rgb(84,104,46)',
-          'rgba(120,138,66,0.7)');
+          rng.range(-2.4, -0.7), rng.bool(0.5) ? 'rgb(38,100,29)' : 'rgb(57,133,37)',
+          'rgba(82,177,53,0.7)');
       }
     }
 
@@ -469,7 +475,7 @@
         g.lineTo(rx, ry);
         if (rng.bool(0.75)) {
           leafShape(g, rx, ry, C * rng.range(0.036, 0.070), C * rng.range(0.014, 0.026),
-            rng.range(0, 6.28), rng.bool(0.4) ? 'rgb(48,70,32)' : 'rgb(78,100,42)', null);
+            rng.range(0, 6.28), rng.bool(0.4) ? 'rgb(33,90,26)' : 'rgb(53,128,34)', null);
         }
       }
       g.stroke();
@@ -482,13 +488,13 @@
       g.save();
       g.translate(o[0] + rng.range(C * 0.14, C * 0.86), o[1] + rng.range(C * 0.14, C * 0.86));
       g.rotate(rng.range(0, 6.28));
-      g.fillStyle = rng.bool(0.30) ? 'rgb(88,96,46)'
-        : (rng.bool(0.5) ? 'rgb(52,74,38)' : 'rgb(64,86,40)');
+      g.fillStyle = rng.bool(0.30) ? 'rgb(60,123,37)'
+        : (rng.bool(0.5) ? 'rgb(35,95,30)' : 'rgb(44,110,32)');
       g.beginPath();
       // the notch is the whole silhouette read of a lily pad
       g.arc(0, 0, pr, 0.32, Math.PI * 2 - 0.32);
       g.lineTo(0, 0); g.closePath(); g.fill();
-      g.strokeStyle = 'rgba(122,136,70,0.55)'; g.lineWidth = pr * 0.055;
+      g.strokeStyle = 'rgba(83,174,56,0.55)'; g.lineWidth = pr * 0.055;
       for (j = 0; j < 7; j++) {
         var av = 0.4 + j * 0.78;
         g.beginPath(); g.moveTo(0, 0);
@@ -502,7 +508,7 @@
     for (i = 0; i < 5; i++) {
       var lx2 = o[0] + rng.range(C * 0.20, C * 0.80);
       var ly2 = o[1] + rng.range(C * 0.22, C * 0.82);
-      g.fillStyle = 'rgb(58,80,40)';
+      g.fillStyle = 'rgb(39,102,32)';
       g.beginPath(); g.arc(lx2 + C * 0.085, ly2 + C * 0.06, C * 0.085, 0.3, 6.0); g.fill();
       for (j = 0; j < 9; j++) {
         g.save(); g.translate(lx2, ly2); g.rotate(j / 9 * 6.283);
@@ -522,7 +528,7 @@
     for (i = 0; i < 26; i++) {
       blade(g, o[0] + C * 0.5 + rng.gaussian(0, C * 0.085), o[1] + C * 0.99,
         -C * rng.range(0.42, 0.95), rng.range(-0.30, 0.30), C * rng.range(0.014, 0.024),
-        rng.bool(0.35) ? 'rgb(118,112,60)' : 'rgb(62,82,40)');
+        rng.bool(0.35) ? 'rgb(118,112,60)' : 'rgb(42,105,32)');
     }
 
     // ---- 10: dry leaf litter (ground card) -----------------------------------
@@ -561,13 +567,13 @@
       var tt = rng.range(0.10, 0.92);
       leafShape(g, o[0] + C * (0.48 + rng.gaussian(0, 0.13)), o[1] + C * (1.0 - tt * 0.86),
         C * rng.range(0.050, 0.092), C * rng.range(0.018, 0.032), rng.range(0, 6.28),
-        rng.bool(0.4) ? 'rgb(58,80,36)' : 'rgb(88,110,46)', 'rgba(126,146,70,0.6)');
+        rng.bool(0.4) ? 'rgb(39,102,29)' : 'rgb(60,141,37)', 'rgba(86,187,56,0.6)');
     }
 
     // ---- 12: moss cushion / low ground cover ---------------------------------
     o = O(12);
     for (i = 0; i < 90; i++) {
-      g.fillStyle = rng.bool(0.4) ? 'rgb(58,80,38)' : 'rgb(78,96,44)';
+      g.fillStyle = rng.bool(0.4) ? 'rgb(39,102,30)' : 'rgb(53,123,35)';
       g.beginPath();
       g.arc(o[0] + C * 0.5 + rng.gaussian(0, C * 0.20), o[1] + C * 0.72 + rng.gaussian(0, C * 0.16),
         C * rng.range(0.020, 0.060), 0, 6.283);
@@ -575,7 +581,7 @@
     }
     for (i = 0; i < 34; i++) {
       blade(g, o[0] + C * 0.5 + rng.gaussian(0, C * 0.18), o[1] + C * 0.95,
-        -C * rng.range(0.10, 0.26), rng.range(-0.7, 0.7), C * 0.012, 'rgb(96,108,50)');
+        -C * rng.range(0.10, 0.26), rng.range(-0.7, 0.7), C * 0.012, 'rgb(65,138,40)');
     }
 
     // ---- 13: hanging aerial roots --------------------------------------------
@@ -609,7 +615,7 @@
         for (j = 0; j < 5; j++) {
           leafShape(g, px3 + rng.range(-C * 0.03, C * 0.03), yy - C * rng.range(0, 0.20),
             C * rng.range(0.034, 0.062), C * rng.range(0.014, 0.024), rng.range(0, 6.28),
-            rng.bool(0.5) ? 'rgb(68,88,42)' : 'rgb(96,114,52)', null);
+            rng.bool(0.5) ? 'rgb(46,113,34)' : 'rgb(65,146,42)', null);
         }
       }
     }
@@ -627,7 +633,7 @@
         g.lineTo(fx, fy);
         if (rng.bool(0.7)) {
           leafShape(g, fx, fy, C * rng.range(0.030, 0.056), C * rng.range(0.012, 0.022),
-            rng.range(0, 6.28), 'rgb(56,78,36)', null);
+            rng.range(0, 6.28), 'rgb(38,100,29)', null);
         }
         if (rng.bool(0.10)) {
           for (var pj = 0; pj < 5; pj++) {
@@ -742,7 +748,7 @@
     g.fillStyle = grd3; g.fillRect(0, 0, C, C);
     for (i = 0; i < 24; i++) {
       g.globalAlpha = rng.range(0.06, 0.24);
-      g.fillStyle = 'rgb(44,52,38)';
+      g.fillStyle = 'rgb(30,67,30)';
       g.beginPath();
       g.arc(C * 0.5 + rng.gaussian(0, C * 0.19), C * 0.5 + rng.gaussian(0, C * 0.19),
         C * rng.range(0.02, 0.07), 0, 6.283);
@@ -1029,10 +1035,18 @@
     });
     this.mats.flame.name = 'ruinsprop_flame';
 
+    // WHITE AT 0.30 WAS FAR TOO MUCH. This is an unlit basic material, so its
+    // colour goes straight to the print: over a frame whose 99th percentile is
+    // 0.59, a white plume at 0.30 x 0.55 texture alpha rendered as a pale
+    // BLUE-WHITE COLUMN four metres tall standing in mid-air over the looters'
+    // camp - the most conspicuous thing in the hero1 framing and completely
+    // unreadable as smoke. A bed of embers under a tarp at dawn makes a thin
+    // grey thread, so the colour is now a dim warm grey and the opacity a
+    // third of what it was.
     this.mats.smoke = new THREE.MeshBasicMaterial({
-      map: this.tex.smoke || null, color: 0xffffff,
+      map: this.tex.smoke || null, color: 0x6b665c,
       transparent: true, depthWrite: false, side: THREE.DoubleSide,
-      opacity: 0.30, fog: true, toneMapped: true
+      opacity: 0.11, fog: true, toneMapped: true
     });
     this.mats.smoke.name = 'ruinsprop_smoke';
   };
@@ -1849,27 +1863,59 @@
         M.lerp(-0.235, 0.175, st), M.lerp(1.955, 1.415, st), sr + st * 0.055,
         0, 0, 0.66);
     }
-    // the roll of it over the shoulder itself
-    this.b('saffron', 0.24, 0.135, 0.27, -0.275, 1.965, -0.03, 0, 0, 0.30);
-    this.b('saffron', 0.15, 0.30, 0.10, -0.315, 1.80, 0.10, 0, 0, -0.16);
+    // THE ROLL OVER THE SHOULDER.
+    //
+    // Round two made this ONE 24 cm box with the default 1.4 cm bevel, sitting
+    // square-on to the light. At 3 m that is a flat parallelogram whose whole
+    // face takes the key at the same angle, so it had a single value across it
+    // and a terminator one pixel wide - the tell that read as a rendering
+    // fault rather than as cloth. Cloth is legible because it FOLDS: four
+    // overlapping segments, each rotated a little differently about all three
+    // axes, present four different angles to the key, so the roll carries a
+    // gradient down its length and its terminator is spread over a centimetre
+    // of geometry instead of over one pixel. The whole roll is also rotated so
+    // it takes the light at a grazing angle rather than square-on.
+    var rollN = 4;
+    for (i = 0; i < rollN; i++) {
+      var rt2 = i / (rollN - 1);
+      this.b('saffron', 0.145, 0.115 - rt2 * 0.018, 0.150,
+        M.lerp(-0.320, -0.205, rt2), M.lerp(2.000, 1.930, rt2),
+        M.lerp(-0.095, 0.055, rt2),
+        M.lerp(-0.34, 0.14, rt2), M.lerp(0.55, 0.18, rt2),
+        0.46 - rt2 * 0.30);
+    }
+    // and the end of it hanging free off the back of the shoulder, which is
+    // what gives the roll a silhouette instead of an outline
+    this.b('saffron', 0.125, 0.115, 0.090, -0.330, 1.865, -0.060, 0.12, 0.30, -0.22);
+    this.b('saffron', 0.105, 0.145, 0.070, -0.338, 1.745, -0.020, 0.20, 0.22, -0.30);
+    this.b('saffron', 0.085, 0.100, 0.055, -0.330, 1.630, 0.020, 0.28, 0.10, -0.36);
     // the robe swagged over the lap
     this.b('saffron', 1.02, 0.15, 0.62, 0, 1.215, 0.03);
     this.b('saffron', 0.90, 0.12, 0.19, 0, 1.295, 0.285, 0.22, 0, 0);
     // an offering cloth laid over the plinth top and hanging down its front.
     // z 0.605 is the only band that works: it clears the recessed course at
     // 0.57 and tucks under the oversailing one at 0.66.
-    this.b('saffron', 1.24, 0.030, 0.34, 0, 0.945, 0.48);
+    // The top run is broken into three panels with their own lie, so the
+    // horizontal face - which is the one that takes most of the skylight and
+    // was the second brightest flat plane on the statue - is not one plate at
+    // one value.
+    for (i = -1; i <= 1; i++) {
+      this.b('saffron', 0.42, 0.028, 0.33, i * 0.415, 0.947 + Math.abs(i) * 0.004,
+        0.478 + i * 0.006, i * 0.035, i * 0.05, i * 0.028);
+    }
     var fw = [0.21, 0.14, 0.25, 0.12, 0.20, 0.16, 0.22];
     var fx0 = -0.66;
     for (i = 0; i < fw.length; i++) {
       var fd = 0.20 + (i % 3) * 0.09;
+      // each fold leans a little differently in Z as well as Y - a fold that
+      // only varies in width still presents one flat plane to the key
       this.b('saffron', fw[i], fd, 0.045,
         fx0 + fw[i] * 0.5, 0.935 - fd * 0.5, 0.605 + (i % 2) * 0.016,
-        0.03, 0, (i - 3) * 0.016);
+        0.03, (i - 3) * 0.055, (i - 3) * 0.030);
       // the hem, ragged and lifting off the stone
       this.b('saffron', fw[i] * 0.92, 0.065, 0.042,
         fx0 + fw[i] * 0.5, 0.935 - fd - 0.02, 0.615 + (i % 2) * 0.016,
-        0.15, 0, (i - 3) * 0.028);
+        0.15, (i - 3) * 0.070, (i - 3) * 0.045);
       fx0 += fw[i] + 0.006;
     }
     this.wear = null;
@@ -2760,7 +2806,7 @@
     this.mark(0, cx, cz, 2.6, 2.4, 0.4, { grime: 1, wet: 0.9, edge: 1 });
     this.smokeEmitters.push({
       position: new THREE.Vector3(cx, gy + 1.15, cz),
-      opts: { rate: 0.7, size: 0.42, rise: 0.30 }
+      opts: { rate: 0.7, size: 0.24, rise: 0.30 }
     });
 
     // ---- the bedroll and a folded blanket under the tarp -------------------
