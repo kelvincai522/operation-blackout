@@ -97,6 +97,24 @@ ARCHITECTURE.md         the contract the 14 modules were built against
 ART_DIRECTION.md        the single image every module converges on (level 1)
 ART_DIRECTION_HARBOR.md  the same, for level 2
 DEVELOPMENT.md          how to extend this without breaking it
+docs/technical-writeup.html  self-contained technical write-up (open in a browser)
+```
+
+## Technical write-up
+
+[docs/technical-writeup.html](docs/technical-writeup.html) is a full write-up of
+the architecture, the rationale for generating every asset from code, the
+agent-orchestration methodology, the verification tooling, six case-study bugs,
+and where the technique does and does not transfer to other projects.
+
+It is a **single self-contained file** with every image and animated demo
+embedded as a data URI — no external requests, the same property the game has.
+Open it directly in a browser.
+
+Rebuild it after editing the prose in `docs/writeup.src.html`:
+
+```bash
+python tools/build_writeup.py
 ```
 
 ## Contributing

@@ -27,5 +27,5 @@ __pycache__/
 Thumbs.db
 desktop.ini
 
-# Intermediate JPEGs generated only for document embedding.
-docs/embed/
+# docs/embed/ holds the source media for tools/build_writeup.py and IS tracked,
+# so the self-contained write-up can be rebuilt from a clean clone.
