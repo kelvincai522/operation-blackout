@@ -539,6 +539,23 @@
     return out;
   }
 
+  // Collapse debris, which is a different animal from a prop that has merely
+  // got dirty. B = 1 is deliberate and it is the whole fix: the B channel is
+  // EDGE WEAR and materials.js blends it toward a pale substrate, so the
+  // default jitter was quietly lightening every chunk, panel and tile shard in
+  // the rubble field until they photographed brighter than the deck they were
+  // lying on - 46 chamfered cubes reading as polystyrene packaging. A slab that
+  // came off a vault a decade ago and has been under water since is silted (low
+  // R), soaked (low G) and has no bright edges at all (B = 1).
+  var _dbg = new THREE.Color();
+  function debrisTint(rng) {
+    _dbg.setRGB(
+      0.40 + rng.range(0, 0.16),
+      0.46 + rng.range(0, 0.20),
+      0.96 + rng.range(0, 0.04));
+    return _dbg;
+  }
+
   // ==========================================================================
   // Local texture kit.
   //
@@ -1487,6 +1504,133 @@
     return it;
   };
 
+  // ---- the obstructions ----------------------------------------------------
+  // The 5 m walking corridor down 70 m of deck was completely bare: everything
+  // _dressPlatform placed sat at backZ +/- 0.36, hard against the pier line, so
+  // the level's own brief ("tight sightlines, hard corners") had not one
+  // sightline break, one piece of cover or one thing to flank around on it -
+  // and the firefight framing put an enemy upright in the open with nothing to
+  // use. These four are staged ACROSS the walking line, not against a wall.
+
+  // A platform advertising hoarding that has come off the arcade and fallen.
+  // Authored already toppled - the tilt is in the geometry, not in a placement
+  // euler - so its feet are on the deck and its top edge is 1.5 m up.
+  K.hoarding = function (N, R) {
+    var it = new Item();
+    // 66 degrees off vertical, i.e. very nearly FLAT. At the 35 degrees the
+    // first version used, the board's wide faces were near-vertical, so from
+    // the overview gallery - which looks down the hall from 5.6 m up, the one
+    // framing this prop exists for - all that was in shot was its blank back
+    // edge, and it photographed as a black slab lying on the deck. Nearly flat,
+    // its advertising face is what the camera sees, and the poster is authored
+    // ON that face rather than hoped for.
+    var W = 3.10, H = 2.05, tilt = 0.96;
+    var ct = Math.cos(tilt), st = Math.sin(tilt);
+    var s, i;
+    // the board, buckled: five strakes each with its own small break
+    for (i = 0; i < 5; i++) {
+      var v = (i + 0.5) / 5 - 0.5;
+      var by = 0.06 + (v + 0.5) * H * ct;
+      var bz = (v + 0.5) * H * st;
+      it.boxR('cream', W - Math.abs(v) * 0.10, 0.030, H / 5 + 0.01,
+        R ? R.range(-0.03, 0.03) : 0, by, bz,
+        -(Math.PI * 0.5 - tilt) + (R ? R.range(-0.03, 0.03) : 0), 0, 0);
+    }
+    // ---- the advertising face -------------------------------------------
+    // The board's outward normal is (0, sin tilt, -cos tilt); a card built
+    // facing +Z reaches it with a single rotation of (tilt - PI) about X, and
+    // its own +Y then runs (0, -cos tilt, -sin tilt), which is what the centring
+    // offset below undoes. Authored inside the item so the poster can never
+    // drift off the board.
+    var cw = W - 0.42, chh = H - 0.36;
+    var uvp = cellUV(0);
+    it.add('poster', card(cw, chh, uvp[0], uvp[1], uvp[2], uvp[3]),
+      Tn(0.02,
+        0.06 + 0.5 * H * ct + st * 0.024 + ct * chh * 0.5,
+        0.5 * H * st - ct * 0.024 + st * chh * 0.5,
+        tilt - Math.PI, 0, 0));
+    // the angle-iron frame behind it, bent at one corner
+    for (s = -1; s <= 1; s += 2) {
+      it.strut('rust', s * (W * 0.5 - 0.06), 0.04, 0.0,
+        s * (W * 0.5 - 0.10), 0.06 + H * ct, H * st, 0.055, 0.055);
+    }
+    it.strut('rust', -W * 0.5 + 0.06, 0.06 + H * ct * 0.55, H * st * 0.55,
+      W * 0.5 - 0.06, 0.06 + H * ct * 0.55, H * st * 0.55, 0.045, 0.045);
+    // the two legs it was standing on, sheared off at the base
+    for (s = -1; s <= 1; s += 2) {
+      it.strut('rust', s * (W * 0.5 - 0.30), 0.02, 0.02,
+        s * (W * 0.5 - 0.44), 0.30, -0.34, 0.05, 0.05);
+    }
+    // the light fitting that was inside it, hanging out on its flex
+    it.box('steel', 1.10, 0.09, 0.14, -0.55, 0.08 + H * ct * 0.92, H * st * 0.92);
+    it.sag('cable', -1.05, 0.08 + H * ct * 0.92, H * st * 0.92,
+      -1.45, 0.16, H * st * 0.55, 0.26, 0.020, 5);
+    return it;
+  };
+
+  // A section of vault soffit panel still hanging by two of its hangers, at
+  // chest height. The one obstruction in the level you have to duck under.
+  K.hangPanel = function (N, R, drop) {
+    var it = new Item();
+    drop = drop || 3.2;
+    var W = 2.30, D = 1.45;
+    var i;
+    // ---- BOXES, NOT A SHEET ------------------------------------------------
+    // The first version used sheet(), which is a single-sided surface with its
+    // normals up. Hanging at chest height it is seen from BELOW, so the panel
+    // itself never drew and all that reached the frame was its two perimeter
+    // tees - two bright straight bars floating in mid air with a black cable
+    // slung between them, which is the "boxes standing in for objects" failure
+    // with the boxes missing. Six bent strakes are closed solids: they read
+    // from any side, they buckle, and the buckle is the whole silhouette.
+    for (i = 0; i < 6; i++) {
+      var v = (i + 0.5) / 6 - 0.5;                       // -0.42 .. 0.42
+      var sag = -0.16 * Math.cos(v * Math.PI);           // the panel's own dish
+      it.boxR('steel', W - Math.abs(v) * 0.22, 0.022, D / 6 + 0.012,
+        (R ? R.range(-0.02, 0.02) : 0), sag, v * D,
+        v * 0.62, (R ? R.range(-0.02, 0.02) : 0), (R ? R.range(-0.03, 0.03) : 0));
+    }
+    // the perimeter tee the panel was clipped into, twisted. Thin, and RUST -
+    // as painted steel these read as two lit rails and out-competed the panel.
+    it.strut('rust', -W * 0.5, -0.14, -D * 0.5, W * 0.5, -0.02, -D * 0.5 + 0.10, 0.022, 0.030);
+    it.strut('rust', -W * 0.5, -0.20, D * 0.5, W * 0.5, -0.10, D * 0.5 - 0.08, 0.022, 0.030);
+    // a torn corner, folded right back on itself
+    it.boxR('steel', 0.62, 0.020, 0.48, W * 0.42, 0.06, -D * 0.34, -0.9, 0.4, 0.25);
+    // the two hangers that held, and two cut ends that did not
+    for (i = -1; i <= 1; i += 2) {
+      it.tube('rust', 0.010, i * (W * 0.42), -0.02, i * (D * 0.30), i * (W * 0.42) + 0.12,
+        drop, i * (D * 0.30) - 0.10, 5);
+      it.tube('rust', 0.010, i * (W * 0.30), -0.04, -i * (D * 0.36),
+        i * (W * 0.30) + 0.06, 0.38, -i * (D * 0.36) + 0.14, 5);
+    }
+    // cable that came down with it, still looped over the tee
+    it.sag('cable', -W * 0.42, -0.02, -D * 0.20, W * 0.30, -0.06, D * 0.24, 0.55, 0.020, 6);
+    return it;
+  };
+
+  // A barricade of platform seats: somebody dragged four benches into a line
+  // across the deck and stacked two of them. Cover, and a story.
+  K.seatStack = function (N, R) {
+    var it = new Item();
+    var b = K.bench(N, R);
+    var keys = b.keys(), k, i;
+    var LAY = [
+      [-1.05, 0.0, 0.02, 0.06], [0.95, 0.0, -0.05, -0.04],
+      [-0.55, 0.50, 1.62, 0.10], [0.60, 0.52, 1.58, -0.09]
+    ];
+    for (i = 0; i < LAY.length; i++) {
+      var base = Tn(LAY[i][0], LAY[i][1], LAY[i][3] * 0.4, LAY[i][3] * 0.5, LAY[i][2], 0);
+      for (k = 0; k < keys.length; k++) {
+        var list = b.buckets[keys[k]];
+        for (var q = 0; q < list.length; q++) {
+          it.add(keys[k], list[q].geometry,
+            new THREE.Matrix4().multiplyMatrices(base, list[q].matrix));
+        }
+      }
+    }
+    return it;
+  };
+
   K.ladder = function (h) {
     var it = new Item();
     h = h || 2.6;
@@ -1806,6 +1950,10 @@
     // platform meant the pump and the tower simply never landed.
     await this._phase('worksite', this._dressWorkSite);
     await this._phase('platform', this._dressPlatform);
+    // The staged obstructions go in BEFORE the signage and after the platform
+    // furniture: they need the walking line clear of the pier-line dressing but
+    // they must claim their footprint before the litter drifts are scattered.
+    await this._phase('obstructions', this._dressObstructions);
     await this._phase('signage', this._dressSignage);
     await this._phase('wreck', this._dressWreck);
     await this._phase('tracks', this._dressTrackHalls);
@@ -1918,27 +2066,43 @@
     var SUB_DIELECTRIC = 0x8d8a80;
     var SUB_TIMBER = 0x6b6459;
 
-    // ---- METALNESS IS CAPPED LOW, AND IT IS NOT AN ARTISTIC CHOICE ---------
-    // A metal returns almost nothing but its environment, and this level has no
-    // environment: sky is 'none', the probe irradiance is about 0.02, and every
-    // photon comes from a handful of small local sources.  The first capture ran
-    // painted steel at metalness 0.55 and every turnstile, barrier and cabinet
-    // in the ticket hall photographed as a black block with no readable form at
-    // all.  Dropping metalness to 0.2-0.3 hands the surface back to the diffuse
-    // term, which the practicals CAN light.  This is the underground inverse of
-    // the harbour, where a sky and SSR make high metalness free.
+    // ---- ONE HONEST SET OF METALS, SHARED WITH level_metro.js -------------
+    // The previous pass capped every metal here at 0.18-0.26 because the sealed
+    // probe left a conductor with nothing to return, and the LEVEL meanwhile
+    // ran the same families at 0.62-0.90 - so in hero1 the scaffold (this file)
+    // and the train (that one) stood a metre apart with two different, both
+    // wrong, metal responses.  0.2-0.3 is the worst of the two: it is neither
+    // dielectric nor conductor and always photographs as plastic.
+    //
+    // level_metro.js now raises scene.environmentIntensity 5x in its update, so
+    // a conductor HAS something to return, and both files sit on one split:
+    //     painted enamel -> metalness 0.0, roughness 0.40-0.45
+    //     bare / galvanised / oxidised steel -> 0.85-0.90, roughness 0.55-0.75
+    // Nothing in between.
+    //
+    // normalScale is also pulled back across the set.  With the probe raised,
+    // every library bump detail became its own specular glint: the 0.58 m drum
+    // in the hero1 foreground photographed as a chocolate-chip log and the
+    // barrier rail beside the rubble as coral.  A prop under a metre across is
+    // carried by its silhouette and its specular streak, not by its bump.
     m.steel = this._material('painted_metal',
-      W({ albedoTarget: 0x8d9498, roughness: 0.48, metalness: 0.26 }));
+      W({ albedoTarget: 0x8d9498, roughness: 0.44, metalness: 0.0,
+        normalScale: 0.42, envMapIntensity: 1.15, detail: 0.36, meso: 0.35 }));
     m.rust = this._material('rusted_metal',
-      W({ albedoTarget: 0x76503c, roughness: 0.80, metalness: 0.18 }));
+      W({ albedoTarget: 0x76503c, roughness: 0.80, metalness: 0.86,
+        normalScale: 0.58, envMapIntensity: 1.30, detail: 0.42, meso: 0.40 }));
     m.wood = this._material('wood_plank',
-      W({ albedoTarget: 0x6d6053, roughness: 0.93, wearColor: SUB_TIMBER }));
+      W({ albedoTarget: 0x6d6053, roughness: 0.93, wearColor: SUB_TIMBER,
+        normalScale: 0.72, detail: 0.50 }));
     m.concrete = this._material('concrete',
-      W({ albedoTarget: 0x8a877e, roughness: 0.94, wearColor: SUB_DIELECTRIC }));
+      W({ albedoTarget: 0x7a7770, roughness: 0.94, wearColor: SUB_DIELECTRIC,
+        normalScale: 0.70, detail: 0.45, meso: 0.40 }));
     m.tile = this._material('tile',
-      W({ albedoTarget: 0xa4a496, roughness: 0.40, wearColor: SUB_DIELECTRIC }));
+      W({ albedoTarget: 0xa4a496, roughness: 0.40, wearColor: SUB_DIELECTRIC,
+        normalScale: 0.46, detail: 0.38 }));
     m.plastic = this._material('plastic',
-      W({ albedoTarget: 0x8a8578, roughness: 0.56, wearColor: SUB_DIELECTRIC }));
+      W({ albedoTarget: 0x8a8578, roughness: 0.56, wearColor: SUB_DIELECTRIC,
+        normalScale: 0.40, detail: 0.34 }));
     m.rubber = this._material('rubber',
       W({ albedoTarget: 0x2b2d2e, roughness: 0.86 }));
     m.cable = this._material('rubber',
@@ -1953,18 +2117,19 @@
     // exactly those three is what ties them to the station's own dado band
     // instead of introducing a second, unrelated colour story.
     m.green = this._material('painted_metal',
-      W({ albedoTarget: 0x5a6a4c, roughness: 0.62, metalness: 0.10 }));
+      W({ albedoTarget: 0x5a6a4c, roughness: 0.60, metalness: 0.0, normalScale: 0.40, detail: 0.32 }));
     m.red = this._material('painted_metal',
-      W({ albedoTarget: 0x974032, roughness: 0.58, metalness: 0.10 }));
+      W({ albedoTarget: 0x8a3a2c, roughness: 0.56, metalness: 0.0, normalScale: 0.40, detail: 0.32 }));
     m.cream = this._material('painted_metal',
-      W({ albedoTarget: 0xbcb59f, roughness: 0.54, metalness: 0.06 }));
+      W({ albedoTarget: 0xa79f8b, roughness: 0.52, metalness: 0.0, normalScale: 0.40, detail: 0.32 }));
     // Hazard orange, and the only warm saturated thing on the platform.  In a
     // hall lit entirely by green fluorescents and red emergency gear it is what
     // separates "somebody cordoned this off" from "there is rubbish here" - and
     // a grey cone under a green tube photographs as a lump of concrete, which
     // is what the first capture came back with.
     m.orange = this._material('plastic',
-      W({ albedoTarget: 0x9c4a1e, roughness: 0.58, wearColor: 0xc0b6a2 }));
+      W({ albedoTarget: 0x9c4a1e, roughness: 0.58, wearColor: 0xc0b6a2,
+        normalScale: 0.38 }));
     // Pale worn strap plastic.  The saloon's whole upper half is black - its
     // only sources are two emissive ceiling runs that light nothing - and the
     // straps are the only props up there, so they are the only thing that can
@@ -1986,18 +2151,30 @@
     }
 
     // ---- local canvas art ---------------------------------------------------
+    // ---- ONE-SIDED, AND THAT IS THE POINT ---------------------------------
+    // Both of these were DoubleSide, so a plate whose quad had been oriented
+    // from the wrong wall normal did not fail - it quietly printed its legend
+    // MIRRORED, and at least one of them did exactly that in a published hero
+    // frame.  The invented twelve-glyph alphabet exists specifically to avoid a
+    // font lottery, and a Soviet-era metro sign that reads as garbled backwards
+    // English is a worse failure than tofu boxes would have been.
+    //
+    // FrontSide makes the defect loud: a wrong-facing plate disappears, which
+    // shows up in a capture immediately.  Every call site now goes through
+    // _wallCard(), which takes the wall's outward normal rather than a yaw, and
+    // every one of them was re-derived from the surface it is pasted to.
     m.poster = new THREE.MeshStandardMaterial({
       map: this.tex.poster || null, color: 0xffffff,
       roughness: 0.88, metalness: 0.0, vertexColors: true,
-      side: THREE.DoubleSide, alphaTest: 0.34, envMapIntensity: 0.9,
+      side: THREE.FrontSide, alphaTest: 0.34, envMapIntensity: 0.9,
       polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3
     });
     m.poster.name = 'mt_poster';
 
     m.sign = new THREE.MeshStandardMaterial({
       map: this.tex.sign || null, color: 0xffffff,
-      roughness: 0.44, metalness: 0.22, vertexColors: true,
-      side: THREE.DoubleSide, alphaTest: 0.34, envMapIntensity: 1.1,
+      roughness: 0.44, metalness: 0.0, vertexColors: true,
+      side: THREE.FrontSide, alphaTest: 0.34, envMapIntensity: 1.15,
       polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3
     });
     m.sign.name = 'mt_sign';
@@ -2330,11 +2507,26 @@
 
   // A poster or an enamel plate on a wall.  `nx/nz` is the outward normal of
   // the wall it is pasted to.
+  //
+  // ORIENTATION COMES FROM THE WALL NORMAL, NEVER FROM A YAW.  card() builds
+  // its quad facing local +Z, and yaw = atan2(nx, nz) maps local +Z onto
+  // (nx, nz) exactly - so as long as the caller hands over the OUTWARD normal
+  // of the surface it is pasting to, the legend can only ever face out of the
+  // wall.  The normal is normalised here rather than trusted, because a caller
+  // that passes (0, -s) with s already negative used to produce a plate facing
+  // INTO the masonry, which under the old DoubleSide material printed as
+  // mirrored text instead of disappearing.  It now disappears, loudly.
   PropsMetro.prototype._poster = function (kind, cell, x, y, z, nx, nz, w, h, tilt, pitch) {
+    var len = Math.sqrt(nx * nx + nz * nz);
+    if (!(len > 1e-4)) return;
+    nx /= len; nz /= len;
     var uv = cellUV(cell);
     var g = card(w, h, uv[0], uv[1], uv[2], uv[3]);
     var yaw = Math.atan2(nx, nz);
-    this._static(kind, g, Tn(x, y - h * 0.5, z, pitch || 0, yaw, tilt || 0));
+    // stand the plate off the wall along its own normal, so a 1.5 cm authored
+    // offset cannot be swallowed by a settled or jittered surface
+    this._static(kind, g,
+      Tn(x + nx * 0.012, y - h * 0.5, z + nz * 0.012, pitch || 0, yaw, tilt || 0));
   };
 
   // A stain card.  `cell`: 0 rust weep, 1 water streak, 2 soot, 3 mould.
@@ -2384,9 +2576,37 @@
   // the AO channel, and paint the wear mask.  Every instanced prop goes through
   // here so density does not visibly jump between a 0.1 m tile shard and a
   // 2.4 m kiosk - the tell that a prop set was authored piecemeal.
+  // TEXEL DENSITY IS DRIVEN BY THE PROP'S OWN SIZE, not by a constant.
+  //
+  // Every instanced prop used to ask for a flat 500 texels/m regardless of what
+  // it was, which is a reasonable number for a 1-2 m object and wrong at both
+  // ends. At 500 the library's mineral and metal detail lands at roughly 3 cm
+  // features in world space: on the 0.58 m drum in the hero1 foreground that is
+  // hemispherical popcorn - it photographed as a chocolate-chip log - and on
+  // the barrier rail beside the rubble it reads as coral. On a 3 m panel the
+  // same density is too fine to register at all and just costs shimmer.
+  // Hand-sized objects want the detail small (high texels/m), big flat ones
+  // want it coarse (low), and the number is now solved off the bounding box.
+  function texelsForSize(size) {
+    if (!(size > 0)) return 500;
+    if (size >= 2.4) return 240;
+    if (size >= 1.2) return 340;
+    if (size >= 0.7) return 520;
+    if (size >= 0.35) return 800;
+    return 1150;
+  }
+
   PropsMetro.prototype._finishGeo = function (geo, matName, wear, texels, keepUV) {
     if (!geo) return null;
     if (!keepUV) {
+      if (texels === undefined) {
+        try {
+          geo.computeBoundingBox();
+          var bb = geo.boundingBox;
+          texels = texelsForSize(Math.max(bb.max.x - bb.min.x,
+            Math.max(bb.max.y - bb.min.y, bb.max.z - bb.min.z)));
+        } catch (eb) { texels = 500; }
+      }
       try { Geo.worldUV(geo, this._uvScale(matName, texels)); } catch (e) { /* keep builder uv */ }
     }
     Geo.copyUV1(geo);
@@ -2796,9 +3016,48 @@
         if (s < 0 && Math.abs(px - wreckX) < 7.0) continue;
         var fz = s * (backZ - 0.36);
         var faceYaw = (s > 0) ? 0 : Math.PI;      // bench back to the pier
-        var kind = (i * 3 + (s > 0 ? 1 : 0)) % 5;
+        // ---- BREAK THE RHYTHM --------------------------------------------
+        // `(i*3 + s) % 5` over ten piers repeats EXACTLY every five, so the
+        // dressing that existed read as a pattern rather than as forty years of
+        // accumulation. A 7-long table over 10 piers never closes, and two bays
+        // are then made genuinely anomalous rather than being another cycle
+        // value: bay 4 north is stripped completely bare (the furniture went out
+        // when the station closed) and bay 7 south is buried under a stack that
+        // somebody piled two courses high and left.
+        var VAR = [0, 3, 1, 4, 2, 0, 3];
+        var kind = VAR[(i * 3 + (s > 0 ? 1 : 0)) % 7];
+        if (s < 0 && i === 4) { kind = -1; }         // stripped bare
+        if (s > 0 && i === 7) { kind = 9; }          // buried
 
-        if (kind === 0 || kind === 3) {
+        if (kind === -1) {
+          // the bare bay: nothing but the ghost of what stood here - four rust
+          // stains where a bench was bolted down, and the clean rectangle the
+          // grime never reached
+          for (var gk = 0; gk < 4; gk++) {
+            this._stain(0, px - 0.85 + (gk & 1) * 1.70, this._ground(px, fz) + 0.006,
+              s * (backZ - 0.42) + ((gk >> 1) ? 0.26 : -0.26),
+              0.16, 0.16, 0, 1, 0, R.range(0, TAU));
+          }
+        } else if (kind === 9) {
+          // the buried bay: two courses of crates, drums on top, sandbags at the
+          // foot, everything the gang cleared out of the cross passage
+          var buY = this._ground(px, fz);
+          for (var bk = 0; bk < 5; bk++) {
+            var bxx = px - 1.5 + bk * 0.78;
+            this._drop(this.B.crate, bxx, s * (backZ - 0.44), {
+              r: 0.36, yaw: faceYaw + R.range(-0.3, 0.3), tilt: 0.02, noClear: true,
+              collider: [0.40, 0.26, 0.30], material: 'wood'
+            });
+            if (R.bool(0.75)) {
+              this._drop(this.B.crate, bxx + R.range(-0.12, 0.12), s * (backZ - 0.44),
+                { y: buY + 0.50, r: 0.28, yaw: faceYaw + R.range(-0.7, 0.7), tilt: 0.04,
+                  noClear: true, halo: false });
+            }
+          }
+          this._drop(this.B.drum, px + 1.55, s * (backZ - 0.52), { r: 0.44, tilt: 0.03 });
+          this._drop(this.B.drum, px - 1.85, s * (backZ - 0.60), { r: 0.44, tilt: 0.06 });
+          this._sandbagStack(px + 0.2, s * (backZ - 1.15), 0, 4, 2, 0.16);
+        } else if (kind === 0 || kind === 3) {
           // bench, backed against the pier
           var bz = s * (backZ - 0.42);
           if (this._drop(this.B.bench, px + R.range(-0.25, 0.25), bz, {
@@ -2875,6 +3134,88 @@
     this._drop(this.B.drum, wx + 0.9, -2.6, { r: 0.44, tilt: 0.05 });
   };
 
+  // ---- THE WALKING LINE -----------------------------------------------------
+  // Four staged obstructions ACROSS the corridor, at four different heights and
+  // four different reads: something to walk round (the hoarding), something to
+  // duck under (the panel), something to vault (the trolley) and something to
+  // shoot over (the seat barricade). Every one is placed against a published
+  // anchor - a pier centre, the collapse edge, the kiosk line - never against a
+  // camera pose, and every one carries a real collider so the AI has to path
+  // round it and the player can actually use it.
+  PropsMetro.prototype._dressObstructions = function () {
+    var R = this.rng, i;
+    var backZ = this.plat.backZ;
+    var N = this.noise;
+
+    // 1. THE TOPPLED HOARDING, mid-hall on the walking line, lying across the
+    //    corridor at 40 degrees to the platform axis with its top edge 1.5 m up.
+    //    It is the overview's foreground and the first thing that breaks the
+    //    70 m of empty deck the establishing frame used to photograph.
+    var hx = 16.60, hz = -0.90;
+    var hy = this._ground(hx, hz);
+    // Yawed so the advertising face looks EAST, up the overview's cone. hero1
+    // and the overview read this hall from opposite ends, and a fallen board is
+    // one-sided, so it has to pick: at 11.7 m from the gallery it is the
+    // establishing frame's foreground, and at 31 m from the hero1 stand it is a
+    // silhouette either way.
+    this._place(K.hoarding(N, R), hx, hy, hz, 0.72 + Math.PI);
+    this._collider(hx, hy, hz, [1.55, 0.48, 1.05], 0.72, 'metal');
+    this._occupy(hx, hz, 1.8);
+    this._drop(this.B.chunk, hx + 1.6, hz + 1.1, { r: 0.3, scale: 1.1 });
+    this._drift(hx - 1.1, hz + 1.4, 6, 1.0);
+
+    // 2. A second hoarding at the west end, still on its feet but leaning on the
+    //    pier line, so the west third has a vertical in it too.
+    var wx2 = -24.60, wz2 = 1.55;
+    var wy2 = this._ground(wx2, wz2);
+    this._place(K.hoarding(N, R), wx2, wy2, wz2, -2.35);
+    this._collider(wx2, wy2, wz2, [1.30, 0.80, 0.90], -2.35, 'metal');
+    this._occupy(wx2, wz2, 1.7);
+
+    // 3. THE HANGING PANEL, just west of the collapse edge, at chest height on
+    //    two surviving hangers. hero1's mid-ground gets a real sightline break
+    //    5.4 m in front of the eye instead of an uninterrupted run to the wreck.
+    // Set 2.1 m off the hall centre line, deliberately: at z = -1.3 it hung
+    // dead across the hero1 axis and occluded the cab end - the level's own
+    // subject - which is a worse defect than the bare corridor it was fixing.
+    // From here it is a foreground element 18 degrees left of the crosshair.
+    var px2 = this.collapse.x0 - 2.10, pz2 = -2.90;
+    var py2 = this._ground(px2, pz2) + 1.42;
+    this._place(K.hangPanel(N, R, this.hall.crown - py2 - 0.25), px2, py2, pz2, -0.42);
+    this._collider(px2, py2 - 0.30, pz2, [1.15, 0.34, 0.80], -0.42, 'metal');
+    this._occupy(px2, pz2, 1.4);
+    // and what fell out of the void it left
+    for (i = 0; i < 5; i++) {
+      this._drop(this.B.chunk, px2 + R.gaussian(0, 0.9), pz2 + R.gaussian(0, 0.7),
+        { r: 0.22, scale: R.range(0.6, 1.2), noClear: true });
+    }
+    this._stain(1, px2, this._ground(px2, pz2) + 0.006, pz2, 2.4, 2.0, 0, 1, 0, 0.4);
+
+    // 4. THE STALLED WORKS TROLLEY with its cable drum, half way between the
+    //    wreck and the kiosk, parked across the line where it stopped.
+    var tx2 = 2.60, tz2 = 1.85;
+    var ty2 = this._ground(tx2, tz2);
+    this._place(K.trolley(), tx2, ty2, tz2, 1.28);
+    this._collider(tx2, ty2, tz2, [0.62, 0.48, 0.42], 1.28, 'metal');
+    this._occupy(tx2, tz2, 1.1);
+    this._drop(this.B.reel, tx2 - 0.35, tz2 + 0.20, { r: 0.62, y: ty2 + 0.32,
+      yaw: 1.28, tilt: 0.02, noClear: true, halo: false });
+    this._drop(this.B.bucket, tx2 + 1.05, tz2 - 0.55, { r: 0.26, tilt: 0.18, yaw: 0.9 });
+    this._place(K.hoseCoil(), tx2 - 1.35, this._ground(tx2 - 1.35, tz2 - 0.9), tz2 - 0.9, 0.4);
+
+    // 5. THE SEAT BARRICADE. Four benches dragged off the pier line and stacked
+    //    two high across the corridor - waist-high hard cover in the middle of
+    //    the deck, which is what the firefight framing had none of.
+    var sx2 = 8.60, sz2 = -1.35;
+    var sy2 = this._ground(sx2, sz2);
+    this._place(K.seatStack(N, R), sx2, sy2, sz2, 1.62);
+    this._collider(sx2, sy2, sz2, [0.55, 0.52, 1.15], 1.62, 'wood');
+    this._occupy(sx2, sz2, 1.6);
+    this._drop(this.B.crate, sx2 - 0.30, sz2 + 1.55, { r: 0.5, yaw: 1.5, tilt: 0.03,
+      collider: [0.40, 0.26, 0.30], material: 'wood' });
+    this._drift(sx2 + 0.7, sz2 - 1.3, 5, 0.9);
+  };
+
   // ---- signage, the kiosk and the fixed wall furniture ----------------------
   PropsMetro.prototype._dressSignage = function () {
     var R = this.rng;
@@ -2890,12 +3231,19 @@
         if (s < 0 && this.brokenX.indexOf(px) >= 0) continue;
         var fz = s * (backZ - 0.015);
         var nz = -s;
-        if (R.bool(0.62)) {
+        // level_metro.js hangs the illuminated STATION NAME PLATE on the south
+        // faces of piers -3 and +9, sized so the invented letterforms resolve
+        // in the hero1 and overview cones. A random paste-up over the top of it
+        // is the one thing that would throw that away, so those two faces are
+        // reserved. The stains below still run - a lit plate on a clean pier
+        // would be the odd one out.
+        var reserved = (s > 0 && (Math.abs(px + 3) < 0.01 || Math.abs(px - 9) < 0.01));
+        if (!reserved && R.bool(0.62)) {
           this._poster('poster', R.int(0, 3), px + R.range(-0.55, 0.55),
             platY + R.range(1.55, 1.95), fz, 0, nz,
             R.range(0.80, 1.05), R.range(1.10, 1.45), R.range(-0.03, 0.03));
         }
-        if (R.bool(0.30)) {
+        if (!reserved && R.bool(0.30)) {
           this._poster('sign', R.int(0, 3), px + R.range(-0.5, 0.5),
             platY + R.range(2.45, 2.75), fz, 0, nz,
             R.range(0.55, 0.80), R.range(0.28, 0.40), R.range(-0.02, 0.02));
@@ -2977,7 +3325,8 @@
       if (Math.abs(pzp) > this.plat.hz - 0.3) continue;
       this._drop(this.B.panel, pxp, pzp, {
         r: 0.42, yaw: R.range(0, TAU), tilt: 0.22 + t * 0.35,
-        scale: R.range(0.75, 1.25), halo: false, lens: true, noClear: true
+        scale: R.range(0.75, 1.25), halo: false, lens: true, noClear: true,
+        color: debrisTint(R)
       });
     }
     // panels still hanging off the vault edge, folded down
@@ -2992,7 +3341,7 @@
     for (i = 0; i < 16; i++) {
       this._drop(this.B.rebar, cx + R.gaussian(0, 3.0), cz + R.gaussian(0, 1.7), {
         r: 0.30, yaw: R.range(0, TAU), tilt: 0.30, scale: R.range(0.7, 1.4),
-        halo: false, noClear: true, lens: true
+        halo: false, noClear: true, lens: true, color: debrisTint(R)
       });
     }
     for (i = 0; i < 22; i++) {
@@ -3000,7 +3349,7 @@
       if (Math.abs(qz) > this.plat.hz - 0.2) continue;
       this._drop(this.B.chunk, qx, qz, {
         r: 0.22, yaw: R.range(0, TAU), tilt: 0.5, scale: R.range(0.5, 1.4),
-        halo: false, noClear: true, lens: true
+        halo: false, noClear: true, lens: true, color: debrisTint(R)
       });
     }
     // and the tile that came off the two piers the car demolished
@@ -3009,7 +3358,7 @@
       if (Math.abs(tz2) > this.plat.hz - 0.15) continue;
       this._drop(this.B.shard, tx2, tz2, {
         r: 0.04, yaw: R.range(0, TAU), tilt: 0.35, scale: R.range(0.7, 1.6),
-        halo: false, noClear: true, lens: true
+        halo: false, noClear: true, lens: true, color: debrisTint(R)
       });
     }
     // glass out of the cab, thrown forward of the nose
@@ -3718,6 +4067,19 @@
   // The card buckets author their own UVs into an atlas; re-projecting them
   // with worldUV would sample the whole sheet across one poster.
   var STATIC_CARD = { poster: 1, sign: 1, stain: 1 };
+  // Per-material texel density for the merged one-offs. These batches are in
+  // WORLD space and hold a mix of sizes, so they cannot be solved off a
+  // bounding box the way the instanced kit is - but they are not a mix of
+  // KINDS: `rust` is almost entirely scaffold tube, ladder stile, handrail and
+  // bracket, i.e. thin members whose whole read is silhouette plus a specular
+  // streak, and at the old flat 500 the library's 3 cm metal detail put one
+  // hemispherical bump across a 26 mm tube and made it shimmer along its
+  // length. Denser detail on the thin families, coarser on the big flat ones.
+  var STATIC_TEXELS = {
+    rust: 900, steel: 620, cable: 900, rubber: 900, grate: 700,
+    concrete: 300, wood: 480, tile: 900, plastic: 700, glass: 800,
+    red: 620, green: 560, cream: 620, fabric: 420
+  };
 
   PropsMetro.prototype._commit = function () {
     var key, i;
@@ -3749,8 +4111,10 @@
       if (!geo) continue;
       var isCard = !!STATIC_CARD[key];
       if (!isCard) {
-        try { Geo.worldUV(geo, this._uvScale(STATIC_UV[key] || 'painted_metal', 500)); }
-        catch (e) { /* keep the builder's uv */ }
+        try {
+          Geo.worldUV(geo, this._uvScale(STATIC_UV[key] || 'painted_metal',
+            STATIC_TEXELS[key] || 500));
+        } catch (e) { /* keep the builder's uv */ }
       }
       Geo.copyUV1(geo);
       if (isCard) {
