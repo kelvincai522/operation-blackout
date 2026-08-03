@@ -162,8 +162,16 @@
     // exposure down and takes the sunlit aluminium down with it. Aged airfield
     // concrete with rubber and sand on it is a mid grey-tan, and letting it sit
     // there is what leaves the airframes somewhere to be bright.
+    // Lifted back toward the palette's "bleached tan" now that the airframes
+    // are no longer competing with it for the top of the histogram: at metal
+    // 0.74 an aluminium flank was a sky mirror and had to be protected from the
+    // slab, at metal 0.38 it is a satin dielectric that sits at 0.30-0.40 linear
+    // and the slab can go where a noon apron actually is.
     hardstand:  { uv: 0.35, cast: false, recv: true, wear: true,
-                  base: 'concrete', target: 0x8d887c, rough: 0.90, env: 0.80 },
+                  base: 'concrete', target: 0xa5a091, rough: 0.90, env: 0.80 },
+    // The saw-cut/tar joint lattice and the heat craze, as an alpha overlay on
+    // its own world-aligned tile. See buildCrackTexture.
+    crack:      { uv: 1 / 15.24, cast: false, recv: true, wear: false, own: true, keepUV: false },
     pad_patch:  { uv: 0.35, cast: false, recv: true, wear: true,
                   base: 'asphalt', target: 0x5d5850, rough: 0.88 },
     desert:     { uv: 0.35, cast: false, recv: true, wear: true,
@@ -174,37 +182,45 @@
                   base: 'painted_metal', target: 0xd8bf4a, rough: 0.86, metal: 0.0 },
     // ---------------------------------------------------------------------
     // THE AIRFRAME SKIN, and the single most important material in the level.
+    // It gets its OWN map set (buildSkinMaps, below) rather than a library
+    // material, and both halves of that decision are measured.
     //
-    // NOT a mirror. Twenty years of desert UV chalks clearcoat and oxidises
-    // bare alclad to a satin: metalness 0.62 with roughness 0.44 keeps a broad
-    // sky-coloured sheen along the top of every fuselage (which is what stops
-    // 34 aluminium tubes reading as 34 grey cylinders) while leaving enough
-    // diffuse for the shaded side to hold detail. At metal 0.9 / rough 0.2 the
-    // shaded flanks went to near-black with a single hot line, which in a
-    // frame whose whole problem is contrast is the wrong kind of contrast.
-    // ---------------------------------------------------------------------
-    // uv 2.4, not the 0.90 the density budget suggests, and that is measured
-    // rather than preferred: at 0.90 genPaintedMetal's chip/worley field lands
-    // at ~10 cm, which on a fuselage read from 4 m is a field of 30 cm blotches
-    // and the first capture came back with 34 aeroplanes made of terrazzo.
-    // A fuselage panel is 1-2 m of smooth skin with a 3 mm lap joint round it,
-    // so the map wants to be FINE - at 2.4 the same features land at 4 cm and
-    // read as grain, tool marks and rivet lines instead of as stone.
-    airframe:   { uv: 2.40, cast: true, recv: true, wear: false,
-                  base: 'painted_metal', target: 0x8e9498, rough: 0.40, metal: 0.74,
-                  env: 1.30 },
+    // 1. THE MAP. painted_metal at uv 2.40 put its base tile at 0.38 m, so
+    //    genPaintedMetal's chip/worley features landed at 8-25 mm - sub-pixel
+    //    at any playable range - and on a metal surface every one of those
+    //    texels sampled a different part of the environment (blue sky above,
+    //    tan ground below). A 44 m fuselage printed as blue/tan salt-and-
+    //    pepper confetti with no aircraft structure in it at all. What an
+    //    aeroplane skin actually is at 10 m is a 1.5-2.5 m PANEL GRID with
+    //    lap joints, rivet rows on the frames and stringers, mismatched alloy
+    //    and repaint values panel to panel, and a couple of repair patches.
+    //    None of that is expressible as a tiling noise, so it is drawn.
+    // 2. THE METAL. 0.74 bypasses the diffuse term entirely, and diffuse is
+    //    the ONLY fill this renderer can put on a flank that faces away from
+    //    the key: sunlit clad measured 106:1 against its own shaded end wall
+    //    and a wing panel 8 m from the lens sat at 0.066 sRGB. Twenty-year
+    //    oxidised alclad is a satin that behaves like a dielectric, so 0.38 -
+    //    which restores 62% of the albedo to the shaded hemisphere and takes
+    //    key-to-fill from 106:1 to roughly 10:1.
+    airframe:   { uv: 1 / 6.0, cast: true, recv: true, wear: false, own: true,
+                  target: 0xa8adb0, rough: 0.44, metal: 0.38, env: 1.05 },
     // Chalked paint, primer, and the inside of everything that has been opened
     // up. Deliberately a SECOND material rather than a tint of the first: the
     // difference between a polished skin panel and a primered patch beside it
     // is a roughness difference, and a tint cannot express one.
-    skin_dull:  { uv: 1.60, cast: true, recv: true, wear: false,
-                  base: 'painted_metal', target: 0x74736c, rough: 0.76, metal: 0.28,
-                  env: 0.80 },
+    // Chalked paint, primer, and the inside of everything that has been opened
+    // up. Deliberately a SECOND material rather than a tint of the first: the
+    // difference between a polished skin panel and a primered patch beside it
+    // is a roughness difference, and a tint cannot express one. It takes the
+    // level's own map for the same reason the airframe does - at painted_metal
+    // uv 1.60 every pylon, rib and duct in the yard was speckled terrazzo.
+    skin_dull:  { uv: 1 / 6.0, cast: true, recv: true, wear: false, own: true,
+                  target: 0x8b8a82, rough: 0.78, metal: 0.18, env: 0.85 },
     // Sprayed vinyl cocoon over canopies, intakes and exhausts. The one pure
     // white in the level, and it is what makes the rows read as STORED rather
     // than as parked.
-    wrap:       { uv: 1.35, cast: true, recv: true, wear: false,
-                  base: 'canvas_awning', target: 0xb9b5a6, rough: 0.90, metal: 0.0 },
+    wrap:       { uv: 1.70, cast: true, recv: true, wear: false, macro: 0,
+                  base: 'canvas_awning', target: 0xc6c2b4, rough: 0.90, metal: 0.0 },
     canopy:     { uv: 0.39, cast: false, recv: true, wear: false,
                   base: 'glass', rough: 0.22, env: 1.6 },
     tyre:       { uv: 0.61, cast: true, recv: true, wear: false,
@@ -215,12 +231,36 @@
     // the same map and a handrail reads as rust-speckled noise. At 0.30 the map
     // scales to the MEMBER and a bar is a smooth gradient with one or two chips
     // in it - which is what painted steel is.
+    // metal 0.45, not 0.68: every railing, truss and rack in the level is seen
+    // from its shaded side in at least one published framing, and above ~0.5 a
+    // shaded painted-steel member has no diffuse left to be lit by.
     steel:      { uv: 0.16, cast: true, recv: true, wear: false,
-                  base: 'painted_metal', target: 0x767b82, rough: 0.54, metal: 0.68 },
+                  base: 'painted_metal', target: 0x808690, rough: 0.54, metal: 0.45 },
     rusted:     { uv: 0.40, cast: true, recv: true, wear: false,
-                  base: 'rusted_metal', target: 0x6b4834, rough: 0.84, metal: 0.50 },
-    clad:       { uv: 0.51, cast: true, recv: true, wear: false,
-                  base: 'corrugated_metal', target: 0x9a9c98, rough: 0.56, metal: 0.66 },
+                  base: 'rusted_metal', target: 0x6b4834, rough: 0.86, metal: 0.28 },
+    // ---------------------------------------------------------------------
+    // CLADDING, AND WHY IT IS NOT `corrugated_metal`.
+    //
+    // The profile is now GEOMETRY (corrSheet), so the base map only has to be
+    // sheet steel. It is painted_metal because corrugated_metal was measured
+    // not to respond to fill at all: with the level's slab-bounce directional
+    // landing 0.97 of its lambert term on the hangar's shaded south wall, that
+    // wall moved from 0.0035 to 0.0044 linear, while `steel` (painted_metal)
+    // and the airframe skin on the racks in the same frame, at the same
+    // orientation, both moved by the predicted amount. Two independent
+    // controls - metalness 0.0 with envMapIntensity 1.8, and a dedicated
+    // directional - changed nothing on that def and everything on the others.
+    // Reported as a shared-system finding; answered here by not using it.
+    //
+    // It also takes the level's own sheet map rather than a library tile.
+    // painted_metal was tried at uv 0.55 and its stochastic chip/worley field
+    // landed at 15-40 cm, which on a 32 x 11 m wall and a 32 m soffit printed
+    // as speckled TERRAZZO - the same failure the airframe skin had, one scale
+    // up. Industrial cladding is sheets with fixings, which is exactly what
+    // buildSkinMaps already draws, so the two share one map set and differ by
+    // a colour multiply and a roughness.
+    clad:       { uv: 1 / 6.0, cast: true, recv: true, wear: false, own: true,
+                  target: 0x9a9c98, rough: 0.60, metal: 0.40, env: 1.0 },
     conc_wall:  { uv: 0.35, cast: true, recv: true, wear: true,
                   base: 'concrete_wall', target: 0xa39a8b },
     // The ridge. Answered by materials.distant() so a 430 m proxy physically
@@ -243,17 +283,18 @@
     desert:     [0xbda482, 0.98, 0.0],
     verge:      [0x9c8f78, 0.96, 0.0],
     paint_line: [0xcdb44e, 0.88, 0.0],
-    airframe:   [0xb3b6b8, 0.44, 0.62],
-    skin_dull:  [0x9b988f, 0.72, 0.30],
+    airframe:   [0xb3b6b8, 0.44, 0.38],
+    skin_dull:  [0x9b988f, 0.76, 0.20],
     wrap:       [0xd8d4c6, 0.88, 0.0],
     canopy:     [0x3d474c, 0.22, 0.0],
     tyre:       [0x232426, 0.86, 0.0],
-    steel:      [0x7d8188, 0.52, 0.70],
-    rusted:     [0x77503a, 0.82, 0.55],
-    clad:       [0x9a9c98, 0.56, 0.66],
+    steel:      [0x868b93, 0.52, 0.45],
+    rusted:     [0x77503a, 0.84, 0.28],
+    clad:       [0x9a9c98, 0.56, 0.40],
     conc_wall:  [0xa39a8b, 0.92, 0.0],
-    ridge:      [0x5c6270, 0.98, 0.0],
-    chain:      [0x9aa3a8, 0.55, 0.80],
+    ridge:      [0x9aa0a6, 0.98, 0.0],
+    chain:      [0x9aa3a8, 0.55, 0.45],
+    crack:      [0xffffff, 0.94, 0.0],
     decal:      [0xffffff, 0.80, 0.0],
     glass_lit:  [0xffe0b0, 0.20, 0.0]
   };
@@ -396,6 +437,72 @@
     var g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
     g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
+    return g;
+  }
+
+  // ---------------------------------------------------------------------------
+  // A TRAPEZOIDAL CLADDING SHEET, AS GEOMETRY.
+  //
+  // This is the answer to the hangar's shaded end wall measuring 0.0035 linear
+  // against 0.373 on its own sunlit face - a 106:1 void that survived taking
+  // the material to metalness 0.0 with envMapIntensity 1.8, and survived a
+  // dedicated bounce fill. A flat box with a rib NORMAL MAP on it has exactly
+  // one shading normal, so when that normal faces away from a 30-degree key the
+  // whole 32 x 11 m plane has nothing to be lit by and no amount of material
+  // work can change it.
+  //
+  // Real profiled cladding is not flat. Its webs stand at about 56 degrees, and
+  // on a wall facing away from the sun those webs are the ONLY part of the
+  // building still pointing at it: the arithmetic is that a face needs to be
+  // steeper than 48.7 degrees to keep a positive lambert term against this
+  // key, so the pans go black and the webs stay lit. That is what a photograph
+  // of a shaded steel shed actually looks like - a dark wall with a comb of
+  // bright vertical lines down it - and it is 2k triangles a wall.
+  //
+  // Authored in local XY facing +Z: x across the ribs, y up, z out.
+  // ---------------------------------------------------------------------------
+  var CORR_PROFILE = [[0.00, 0], [0.52, 0], [0.66, 1], [0.86, 1], [1.00, 0]];
+
+  function corrSheet(w, h, pitch, depth) {
+    var ribs = Math.max(1, Math.round(w / pitch));
+    var p = w / ribs;
+    var xs = [], zs = [], i, k;
+    for (i = 0; i < ribs; i++) {
+      for (k = 0; k < CORR_PROFILE.length - 1; k++) {
+        xs.push(-w * 0.5 + (i + CORR_PROFILE[k][0]) * p);
+        zs.push(CORR_PROFILE[k][1] * depth);
+      }
+    }
+    xs.push(w * 0.5); zs.push(0);
+    var n = xs.length - 1;
+    var pos = new Float32Array(n * 6 * 3);
+    var nor = new Float32Array(n * 6 * 3);
+    var uv = new Float32Array(n * 6 * 2);
+    var o = 0, uo = 0;
+    for (i = 0; i < n; i++) {
+      var x0 = xs[i], x1 = xs[i + 1], z0 = zs[i], z1 = zs[i + 1];
+      var dx = x1 - x0, dz = z1 - z0;
+      var l = Math.sqrt(dx * dx + dz * dz) || 1;
+      // outward normal of the segment, in the XZ plane
+      var nx = dz / l, nz = -dx / l;
+      if (nz < 0) { nx = -nx; nz = -nz; }
+      var quad6 = [
+        x0, 0, z0, x1, 0, z1, x1, h, z1,
+        x0, 0, z0, x1, h, z1, x0, h, z0
+      ];
+      for (k = 0; k < 18; k++) pos[o + k] = quad6[k];
+      for (k = 0; k < 6; k++) {
+        nor[o + k * 3] = nx; nor[o + k * 3 + 1] = 0; nor[o + k * 3 + 2] = nz;
+      }
+      var u0 = (x0 + w * 0.5), u1 = (x1 + w * 0.5);
+      var uvq = [u0, 0, u1, 0, u1, h, u0, 0, u1, h, u0, h];
+      for (k = 0; k < 12; k++) uv[uo + k] = uvq[k];
+      o += 18; uo += 12;
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     return g;
   }
 
@@ -816,6 +923,380 @@
     return tex;
   }
 
+  // ---------------------------------------------------------------------------
+  // A tangent-space normal map from a height canvas, WRAPPED. Every map this
+  // file authors tiles across a world-space projection, so a Sobel that clamps
+  // at the border puts a visible seam on every joint line in the yard.
+  // ---------------------------------------------------------------------------
+  function normalFromCanvas(canvas, strength) {
+    if (!canvas) return null;
+    var g = canvas.getContext('2d');
+    if (!g) return null;
+    var S = canvas.width, d;
+    try { d = g.getImageData(0, 0, S, S).data; } catch (e) { return null; }
+    var h = new Float32Array(S * S), i;
+    for (i = 0; i < S * S; i++) h[i] = d[i * 4] / 255;
+    var out = new Uint8Array(S * S * 4);
+    var k = strength === undefined ? 2.4 : strength;
+    for (var y = 0; y < S; y++) {
+      var ym = (y - 1 + S) % S, yp = (y + 1) % S;
+      for (var x = 0; x < S; x++) {
+        var xm = (x - 1 + S) % S, xp = (x + 1) % S;
+        var dx = (h[ym * S + xp] + 2 * h[y * S + xp] + h[yp * S + xp]) -
+                 (h[ym * S + xm] + 2 * h[y * S + xm] + h[yp * S + xm]);
+        var dy = (h[yp * S + xm] + 2 * h[yp * S + x] + h[yp * S + xp]) -
+                 (h[ym * S + xm] + 2 * h[ym * S + x] + h[ym * S + xp]);
+        var nx = -dx * k, ny = -dy * k, nz = 1;
+        var il = 1 / Math.sqrt(nx * nx + ny * ny + nz * nz);
+        var o = (y * S + x) * 4;
+        out[o] = (nx * il * 0.5 + 0.5) * 255;
+        out[o + 1] = (ny * il * 0.5 + 0.5) * 255;
+        out[o + 2] = (nz * il * 0.5 + 0.5) * 255;
+        out[o + 3] = 255;
+      }
+    }
+    var t = new THREE.DataTexture(out, S, S, THREE.RGBAFormat);
+    t.colorSpace = THREE.NoColorSpace;          // NOT an albedo map
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.generateMipmaps = true;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.needsUpdate = true;
+    return t;
+  }
+
+  // ============================================================ THE SKIN MAP ==
+  // A 6 m tile of aeroplane. 1024 texels over 6 m is 171 texels/m, which puts a
+  // 1.5 m panel at 256 texels, a lap joint at 3 and a rivet pitch at 6 - i.e.
+  // every feature resolves at the 4-20 m the airframes are actually read from,
+  // which is the whole reason this exists rather than a library tile at 0.38 m.
+  //
+  // Authored so the MEAN lands near 0xa8adb0: the shaded-side albedo target the
+  // review asked for. Panel-to-panel value steps are +/-8%, which is what a
+  // patchwork of mismatched alloys and thirty-year-old repaints actually is; go
+  // wider and it reads as camouflage.
+  var SKIN_TILE = 6.0;
+  var _skinMaps = null;
+
+  function buildSkinMaps(rng) {
+    if (_skinMaps) return _skinMaps;
+    if (typeof document === 'undefined') return null;
+    var S = 1024;
+    function cv() { var c = document.createElement('canvas'); c.width = c.height = S; return c; }
+    var ac = cv(), hc = cv(), rc = cv();
+    var A = ac.getContext('2d'), H = hc.getContext('2d'), R = rc.getContext('2d');
+    if (!A || !H || !R) return null;
+
+    // Panel lattice. Irregular on purpose - a ruled grid is the "perfectly
+    // uniform anything" the quality bar rejects, and a real fuselage is bays of
+    // different length between frames anyway.
+    var colF = [0.265, 0.225, 0.295, 0.215];
+    var rowF = [0.240, 0.285, 0.210, 0.265];
+    var cols = [0], rows = [0], i, j, acc = 0;
+    for (i = 0; i < colF.length; i++) { acc += colF[i]; cols.push(Math.round(acc * S)); }
+    acc = 0;
+    for (i = 0; i < rowF.length; i++) { acc += rowF[i]; rows.push(Math.round(acc * S)); }
+    cols[cols.length - 1] = S; rows[rows.length - 1] = S;
+
+    A.fillStyle = '#b0b4b5'; A.fillRect(0, 0, S, S);
+    H.fillStyle = '#808080'; H.fillRect(0, 0, S, S);
+    R.fillStyle = '#6e6e6e'; R.fillRect(0, 0, S, S);     // 0.43 base roughness
+
+    // ---- panel fields ------------------------------------------------------
+    // +/-4.5%, not +/-7.5%. At the wider spread the first capture came back
+    // with a fuselage that read as disruptive CAMOUFLAGE rather than as
+    // mismatched alloy - a value step you can name is already too big.
+    var STEPS = [0.958, 0.980, 1.0, 1.022, 1.045];
+    var HUES = [[0, 0, 0], [2, 1, -2], [-1, -1, 1], [3, 1, -1], [-2, -1, -1]];
+    for (j = 0; j < rowF.length; j++) {
+      for (i = 0; i < colF.length; i++) {
+        var k = (i * 3 + j * 5 + ((rng.next() * 5) | 0)) % STEPS.length;
+        var v = STEPS[k], hu = HUES[(i + j * 2) % HUES.length];
+        var cr = M.clamp(0xb0 * v + hu[0], 0, 255) | 0;
+        var cg = M.clamp(0xb4 * v + hu[1], 0, 255) | 0;
+        var cb = M.clamp(0xb5 * v + hu[2], 0, 255) | 0;
+        A.fillStyle = 'rgb(' + cr + ',' + cg + ',' + cb + ')';
+        A.fillRect(cols[i], rows[j], cols[i + 1] - cols[i], rows[j + 1] - rows[j]);
+        // roughness follows the repaint: a resprayed panel is duller
+        var rv = (0x60 + k * 5) | 0;
+        R.fillStyle = 'rgb(' + rv + ',' + rv + ',' + rv + ')';
+        R.fillRect(cols[i], rows[j], cols[i + 1] - cols[i], rows[j + 1] - rows[j]);
+      }
+    }
+
+    // ---- differential fade: slow chalking across the tile ------------------
+    for (i = 0; i < 26; i++) {
+      var bx = rng.range(-0.1, 1.1) * S, by = rng.range(-0.1, 1.1) * S;
+      var br = rng.range(0.10, 0.30) * S;
+      var gr = A.createRadialGradient(bx, by, 0, bx, by, br);
+      var up = rng.bool ? rng.bool(0.5) : (rng.next() < 0.5);
+      gr.addColorStop(0, up ? 'rgba(226,228,226,0.13)' : 'rgba(140,142,141,0.11)');
+      gr.addColorStop(1, 'rgba(180,182,181,0)');
+      A.fillStyle = gr;
+      A.beginPath(); A.arc(bx, by, br, 0, 6.28318); A.fill();
+    }
+
+    // ---- lap joints, rivet rows, stringers ---------------------------------
+    function lapV(x) {
+      // the lap STEP: a dark line with a lit crest on the overlapping side
+      A.fillStyle = 'rgba(96,100,102,0.72)'; A.fillRect(x - 1.5, 0, 3, S);
+      A.fillStyle = 'rgba(206,208,206,0.30)'; A.fillRect(x + 1.5, 0, 1.5, S);
+      H.fillStyle = 'rgba(40,40,40,1)'; H.fillRect(x - 1.5, 0, 3, S);
+      H.fillStyle = 'rgba(170,170,170,1)'; H.fillRect(x + 1.5, 0, 2, S);
+      R.fillStyle = 'rgba(150,150,150,0.85)'; R.fillRect(x - 2, 0, 5, S);
+    }
+    function lapH(y) {
+      A.fillStyle = 'rgba(96,100,102,0.72)'; A.fillRect(0, y - 1.5, S, 3);
+      A.fillStyle = 'rgba(206,208,206,0.30)'; A.fillRect(0, y + 1.5, S, 1.5);
+      H.fillStyle = 'rgba(40,40,40,1)'; H.fillRect(0, y - 1.5, S, 3);
+      H.fillStyle = 'rgba(170,170,170,1)'; H.fillRect(0, y + 1.5, S, 2);
+      R.fillStyle = 'rgba(150,150,150,0.85)'; R.fillRect(0, y - 2, S, 5);
+    }
+    // rivet run: dots at a 6 texel (3.5 cm) pitch, drawn into all three maps
+    function rivetsV(x, y0, y1, pitch) {
+      for (var y = y0; y < y1; y += pitch) {
+        A.fillStyle = 'rgba(122,126,128,0.55)';
+        A.beginPath(); A.arc(x, y, 1.25, 0, 6.28318); A.fill();
+        H.fillStyle = 'rgba(196,196,196,0.9)';
+        H.beginPath(); H.arc(x, y, 1.35, 0, 6.28318); H.fill();
+        R.fillStyle = 'rgba(140,140,140,0.7)';
+        R.beginPath(); R.arc(x, y, 1.6, 0, 6.28318); R.fill();
+      }
+    }
+    function rivetsH(y, x0, x1, pitch) {
+      for (var x = x0; x < x1; x += pitch) {
+        A.fillStyle = 'rgba(122,126,128,0.55)';
+        A.beginPath(); A.arc(x, y, 1.25, 0, 6.28318); A.fill();
+        H.fillStyle = 'rgba(196,196,196,0.9)';
+        H.beginPath(); H.arc(x, y, 1.35, 0, 6.28318); H.fill();
+        R.fillStyle = 'rgba(140,140,140,0.7)';
+        R.beginPath(); R.arc(x, y, 1.6, 0, 6.28318); R.fill();
+      }
+    }
+    for (i = 0; i < cols.length; i++) {
+      var cx2 = cols[i];
+      lapV(cx2);
+      rivetsV(cx2 - 5, 0, S, 6); rivetsV(cx2 + 6, 0, S, 6);
+      if (cx2 === 0) { lapV(S); rivetsV(S - 5, 0, S, 6); }
+    }
+    for (j = 0; j < rows.length; j++) {
+      var ry2 = rows[j];
+      lapH(ry2);
+      rivetsH(ry2 - 5, 0, S, 6); rivetsH(ry2 + 6, 0, S, 6);
+      if (ry2 === 0) { lapH(S); rivetsH(S - 5, 0, S, 6); }
+    }
+    // intermediate stringers: rivets only, no lap step, every ~0.55 m
+    for (j = 0; j < rowF.length; j++) {
+      var h0 = rows[j], h1 = rows[j + 1], nS = Math.max(1, Math.round((h1 - h0) / 94));
+      for (i = 1; i < nS; i++) rivetsH(h0 + (h1 - h0) * i / nS, 0, S, 7);
+    }
+
+    // ---- repair patches ----------------------------------------------------
+    // Two doublers, riveted on, in a value that does not match the skin under
+    // them. The single most boneyard-specific mark an airframe carries.
+    var patches = [[0.10, 0.56, 0.20, 0.15]];
+    for (i = 0; i < patches.length; i++) {
+      var p = patches[i];
+      var px = p[0] * S, py = p[1] * S, pw = p[2] * S, ph = p[3] * S;
+      A.fillStyle = i ? 'rgba(166,164,153,0.80)' : 'rgba(182,184,180,0.80)';
+      A.fillRect(px, py, pw, ph);
+      H.fillStyle = 'rgba(148,148,148,1)'; H.fillRect(px, py, pw, ph);
+      H.strokeStyle = 'rgba(58,58,58,1)'; H.lineWidth = 2.5;
+      H.strokeRect(px, py, pw, ph);
+      A.strokeStyle = 'rgba(92,96,98,0.70)'; A.lineWidth = 2.5;
+      A.strokeRect(px, py, pw, ph);
+      R.fillStyle = i ? 'rgba(190,190,190,1)' : 'rgba(120,120,120,1)';
+      R.fillRect(px, py, pw, ph);
+      rivetsH(py + 4, px + 4, px + pw - 3, 7);
+      rivetsH(py + ph - 4, px + 4, px + pw - 3, 7);
+      rivetsV(px + 4, py + 4, py + ph - 3, 7);
+      rivetsV(px + pw - 4, py + 4, py + ph - 3, 7);
+    }
+
+    // ---- streaking and grain ------------------------------------------------
+    // Hydraulic and exhaust runs travel with gravity, i.e. down v, and they are
+    // the only thing on a skin that is not aligned to the panel grid.
+    for (i = 0; i < 34; i++) {
+      var sx = rng.next() * S, sy = rng.next() * S;
+      var sl = rng.range(0.06, 0.30) * S;
+      var sg = A.createLinearGradient(sx, sy, sx, sy + sl);
+      sg.addColorStop(0, 'rgba(96,90,80,0.30)');
+      sg.addColorStop(1, 'rgba(120,116,108,0)');
+      A.fillStyle = sg;
+      A.fillRect(sx - rng.range(1, 4), sy, rng.range(2, 8), sl);
+    }
+    // fine tooling grain, per pixel, tiny amplitude: this is the layer that
+    // stops a flat panel fill reading as flat, and it is deliberately kept
+    // below 3% so it cannot become the confetti it replaces.
+    try {
+      var img = A.getImageData(0, 0, S, S), da = img.data;
+      var him = H.getImageData(0, 0, S, S), dh = him.data;
+      for (i = 0; i < S * S; i++) {
+        var gx = i % S, gy = (i / S) | 0;
+        var n = Math.sin(gx * 0.9 + gy * 0.31) * 0.5 + Math.sin(gx * 0.21 - gy * 1.07) * 0.5;
+        var f = 1 + n * 0.022;
+        da[i * 4] = M.clamp(da[i * 4] * f, 0, 255);
+        da[i * 4 + 1] = M.clamp(da[i * 4 + 1] * f, 0, 255);
+        da[i * 4 + 2] = M.clamp(da[i * 4 + 2] * f, 0, 255);
+        var hv = dh[i * 4] + n * 5;
+        dh[i * 4] = dh[i * 4 + 1] = dh[i * 4 + 2] = M.clamp(hv, 0, 255);
+      }
+      A.putImageData(img, 0, 0);
+      H.putImageData(him, 0, 0);
+    } catch (e) { /* tainted canvas: the drawn layers still carry the read */ }
+
+    function mk(canvas, srgb) {
+      var t = new THREE.CanvasTexture(canvas);
+      t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.generateMipmaps = true;
+      t.minFilter = THREE.LinearMipmapLinearFilter;
+      t.magFilter = THREE.LinearFilter;
+      t.needsUpdate = true;
+      return t;
+    }
+    _skinMaps = {
+      map: mk(ac, true),
+      roughnessMap: mk(rc, false),
+      normalMap: normalFromCanvas(hc, 1.9)
+    };
+    return _skinMaps;
+  }
+
+  // =========================================================== THE PAD LAYER ==
+  // The joint lattice and the heat craze, as a world-aligned alpha overlay.
+  //
+  // These belong in TEXTURE, not geometry, and the reason is arithmetic: a
+  // sawn bay joint is 15 cm wide and a craze crack is 1 cm, while the pad is
+  // built on a 1.5 m vertex step. Both features are two orders of magnitude
+  // below the mesh and were aliased out of it completely - the brief's
+  // "hardstanding cracked by heat" photographed as one unbroken sheet of grain
+  // with no slab edge, no joint, no crack and no spall anywhere in it.
+  //
+  // The tile is 15.24 m - exactly TWO bays of the 7.62 m (25 ft) airfield
+  // pitch that jointDip() uses - and the joints are drawn at the pixel rows and
+  // columns that the world UV puts the real bay lines on, so the painted joint
+  // and the modelled dip are the same joint.
+  var CRACK_TILE = 15.24;
+  var _crackTex = null;
+
+  function buildCrackTexture(rng) {
+    if (_crackTex) return _crackTex;
+    if (typeof document === 'undefined') return null;
+    var S = 1024, i, k;
+    var c = document.createElement('canvas');
+    c.width = c.height = S;
+    var g = c.getContext('2d');
+    if (!g) return null;
+    g.clearRect(0, 0, S, S);
+    var PX = S / CRACK_TILE;                   // 67 texels per metre
+
+    // jointDip puts the x joints at x = -3.81 + k*7.62 and the z joints at
+    // z = -1.90 + k*7.62. worldUV maps u = x/15.24, v = z/15.24, and three
+    // flips v, so the canvas rows are (1 - v) * S.
+    var uJ = [0.25, 0.75];
+    var vJ = [0.375, 0.875];
+
+    // ---- a sealed saw-cut joint --------------------------------------------
+    // 15 cm of black tar sealant with a spalled, slightly paler lip either
+    // side, and it wanders by a couple of centimetres because a saw follows a
+    // chalk line held by a person.
+    function joint(px, vertical) {
+      var w = 0.15 * PX;
+      var steps = 64;
+      for (var s = 0; s < steps; s++) {
+        var t0 = s / steps * S, t1 = (s + 1) / steps * S;
+        var wob = Math.sin(s * 0.7 + px * 0.03) * 1.2 + Math.sin(s * 0.23) * 0.9;
+        var a = 0.62 + 0.26 * (Math.sin(s * 1.31 + px) * 0.5 + 0.5);
+        g.fillStyle = 'rgba(38,35,32,' + a.toFixed(3) + ')';
+        if (vertical) g.fillRect(px + wob - w * 0.5, t0, w, t1 - t0 + 1);
+        else g.fillRect(t0, px + wob - w * 0.5, t1 - t0 + 1, w);
+        // the spall lip: bare aggregate, PALER than the slab
+        g.fillStyle = 'rgba(214,206,190,0.30)';
+        if (vertical) g.fillRect(px + wob - w * 0.5 - 2.4, t0, 2.4, t1 - t0 + 1);
+        else g.fillRect(t0, px + wob - w * 0.5 - 2.4, t1 - t0 + 1, 2.4);
+      }
+    }
+    for (i = 0; i < uJ.length; i++) joint(uJ[i] * S, true);
+    for (i = 0; i < vJ.length; i++) joint((1 - vJ[i]) * S, false);
+
+    // ---- heat craze ---------------------------------------------------------
+    // Polygonal cells with three-way junctions, which is the shape thermal
+    // cracking actually takes on a big slab; a noise threshold never looks like
+    // one. Built as a nearest-neighbour network over jittered seeds, drawn nine
+    // times on a wrapped offset so the tile is seamless.
+    var seeds = [];
+    for (i = 0; i < 46; i++) seeds.push([rng.next() * S, rng.next() * S]);
+    var edges = [];
+    for (i = 0; i < seeds.length; i++) {
+      var best = [], bi;
+      for (k = 0; k < seeds.length; k++) {
+        if (k === i) continue;
+        var ddx = seeds[k][0] - seeds[i][0], ddz = seeds[k][1] - seeds[i][1];
+        // wrap to the nearest image
+        if (ddx > S * 0.5) ddx -= S; if (ddx < -S * 0.5) ddx += S;
+        if (ddz > S * 0.5) ddz -= S; if (ddz < -S * 0.5) ddz += S;
+        best.push([ddx * ddx + ddz * ddz, ddx, ddz]);
+      }
+      best.sort(function (p, q) { return p[0] - q[0]; });
+      for (bi = 0; bi < 3 && bi < best.length; bi++) {
+        edges.push([seeds[i][0], seeds[i][1],
+          seeds[i][0] + best[bi][1], seeds[i][1] + best[bi][2]]);
+      }
+    }
+    function craze(ox, oy) {
+      for (var e = 0; e < edges.length; e++) {
+        var E = edges[e];
+        var x0 = E[0] + ox, y0 = E[1] + oy, x1 = E[2] + ox, y1 = E[3] + oy;
+        var segs = 6;
+        g.lineCap = 'round';
+        for (var s = 0; s < segs; s++) {
+          var f0 = s / segs, f1 = (s + 1) / segs;
+          // a crack is not continuous: a third of every run has healed over
+          if (((e * 7 + s * 3) % 11) < 3) continue;
+          var jx = Math.sin(e * 2.7 + s * 1.9) * 5.0;
+          var jy = Math.cos(e * 3.1 + s * 2.3) * 5.0;
+          g.strokeStyle = 'rgba(52,47,42,' + (0.30 + ((e + s) % 5) * 0.09).toFixed(2) + ')';
+          g.lineWidth = 1.1 + ((e + s) % 3) * 0.5;
+          g.beginPath();
+          g.moveTo(M.lerp(x0, x1, f0) + jx, M.lerp(y0, y1, f0) + jy);
+          g.lineTo(M.lerp(x0, x1, f1) + jx * 0.4, M.lerp(y0, y1, f1) + jy * 0.4);
+          g.stroke();
+        }
+      }
+    }
+    for (i = -1; i <= 1; i++) for (k = -1; k <= 1; k++) craze(i * S, k * S);
+
+    // ---- spalling and FOD ---------------------------------------------------
+    for (i = 0; i < 120; i++) {
+      var sx2 = rng.next() * S, sy2 = rng.next() * S;
+      var sr = rng.range(1.4, 5.5);
+      g.fillStyle = 'rgba(66,60,52,' + rng.range(0.10, 0.30).toFixed(2) + ')';
+      g.beginPath(); g.ellipse(sx2, sy2, sr, sr * rng.range(0.5, 1.0), rng.range(0, 3), 0, 6.28318);
+      g.fill();
+    }
+    // patched pop-outs: pale aggregate where a lump has come out and been made
+    // good with a different mix
+    for (i = 0; i < 26; i++) {
+      var qx = rng.next() * S, qy = rng.next() * S, qr = rng.range(5, 17);
+      var qg = g.createRadialGradient(qx, qy, 0, qx, qy, qr);
+      qg.addColorStop(0, 'rgba(206,198,182,0.34)');
+      qg.addColorStop(1, 'rgba(206,198,182,0)');
+      g.fillStyle = qg;
+      g.beginPath(); g.arc(qx, qy, qr, 0, 6.28318); g.fill();
+    }
+
+    var tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    _crackTex = tex;
+    return tex;
+  }
+
   // ============================================================ AIRCRAFT KIT ==
   // Every airframe in the yard is composed from these five primitives. They are
   // all authored in ONE local frame:  nose toward -Z, starboard toward +X, and
@@ -909,6 +1390,7 @@
   //   twist (washout, rad at the tip)
   function wingPanel(spec) {
     var ns = spec.sections || 5;
+    var US = spec.us || AF_U;
     var rings = [], i, k;
     for (i = 0; i <= ns; i++) {
       var f = i / ns;
@@ -920,13 +1402,13 @@
       var tw = -(spec.twist || 0) * f;
       var ring = [];
       // upper surface nose -> tail, then lower surface tail -> nose
-      for (k = 0; k < AF_U.length; k++) {
-        var u = AF_U[k];
+      for (k = 0; k < US.length; k++) {
+        var u = US[k];
         var zz = u * c, yy = afThick(u) * th * 0.5 * 1.06;
         ring.push([x, y + yy * Math.cos(tw) + zz * Math.sin(tw) * 0, zle + zz]);
       }
-      for (k = AF_U.length - 1; k >= 0; k--) {
-        var u2 = AF_U[k];
+      for (k = US.length - 1; k >= 0; k--) {
+        var u2 = US[k];
         var zz2 = u2 * c, yy2 = -afThick(u2) * th * 0.5 * 0.74;
         ring.push([x, y + yy2, zle + zz2]);
       }
@@ -944,8 +1426,41 @@
     return rings;
   }
 
-  function buildWing(B, spec, key, mirror) {
-    var rings = wingPanel(spec);
+  // ---------------------------------------------------------------------------
+  // A WING IS NOT ONE VALUE.
+  //
+  // The critique that produced this: "the far transport's wing crosses 500 px
+  // of frame as a solid bar at 0.051 sRGB median with zero internal value
+  // break - no leading-edge highlight, no flap track, no aileron split". That
+  // is true of the loft as it stood: one closed surface, one tint, one shading
+  // solution across seven metres of chord.
+  //
+  // A real wing is three surfaces with real gaps between them, and each catches
+  // the key differently: the torsion box (leading 68% of chord, the brightest
+  // because its upper skin faces up), the flap/aileron behind it (drooped a
+  // degree or two, a step darker), and the slot between them, which under a
+  // hard sun is a black line the whole span. Splitting the loft chordwise gives
+  // all three for the cost of one extra ring set - and it gives the shaded
+  // UNDERSIDE a rib line as well, which is what makes a stored panel readable.
+  var UMAIN = null, UCTRL = null;
+  function splitUs(split) {
+    var i;
+    if (!UMAIN || UMAIN._s !== split) {
+      UMAIN = [];
+      for (i = 0; i < AF_U.length; i++) UMAIN.push(AF_U[i] * split);
+      UMAIN._s = split;
+      UCTRL = [];
+      var base = [0, 0.05, 0.15, 0.32, 0.55, 0.78, 1.0];
+      for (i = 0; i < base.length; i++) UCTRL.push(split + 0.022 + (1 - split - 0.022) * base[i]);
+    }
+    return [UMAIN, UCTRL];
+  }
+
+  function loftPanel(B, spec, key, mirror, us) {
+    var s2 = {}, kk;
+    for (kk in spec) if (Object.prototype.hasOwnProperty.call(spec, kk)) s2[kk] = spec[kk];
+    s2.us = us;
+    var rings = wingPanel(s2);
     var i, k;
     if (mirror) {
       for (i = 0; i < rings.length; i++) {
@@ -958,9 +1473,62 @@
     return rings;
   }
 
+  var _ctrlTint = new THREE.Color();
+
+  function buildWing(B, spec, key, mirror) {
+    // Anything under ~1.5 m of chord is a stabiliser tip or a rack shelf and a
+    // 2 cm hinge slot in it is sub-pixel: those stay one piece.
+    var split = spec.split;
+    if (split === undefined) split = (spec.rootC > 1.6 && spec.span > 1.2) ? 0.68 : 0;
+    if (!split) return loftPanel(B, spec, key, mirror, spec.us || AF_U);
+    var us = splitUs(split);
+    var rings = loftPanel(B, spec, key, mirror, us[0]);
+    var old = B.tint;
+    // the control surface, a step darker: it is drooped, so its upper skin
+    // faces the key at a different angle and it is usually a later repaint
+    if (old) _ctrlTint.setRGB(old.r * 0.90, old.g * 0.90, old.b * 0.91);
+    else _ctrlTint.setRGB(0.90, 0.90, 0.91);
+    B.tint = _ctrlTint;
+    loftPanel(B, spec, key, mirror, us[1]);
+    B.tint = old;
+    return rings;
+  }
+
+  // Rib and spar structure on the UNDERSIDE of a panel. A stored wing seen from
+  // below is the most information-dense object in a parts yard and it was the
+  // least: a flat black sheet at 8 m from the lens. Ribs cost 7 boxes.
+  function wingUnderRibs(B, spec, key, mirror, s) {
+    var old = B.tint, oldP = B.paint;
+    B.tint = null; B.paint = 'metal';
+    var n = 6, i;
+    var sgn = mirror ? -1 : 1;
+    for (i = 1; i <= n; i++) {
+      var f = i / (n + 1);
+      var x = sgn * f * spec.span;
+      var c = M.lerp(spec.rootC, spec.tipC, f);
+      var zle = spec.rootZ + Math.abs(x) * Math.tan(spec.sweep);
+      var y = spec.y + Math.abs(x) * Math.tan(spec.dihedral);
+      var th = M.lerp(spec.thick, spec.thick * 0.78, f) * c;
+      // a rib: a thin chordwise plate standing proud of the lower skin
+      B.boxR(key || 'skin_dull', 0.045 * s, 0.10 * s, c * 0.80,
+        x, y - th * 0.30, zle + c * 0.46, 0, 0, 0, 0.01);
+    }
+    // the main spar, running the span at 30% chord
+    var cm = M.lerp(spec.rootC, spec.tipC, 0.5);
+    var zm = spec.rootZ + spec.span * 0.5 * Math.tan(spec.sweep) + cm * 0.32;
+    B.strut(key || 'skin_dull', 0, spec.y - spec.thick * spec.rootC * 0.30, spec.rootZ + spec.rootC * 0.32,
+      sgn * spec.span, spec.y + spec.span * Math.tan(spec.dihedral) - spec.thick * spec.tipC * 0.30,
+      spec.rootZ + spec.span * Math.tan(spec.sweep) + spec.tipC * 0.32, 0.09 * s, 0.13 * s);
+    void zm;
+    B.tint = old; B.paint = oldP;
+  }
+
   // A vertical surface (fin, ventral strake) is the same panel stood on end.
-  function buildFin(B, spec, key) {
-    var rings = wingPanel(spec), i, k;
+  function finPiece(B, spec, key, us) {
+    var s2 = {}, kk;
+    for (kk in spec) if (Object.prototype.hasOwnProperty.call(spec, kk)) s2[kk] = spec[kk];
+    s2.us = us;
+    var rings = wingPanel(s2), i, k;
     for (i = 0; i < rings.length; i++) {
       for (k = 0; k < rings[i].length; k++) {
         var p = rings[i][k];
@@ -971,6 +1539,22 @@
     }
     B.add(key || 'airframe', ringLoft(rings, true), null);
     B.add(key || 'airframe', ringCap(rings[rings.length - 1], false), null);
+    return rings;
+  }
+
+  // A fin gets the same treatment as a wing, and it earns it: the T-tail is the
+  // subject of hero3 at 30 m, and a fin with no rudder split is a blade.
+  function buildFin(B, spec, key) {
+    var split = spec.split === undefined ? (spec.rootC > 1.8 ? 0.66 : 0) : spec.split;
+    if (!split) return finPiece(B, spec, key, spec.us || AF_U);
+    var us = splitUs(split);
+    var rings = finPiece(B, spec, key, us[0]);
+    var old = B.tint;
+    if (old) _ctrlTint.setRGB(old.r * 0.91, old.g * 0.91, old.b * 0.92);
+    else _ctrlTint.setRGB(0.91, 0.91, 0.92);
+    B.tint = _ctrlTint;
+    finPiece(B, spec, key, us[1]);
+    B.tint = old;
     return rings;
   }
 
@@ -1351,10 +1935,34 @@
         // pylons
         B.tint = null;
         if (!e.prop) {
-          B.boxR('skin_dull', 0.24 * s, e.drop * s * 0.95, 2.1 * s,
-            ex, ey + e.drop * s * 0.48, ez + 0.9 * s, 0, 0, 0, 0.04);
-          B.boxR('skin_dull', 0.24 * s, e.drop * s * 0.95, 2.1 * s,
-            -ex, ey + e.drop * s * 0.48, ez + 0.9 * s, 0, 0, 0, 0.04);
+          // The pylon, plus the FAIRING where it meets the wing. Without the
+          // fairing a nacelle is a dark box hanging off a bar with a hard right
+          // angle between them and no surface at the junction for the key to
+          // find; the fillet is what makes an engine read as attached.
+          // 0.42 of the drop, not 0.48, and 0.78 of it tall rather than 0.95:
+          // at the old numbers the pylon's top edge stood 5 cm PROUD of the
+          // wing's upper skin, so a 2.1 m plate printed lying across the top of
+          // the wing in the hero framing instead of hanging under it.
+          B.boxR('skin_dull', 0.22 * s, e.drop * s * 0.78, 1.8 * s,
+            ex, ey + e.drop * s * 0.42, ez + 0.8 * s, 0, 0, 0, 0.04);
+          B.boxR('skin_dull', 0.22 * s, e.drop * s * 0.78, 1.8 * s,
+            -ex, ey + e.drop * s * 0.42, ez + 0.8 * s, 0, 0, 0, 0.04);
+          // The fairing sits UNDER the wing's lower skin, not through it: the
+          // first pass put it at 0.90 of the pylon drop, which is inside the
+          // wing box, and two 3 m plates printed lying across the top of the
+          // wing in the hero framing.
+          var wyS = (T.wing ? T.wing.y * s : spec.centreY) +
+            e.x * s * Math.tan(T.wing ? T.wing.dihedral : 0);
+          var wThk = (T.wing ? T.wing.thick : 0.12) *
+            M.lerp(T.wing ? T.wing.rootC : 4, T.wing ? T.wing.tipC : 2,
+              M.saturate(e.x / (T.span * 0.5))) * s;
+          var fy2 = wyS - wThk * 0.42;
+          B.tint = o.body || null;
+          B.boxR('airframe', 0.44 * s, 0.26 * s, 2.4 * s,
+            ex, fy2, ez + 1.1 * s, 0, 0, 0, 0.11 * s);
+          B.boxR('airframe', 0.44 * s, 0.26 * s, 2.4 * s,
+            -ex, fy2, ez + 1.1 * s, 0, 0, 0, 0.11 * s);
+          B.tint = null;
         }
         // a spinner or a wrapped intake plug
         if (e.prop) {
@@ -1614,10 +2222,13 @@
     var i, j;
     B.paint = 'ground'; B.tint = null;
 
-    // 3 m cells. The slab varies by ~0.4 m across 200 m, so a finer grid buys
-    // nothing but triangles; what the eye reads at this range is the JOINT GRID
-    // and the crack field, and both of those are painted, not modelled.
-    var slab = gridSurface(PAD_X0 - 3, PAD_X1 + 3, PAD_Z0 - 3, PAD_Z1 + 3, 3.0,
+    // 1.5 m cells, not 3. The joint grid and the crack field are painted (see
+    // buildCrackTexture) and always were, but at a 3 m step the slab's own
+    // CROWN and its settlement trough were being sampled too coarsely to read
+    // as anything but a plane, and the same 3 m vertices carry the wear colour,
+    // so every wear feature finer than three metres arrived as a soft blob.
+    // 32k triangles against a 4.5M budget is not a trade.
+    var slab = gridSurface(PAD_X0 - 3, PAD_X1 + 3, PAD_Z0 - 3, PAD_Z1 + 3, 1.5,
       function (x, z) { return groundY(x, z, N); });
     B.add('hardstand', slab, null);
 
@@ -1651,23 +2262,102 @@
     B.paint = 'ground';
   }
 
-  // A painted line on the slab, following the ground and broken by wear.
-  function stripe(B, x0, z0, x1, z1, w, N, dashLen, gapLen) {
+  // ---------------------------------------------------------------------------
+  // The joint / craze overlay mesh. Its own object rather than a bucket in the
+  // merge, because it is the one surface in the level that is alpha-blended and
+  // world-UV'd to a DIFFERENT tile from everything else, and because its vertex
+  // colour carries an ALPHA (itemSize 4) that _paint has no vocabulary for.
+  //
+  // The alpha is the point: run the craze at full strength over 200 m and it is
+  // wallpaper. It fades out under blown sand, off the pad edge, and along the
+  // wheel tracks where the surface is polished rather than crazed.
+  // ---------------------------------------------------------------------------
+  function buildPadOverlay(L, rng, N) {
+    var mat = L.material('crack');
+    if (!mat || !mat.map) return null;
+    var g = gridSurface(PAD_X0 - 1.5, PAD_X1 + 1.5, PAD_Z0 - 1.5, PAD_Z1 + 1.5, 1.5,
+      function (x, z) { return groundY(x, z, N) + 0.010; });
+    Geo.worldUV(g, 1 / CRACK_TILE);
+    var pos = g.attributes.position, n = pos.count;
+    var col = new Float32Array(n * 4);
+    for (var i = 0; i < n; i++) {
+      var x = pos.getX(i), z = pos.getZ(i);
+      // sand buries the craze; the pad edge has none of it to bury
+      var sand = sandCover(x, z, N);
+      var edge = padMask(x, z);
+      var v = N.fbm2(x * 0.055 - 9.0, z * 0.055 + 4.0, 3) * 0.5 + 0.5;
+      var a = edge * (0.66 + v * 0.50) * (1 - sand * 0.34);
+      // polished lanes: the taxiway centre is driven on, not baked
+      a *= 1 - 0.22 * M.saturate(1 - Math.abs(x) / (TAXI_HALF * 0.8));
+      col[i * 4] = 1; col[i * 4 + 1] = 1; col[i * 4 + 2] = 1;
+      col[i * 4 + 3] = M.saturate(a);
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(col, 4));
+    g.computeBoundingSphere();
+    var mesh = new THREE.Mesh(g, mat);
+    mesh.name = 'boneyard_padjoints';
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    mesh.renderOrder = 1;
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
+    L.root.add(mesh);
+    L.meshes.push(mesh);
+    return mesh;
+  }
+
+  // A deterministic 0..1 hash. stripe() needs per-dash jitter and it must not
+  // consume the level rng, because the aircraft plan draws from the same stream
+  // and a marking change would reshuffle thirty-four aeroplanes.
+  function hash01(a, b, c) {
+    var s = Math.sin(a * 12.9898 + b * 78.233 + c * 37.719) * 43758.5453;
+    return s - Math.floor(s);
+  }
+
+  // ---------------------------------------------------------------------------
+  // A painted line on the slab.
+  //
+  // "Perfectly clean, straight, or uniform anything" is on the instant-fail
+  // list and a taxiway stripe is the easiest place in a level to fail it: at 3x
+  // zoom the yellow centreline was a continuous constant-value band from 2 m to
+  // 60 m with no repaint overlap, no wheel-track erasure and no chipping. The B
+  // channel of the wear mask was doing its job, but a wear mask cannot put a
+  // GAP in a stripe, and a gap is what a worn stripe is.
+  //
+  // So each dash now carries its own length, its own lateral offset and its own
+  // width, and a dash the tyre-track field runs over is simply not emitted -
+  // that is the same wandering track function the ground wear uses, so the
+  // erasure lands exactly where the rubber is.
+  // ---------------------------------------------------------------------------
+  function stripe(B, x0, z0, x1, z1, w, N, dashLen, gapLen, seed) {
     var dx = x1 - x0, dz = z1 - z0;
     var len = Math.sqrt(dx * dx + dz * dz);
     if (len < 0.05) return;
     var ux = dx / len, uz = dz / len;
     var yaw = Math.atan2(dx, dz);
-    var step = dashLen ? (dashLen + gapLen) : Math.min(6.0, len);
+    // Even a "solid" line is emitted in 3 m segments so it can be jittered and
+    // broken; a 160 m unbroken bar is the thing being fixed.
+    var solid = !dashLen;
+    var step = dashLen ? (dashLen + gapLen) : Math.min(3.2, len);
     var n = Math.max(1, Math.round(len / step));
     step = len / n;
-    var run = dashLen ? Math.min(dashLen, step * 0.62) : step;
+    var sd = seed === undefined ? (x0 * 0.37 + z0 * 0.11) : seed;
     for (var i = 0; i < n; i++) {
-      var t0 = i * step + (dashLen ? (step - run) * 0.5 : 0);
+      var h1 = hash01(i, sd, 1.7), h2 = hash01(i, sd, 4.3), h3 = hash01(i, sd, 9.1);
+      var baseRun = dashLen ? Math.min(dashLen, step * 0.62) : step;
+      var run = baseRun * (solid ? (0.90 + h1 * 0.10) : (0.86 + h1 * 0.24));
+      var t0 = i * step + (dashLen ? (step - run) * 0.5 : (step - run) * h2);
       var mid = t0 + run * 0.5;
-      var mx = x0 + ux * mid, mz = z0 + uz * mid;
-      B.add('paint_line', box(w, 0.014, run, 0.004),
-        makeM(mx, groundY(mx, mz, N) + 0.014, mz, 0, yaw, 0));
+      // a few centimetres of lateral wander: nobody paints to a string line
+      var off = (h2 - 0.5) * 0.10;
+      var mx = x0 + ux * mid - uz * off, mz = z0 + uz * mid + ux * off;
+      // erased where the wheels go, and simply missing here and there
+      var wob = Math.sin(mz * 0.045) * 1.4 + Math.sin(mz * 0.017 + 2.1) * 2.2;
+      var tt = Math.min(Math.abs(mx - 3.6 - wob), Math.abs(mx + 3.6 - wob));
+      if (tt < 0.55 && h3 < 0.72) continue;
+      if (h3 > 0.955) continue;
+      B.add('paint_line', box(w * (0.86 + h1 * 0.26), 0.014, run, 0.004),
+        makeM(mx, groundY(mx, mz, N) + 0.014, mz, 0, yaw + (h2 - 0.5) * 0.010, 0));
     }
   }
 
@@ -1693,10 +2383,17 @@
     // past the aircraft into the distance, which is what gives the rows depth.
     for (i = 0; i < ROWS_X.length; i++) {
       var rx = ROWS_X[i];
-      stripe(B, rx, ROW_BAYS[0] - 12, rx, ROW_BAYS[ROW_BAYS.length - 1] + 12, 0.18, N);
+      stripe(B, rx, ROW_BAYS[0] - 12, rx, ROW_BAYS[ROW_BAYS.length - 1] + 12, 0.18, N, 0, 0, i * 3.1);
+      // Two of the four rows have been REPAINTED, and whoever did it did not
+      // line the new coat up with the old: a second stripe 8 cm off the first,
+      // narrower, running only part of the row. It is the cheapest possible way
+      // to say the markings are older than the aeroplanes standing on them.
+      if (i === 1 || i === 2) {
+        stripe(B, rx + 0.09, ROW_BAYS[0] - 6, rx + 0.09, ROW_BAYS[3] + 4, 0.13, N, 0, 0, 40 + i);
+      }
       for (j = 0; j < ROW_BAYS.length; j++) {
         var bz = ROW_BAYS[j];
-        stripe(B, rx - 2.6, bz - 7.4, rx + 2.6, bz - 7.4, 0.20, N);
+        stripe(B, rx - 2.6, bz - 7.4, rx + 2.6, bz - 7.4, 0.20, N, 0, 0, i * 7 + j);
       }
     }
     // the cross lane edges
@@ -1734,6 +2431,17 @@
     }
     decalCard(B, 11, 6.0, groundY(6.0, 46.0, N) + 0.020, 46.0, 3.4, 3.4, 'y', 1, 0.5);
     decalCard(B, 8, S7_X, groundY(S7_X, S7_Z + 25, N) + 0.020, S7_Z + 25, 4.2, 4.2, 'y', 1, 0);
+    // A bay number at the head of EVERY row, where it joins the taxiway - the
+    // atlas already generates four of these and three of them were never in
+    // frame. A boneyard is an inventory yard; the numbering is the inventory.
+    for (i = 0; i < ROWS_X.length; i++) {
+      var hx = ROWS_X[i], hz = ROW_BAYS[ROW_BAYS.length - 1] + 11.5;
+      decalCard(B, 8 + (i % 4), hx, groundY(hx, hz, N) + 0.020, hz, 3.6, 3.6, 'y', 1,
+        (i - 1.5) * 0.02);
+      var hz2 = ROW_BAYS[0] - 13.0;
+      decalCard(B, 8 + ((i + 2) % 4), hx, groundY(hx, hz2, N) + 0.020, hz2, 3.4, 3.4, 'y', 1,
+        (i - 1.5) * 0.03 + Math.PI);
+    }
     B.paint = 'ground';
 
     // ---- tie-down rings -----------------------------------------------------
@@ -1831,8 +2539,8 @@
     // own materials.distant() haze.
     // ------------------------------------------------------------------------
     var bands = [
-      { r0: 322, r1: 500, h0: 24, h1: 96, k: 3.4, seed: 2.0, rj: 0.11 },
-      { r0: 452, r1: 556, h0: 74, h1: 172, k: 2.2, seed: 8.5, rj: 0.055 }
+      { r0: 322, r1: 486, h0: 24, h1: 96, k: 3.4, seed: 2.0, rj: 0.11 },
+      { r0: 508, r1: 596, h0: 74, h1: 172, k: 2.2, seed: 8.5, rj: 0.055 }
     ];
     var RINGS = [0.0, 0.30, 0.56, 0.80, 1.0];
     // How high the range stands at each radial station, as a fraction of its
@@ -1901,9 +2609,19 @@
       var t = i / 8;
       gable.push([HG_X0 + t * w, HG_EAVE + (HG_RIDGE - HG_EAVE) * Math.sin(t * Math.PI)]);
     }
+    // The profiled skin, inside and out, on every wall the camera can see. The
+    // ribs are what stop a shaded wall being a hole (see corrSheet) and what
+    // give the interior framing's two long walls a lit crest and a shaded
+    // valley instead of a printed pinstripe.
+    var CP = 0.152, CD = 0.038;
+    function skin(cw, ch, cx, cy, cz, ry) {
+      B.add('clad', corrSheet(cw, ch, CP, CD), makeM(cx, cy, cz, 0, ry, 0));
+    }
     for (var side = 0; side < 2; side++) {
       var sz = side ? HG_Z1 : HG_Z0;
       B.box('clad', w, HG_EAVE, 0.34, mx, HG_FLOOR + HG_EAVE * 0.5, sz, 0.03);
+      skin(w, HG_EAVE - 0.05, mx, HG_FLOOR, sz + (side ? 0.18 : -0.18), side ? 0 : Math.PI);
+      skin(w, HG_EAVE - 0.05, mx, HG_FLOOR, sz + (side ? -0.18 : 0.18), side ? Math.PI : 0);
       for (i = 0; i + 1 < gable.length; i++) {
         var gx0 = gable[i][0], gx1 = gable[i + 1][0];
         var gh = (gable[i][1] + gable[i + 1][1]) * 0.5;
@@ -1912,8 +2630,52 @@
       }
       L.addCollider(mx, HG_FLOOR + HG_EAVE * 0.5, sz, w * 0.5, HG_EAVE * 0.5, 0.30, 'metal');
     }
+    // ---- THE LEE ELEVATIONS ------------------------------------------------
+    // The south and east faces of this shed can NEVER see the sun: the key is
+    // at bearing 319, so a ray from any point on them runs straight back into
+    // the building, and even an object standing nineteen metres out in front of
+    // them is still inside the shadow. They are the deep shade the brief asks
+    // for - but a single 32 x 11 m plane of it photographs as a hole, which is
+    // what it was doing (0.0037 linear against 0.37 on its own sunlit face).
+    //
+    // The answer is not more light, it is more SURFACE: a lean-to store with a
+    // horizontal roof (an up-facing plane reads at 0.09-0.14 here, thirty times
+    // the wall), a pale concrete dado that has three times the cladding's
+    // reflectance, and a fascia that puts a lit edge across the elevation.
+    // Three value steps instead of one void, from geometry rather than from a
+    // light rig that has nothing to give here.
+    B.paint = 'ground'; B.tint = tint(0xb0a894, 0.45);
+    B.box('conc_wall', w + 0.5, 2.6, 0.42, mx, HG_FLOOR + 1.3, HG_Z1 + 0.20, 0.04);
+    B.box('conc_wall', 0.42, 2.6, d + 0.5, HG_X1 + 0.20, HG_FLOOR + 1.3, mz, 0.04);
+    B.paint = 'clad'; B.tint = tint(0xa7aaa6, 0.55);
+    // the lean-to: a 3.4 m mono-pitch over the south elevation's east half
+    var loX0 = mx + 1.0, loW = 14.0, loZ = HG_Z1 + 1.75, loH = 4.4;
+    B.boxR('clad', loW, 0.16, 3.6, loX0 + loW * 0.5 - 7.0, HG_FLOOR + loH + 0.16, loZ,
+      0.10, 0, 0, 0.03);
+    B.paint = 'metal'; B.tint = tint(0x8a8f92, 0.55);
+    B.box('steel', loW + 0.4, 0.30, 0.22, loX0 + loW * 0.5 - 7.0, HG_FLOOR + loH + 0.36,
+      loZ + 1.75, 0.03);
+    for (i = 0; i < 5; i++) {
+      var lpx = loX0 - 7.0 + i * (loW / 4);
+      B.box('steel', 0.16, loH + 0.2, 0.16, lpx, HG_FLOOR + (loH + 0.2) * 0.5, loZ + 1.62, 0.02);
+      B.strut('steel', lpx, HG_FLOOR + loH * 0.62, loZ + 1.62,
+        lpx, HG_FLOOR + loH + 0.05, HG_Z1 + 0.35, 0.09, 0.09);
+      L.addCollider(lpx, HG_FLOOR + 1.2, loZ + 1.62, 0.14, 1.2, 0.14, 'metal');
+    }
+    B.paint = 'clad'; B.tint = tint(0x9ba09c, 0.55);
+    // stacked stock under it, so the lean-to has a reason to exist
+    for (i = 0; i < 3; i++) {
+      B.boxR('clad', 2.6, 1.5, 2.2, loX0 - 6.0 + i * 4.4, HG_FLOOR + 0.75, loZ + 0.4,
+        0, (i - 1) * 0.05, 0, 0.05);
+    }
+    B.paint = 'flat'; B.tint = null;
+    decalCard(B, 14, mx + 6.0, HG_FLOOR + 6.6, HG_Z1 + 0.45, 6.0, 0.9, 'z', 1, 0);
+    B.paint = 'clad'; B.tint = tint(0xa7aaa6, 0.55);
+
     // east (back) wall
     B.box('clad', 0.34, HG_EAVE, d, HG_X1, HG_FLOOR + HG_EAVE * 0.5, mz, 0.03);
+    skin(d, HG_EAVE - 0.05, HG_X1 + 0.18, HG_FLOOR, mz, Math.PI * 0.5);
+    skin(d, HG_EAVE - 0.05, HG_X1 - 0.18, HG_FLOOR, mz, -Math.PI * 0.5);
     L.addCollider(HG_X1, HG_FLOOR + HG_EAVE * 0.5, mz, 0.30, HG_EAVE * 0.5, d * 0.5, 'metal');
     // west (door) wall: two piers and a header over the opening
     var pierS = (HG_DOOR_Z0 - HG_Z0), pierN = (HG_Z1 - HG_DOOR_Z1);
@@ -1954,10 +2716,32 @@
       // columns
       B.box('steel', 0.42, HG_EAVE - 0.2, 0.34, HG_X0 + 0.55, HG_FLOOR + (HG_EAVE - 0.2) * 0.5, fz, 0.03);
       B.box('steel', 0.42, HG_EAVE - 0.2, 0.34, HG_X1 - 0.55, HG_FLOOR + (HG_EAVE - 0.2) * 0.5, fz, 0.03);
-      // rafters + a king post, so the roof has a truss silhouette against the
-      // monitors rather than being a blank ceiling
-      B.strut('steel', HG_X0 + 0.55, HG_FLOOR + HG_EAVE - 0.2, fz, mx, HG_FLOOR + HG_RIDGE - 0.3, fz, 0.30, 0.26);
-      B.strut('steel', HG_X1 - 0.55, HG_FLOOR + HG_EAVE - 0.2, fz, mx, HG_FLOOR + HG_RIDGE - 0.3, fz, 0.30, 0.26);
+      // ---- REAL TRUSSES, not noodles ------------------------------------
+      // These are three metres from the camera in the level's best frame and
+      // they were single 30 cm bars: at that range a rafter with no depth is a
+      // white pipe with no shadow side, and the whole roof read as a tangle of
+      // wire. A truss is a TOP CHORD, a BOTTOM CHORD 0.62 m below it, and a
+      // zig-zag of webs between - three members deep, so the light finds a lit
+      // face, a shaded face and a gap on every one of them.
+      for (var sd2 = 0; sd2 < 2; sd2++) {
+        var ax0 = sd2 ? HG_X1 - 0.55 : HG_X0 + 0.55;
+        var ay0 = HG_FLOOR + HG_EAVE - 0.2;
+        var bx0 = mx, by0 = HG_FLOOR + HG_RIDGE - 0.3;
+        var dep = 0.62;
+        // chords
+        B.strut('steel', ax0, ay0, fz, bx0, by0, fz, 0.20, 0.15);
+        B.strut('steel', ax0, ay0 - dep, fz, bx0, by0 - dep, fz, 0.17, 0.13);
+        // webs
+        var nw = 7;
+        for (var wI = 0; wI < nw; wI++) {
+          var t0 = wI / nw, t1 = (wI + 1) / nw;
+          var wx0 = M.lerp(ax0, bx0, t0), wy0 = M.lerp(ay0, by0, t0);
+          var wx1 = M.lerp(ax0, bx0, t1), wy1 = M.lerp(ay0, by0, t1);
+          if (wI & 1) B.strut('steel', wx0, wy0, fz, wx1, wy1 - dep, fz, 0.085, 0.075);
+          else B.strut('steel', wx0, wy0 - dep, fz, wx1, wy1, fz, 0.085, 0.075);
+          B.strut('steel', wx0, wy0, fz, wx0, wy0 - dep, fz, 0.075, 0.070);
+        }
+      }
       B.box('steel', 0.20, HG_RIDGE - HG_EAVE, 0.20, mx, HG_FLOOR + (HG_EAVE + HG_RIDGE) * 0.5 - 0.25, fz, 0.02);
       B.strut('steel', HG_X0 + 3.4, HG_FLOOR + HG_EAVE + 0.6, fz, mx - 1.2, HG_FLOOR + HG_EAVE - 0.1, fz, 0.16, 0.14);
       B.strut('steel', HG_X1 - 3.4, HG_FLOOR + HG_EAVE + 0.6, fz, mx + 1.2, HG_FLOOR + HG_EAVE - 0.1, fz, 0.16, 0.14);
@@ -2015,11 +2799,13 @@
     // while buildWing lays the panel out along +x, so a 4.6 m wing was carried
     // at one end only and the other 4 m of it hung in the air - visible from
     // the interior framing as a metal horn floating beside the wall.
-    B.paint = 'skin'; B.tint = bodyTint(0x9aa0a4, 0.45, 0.72);
+    B.paint = 'skin'; B.tint = bodyTint(0x9aa0a4, 0.45, 0.86);
     for (i = 0; i < 2; i++) {
+      var hwspec = { span: 4.6, rootC: 4.2, tipC: 1.5, sweep: 0.66, dihedral: 0,
+        thick: 0.075, rootZ: -2.0, y: 0, sections: 4, twist: 0 };
       B.pushXYZ(HG_X0 + 21.5, HG_FLOOR + 0.98 + i * 0.44, HG_Z0 + 9.5 + i * 0.35, 0, 0, 0.035);
-      buildWing(B, { span: 4.6, rootC: 4.2, tipC: 1.5, sweep: 0.66, dihedral: 0,
-        thick: 0.075, rootZ: -2.0, y: 0, sections: 4, twist: 0 }, 'airframe', false);
+      buildWing(B, hwspec, 'airframe', false);
+      wingUnderRibs(B, hwspec, 'skin_dull', false, 1.0);
       B.pop();
     }
     B.tint = tint(0xc8a41e, 0.6); B.paint = 'metal';
@@ -2083,9 +2869,14 @@
         B.tint = bodyTint(j === 1 ? 0xa8aca8 : 0xc2c6c8, 0.35, 1.28 - j * 0.06);
         for (k = 0; k < 2; k++) {
           var wz = k ? 1.7 : -1.7;
+          var pspec = { span: 4.3, rootC: 3.9, tipC: 1.4, sweep: 0.62, dihedral: 0,
+            thick: 0.075, rootZ: -1.9, y: 0, sections: 4, twist: 0 };
           B.pushXYZ(k ? -0.4 : 0.4, 0.62 + j * 1.05, wz, 0, (k ? 1 : -1) * (0.02 + j * 0.015), 0);
-          buildWing(B, { span: 4.3, rootC: 3.9, tipC: 1.4, sweep: 0.62, dihedral: 0,
-            thick: 0.075, rootZ: -1.9, y: 0, sections: 4, twist: 0 }, 'airframe', k === 1);
+          buildWing(B, pspec, 'airframe', k === 1);
+          // The underside is what the camera sees from twelve metres away on a
+          // 0.6 m shelf, and a flat lower skin at that angle is the black sheet
+          // the review measured. Ribs and a spar give it something to read.
+          wingUnderRibs(B, pspec, 'skin_dull', k === 1, 1.0);
           B.pop();
         }
       }
@@ -2492,6 +3283,8 @@
     this._movers = [];
     this._sunChecked = false;
     this._fogSet = false;
+    this._shadowSet = false;
+    this._crackOk = false;
     var seed = (ctx && ctx.seed) || 20260801;
     this.rng = (ctx && ctx.rng && ctx.rng.fork) ? ctx.rng.fork(0x424f4e45) : new GAME.RNG(seed);
     this.noise = new GAME.Noise(seed ^ 0x424f4e);
@@ -2746,40 +3539,61 @@
       m = this._decalMaterial();
     } else if (key === 'chain') {
       m = this._chainMaterial();
+    } else if (key === 'crack') {
+      m = this._crackMaterial();
+    } else if (key === 'airframe') {
+      m = this._skinMaterial();
+    } else if (key === 'clad') {
+      m = this._skinMaterial(0xe6e8e3, 0.62, 0.40, 0.34);
+    } else if (key === 'skin_dull') {
+      m = this._skinMaterial(0xcfccc2, 1.75, 0.18, 0.30);
     } else if (key === 'ridge' && lib && typeof lib.distant === 'function') {
       // Aerial perspective is not optional on a 430 m ridge under a noon sky:
       // an un-hazed mountain is the brightest, hardest edge in the frame and
       // instantly collapses the depth the whole level is built on.
       try {
-        // A desert range at noon is a MID grey-violet, not a snowfield. The
-        // first pass let distant() solve its own albedo from far_facade's own
-        // reflectance and the mountains printed brighter than the aircraft in
-        // front of them - the classic un-anchored distant proxy. albedoTarget is
-        // given explicitly, the IBL is cut so the range cannot pick a specular
-        // highlight out of the sky it is meant to dissolve into, and the detail
-        // layer is switched off: at 430 m a 5 cm detail tile is 1/8000 of a
-        // pixel and all it can do is alias.
-        m = lib.distant('far_facade', 0x8fa0b8, 300, {
+        // ---------------------------------------------------------------
+        // A SONORAN RANGE AT NOON IS ONE VALUE WITH A SLOW GRADIENT, AND IT
+        // IS NEARLY AS BRIGHT AS THE SKY IT STANDS AGAINST.
+        //
+        // The previous solve inverted the depth cue it exists to provide. At
+        // albedoTarget 0x5c6270 with envMapIntensity 0.20 the 430 m range
+        // measured 0.0376 linear against a 0.11 linear sky - three times
+        // DARKER than the air it was meant to dissolve into, and with more
+        // internal contrast than the mid-ground - and its map at a 90 m
+        // triplanar tile printed 10-40 m cream blotches that read as snow
+        // patches, a direct palette collision with snowbound.
+        //
+        // The three corrections, and each is measured against the sky:
+        //   albedoTarget 0x646973  a mid grey-violet. 0x9aa0a6 was tried first
+        //                          and measured 0.386 linear against a 0.132
+        //                          sky - 2.9x OVER, the same inversion from the
+        //                          other side, reading as a fog bank. This
+        //                          lands it just under the sky.
+        //   triScale 0.30          a 3.3 m tile: at 430 m that is 4 px, so
+        //                          every map feature falls below notice and
+        //                          only the geometry's own crest gradient is
+        //                          left. macro 0 for the same reason - it is
+        //                          what drew the blotches.
+        //   env 0.42               enough sky in the IBL to keep the shaded
+        //                          spurs off the floor, not enough to make a
+        //                          rough mountain specular.
+        // DoubleSide is load-bearing, not defensive: ringLoft winds a radial
+        // annulus the opposite way round from the closed tubes it was written
+        // for, so the range's whole inner face - the only part the player can
+        // see - back-face culls without it.
+        m = lib.distant('far_facade', 0x9fb0c4, 300, {
           density: 0.0034, vertexColors: true, wearMode: 'multiply',
-          // triScale 0.011 = a 90 m tile. At the 0.055 first pass the tile was
-          // 18 m and the range printed as a visibly repeating wallpaper across
-          // a third of the establishing frame; nothing at 400 m can resolve a
-          // 90 m feature, so all that is left is a slow value drift, which is
-          // exactly what a distant range gives you.
-          // DoubleSide is load-bearing, not defensive. ringLoft winds a radial
-          // annulus the opposite way round from the closed tubes it was written
-          // for, so the range's whole inner face - the only part of it the
-          // player can see - was being back-face culled and the capture showed
-          // a dark ribbon floating in the sky with the horizon visible under it.
-          // Two thousand triangles is not worth re-deriving a winding rule for.
-          //
-          // Dark, because a desert range in front of a bright sky is a
-          // SILHOUETTE with a gradient in it; an earlier pass metered brighter
-          // than the sunlit hardstanding in front of it, which inverts the whole
-          // depth cue the level's sense of scale rests on.
           side: THREE.DoubleSide,
-          albedoTarget: 0x5c6270, roughness: 0.99, metalness: 0.0,
-          envMapIntensity: 0.20, detail: 0, macro: 0.07, triScale: 0.011
+          albedoTarget: 0x4d525a, roughness: 0.97, metalness: 0.0,
+          // env 0.80, not 0.30: the range's anti-sun flanks were metering
+          // 0.022 linear against 0.099 on its sunward ones, a 4.5:1 split
+          // across a proxy whose whole job is to be ONE value with a slow
+          // gradient. Skylight is nearly all a distant mountain's shaded side
+          // gets, and cutting the IBL to stop a rough surface picking a
+          // specular highlight out of the sky (which at roughness 0.97 it
+          // cannot do anyway) was throwing away the fill with it.
+          envMapIntensity: 0.58, detail: 0, macro: 0, triScale: 0.30
         });
       } catch (e) { GAME.logError('boneyard.ridge', e); m = null; }
     } else if (lib && typeof lib.get === 'function') {
@@ -2796,6 +3610,8 @@
       if (surf.rough !== undefined) opts.roughness = surf.rough;
       if (surf.metal !== undefined) opts.metalness = surf.metal;
       if (surf.env !== undefined) opts.envMapIntensity = surf.env;
+      if (surf.macro !== undefined) opts.macro = surf.macro;
+      if (surf.ns !== undefined) opts.normalScale = surf.ns;
       if (surf.col !== undefined && surf.target === undefined) opts.color = surf.col;
       if (surf.emissive !== undefined) {
         opts.emissive = surf.emissive;
@@ -2850,6 +3666,79 @@
     return m;
   };
 
+  // The airframe skin. Its own MeshStandardMaterial rather than a library one,
+  // because what this surface needs is a DRAWN panel/rivet/patch map at a scale
+  // no procedural tile can express (see buildSkinMaps) and materials.get() has
+  // no way to be handed one. Everything else about it stays inside the house
+  // conventions: albedo sRGB, normal/roughness NoColorSpace, vertexColors as a
+  // plain albedo multiply (which is exactly what wearMode 'multiply' gave it),
+  // and envMapIntensity in the same 1.0-1.1 band the review asked for.
+  LevelBoneyard.prototype._skinMaterial = function (tint2, rough2, metal2, ns2) {
+    var maps = null;
+    try { maps = buildSkinMaps(this.rng.fork ? this.rng.fork(0x5C1B) : this.rng); }
+    catch (e) { GAME.logError('boneyard.skinmap', e); maps = null; }
+    if (!maps || !maps.map) return null;        // caller falls back to the library
+    try {
+      var caps = this.ctx && this.ctx.renderer && this.ctx.renderer.capabilities;
+      if (caps && caps.getMaxAnisotropy) {
+        var an = Math.max(1, Math.min(8, caps.getMaxAnisotropy() || 1));
+        maps.map.anisotropy = an;
+        if (maps.roughnessMap) maps.roughnessMap.anisotropy = an;
+        if (maps.normalMap) maps.normalMap.anisotropy = an;
+      }
+    } catch (e2) { /* anisotropy is a nicety */ }
+    var surf = tint2 === undefined ? SURF.airframe : SURF.clad;
+    if (tint2 === 0xcfccc2) surf = SURF.skin_dull;
+    var m = new THREE.MeshStandardMaterial({
+      map: maps.map,
+      normalMap: maps.normalMap || null,
+      roughnessMap: maps.roughnessMap || null,
+      // A raw colour multiply is right HERE and nowhere else in the file: the
+      // map is authored in this module at a known mean, so multiplying it is
+      // not squaring an unknown library gain.
+      color: tint2 === undefined ? 0xffffff : tint2,
+      // roughnessMap MULTIPLIES material.roughness, so the scalar carries the
+      // family and the map carries the panel-to-panel variation.
+      roughness: maps.roughnessMap ? (rough2 === undefined ? 1.0 : rough2) : surf.rough,
+      metalness: metal2 === undefined ? surf.metal : metal2,
+      vertexColors: true,
+      envMapIntensity: surf.env
+    });
+    // 0.25-ish, not 1.0. The micro layer's job is to stop the panels reading as
+    // flat fills; at full strength the rivet field fights the metal reflection
+    // and prints as the same speckle it replaced.
+    if (maps.normalMap) {
+      var nsv = ns2 === undefined ? 0.28 : ns2;
+      m.normalScale = new THREE.Vector2(nsv, nsv);
+    }
+    m.name = 'boneyard_skin_' + (tint2 === undefined ? 'alu' : tint2.toString(16));
+    return m;
+  };
+
+  // The joint/craze overlay. Transparent, depth-write off, polygon-offset, and
+  // drawn after the slab: the same contract the stencil decals already use.
+  LevelBoneyard.prototype._crackMaterial = function () {
+    var tex = null;
+    try { tex = buildCrackTexture(this.rng.fork ? this.rng.fork(0xC2AC) : this.rng); }
+    catch (e) { GAME.logError('boneyard.cracktex', e); tex = null; }
+    this._crackOk = !!tex;
+    if (!tex) return null;
+    try {
+      var caps = this.ctx && this.ctx.renderer && this.ctx.renderer.capabilities;
+      if (caps && caps.getMaxAnisotropy) {
+        tex.anisotropy = Math.max(1, Math.min(8, caps.getMaxAnisotropy() || 1));
+      }
+    } catch (e2) { /* fine */ }
+    var m = new THREE.MeshStandardMaterial({
+      map: tex, color: 0xffffff, roughness: 0.94, metalness: 0.0,
+      transparent: true, depthWrite: false, vertexColors: true,
+      polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
+      envMapIntensity: 0.55
+    });
+    m.name = 'boneyard_padjoints';
+    return m;
+  };
+
   LevelBoneyard.prototype._chainMaterial = function () {
     var tex = null;
     try { tex = chainLinkTexture(); } catch (e) { tex = null; }
@@ -2891,6 +3780,7 @@
     }
 
     stage('ground', function () { buildPad(self, B, rng, N); });
+    stage('padjoints', function () { buildPadOverlay(self, rng, N); });
     stage('desert', function () { buildDesert(self, B, rng, N); });
     await GAME.yieldFrame();
 
@@ -3130,6 +4020,30 @@
       width: 5.2, length: 14.0, strength: 1.0, kind: 'door'
     });
 
+    // ---- THE SLAB, AS A LIGHT SOURCE -------------------------------------
+    // Measured, and it is the single biggest lighting fact about this level:
+    // an anti-sun VERTICAL face here receives about 1% of the key. The hangar's
+    // shaded end wall metered 0.0035 linear against 0.373 on its own sunlit
+    // face - and setting that material to metalness 0.0 with envMapIntensity
+    // 1.8 changed it by 3%, which proves the problem is not the material, it is
+    // that no light arrives. (Down-facing surfaces are fine: the same airframe
+    // material reads 0.14 on Sierra Seven's belly.) The shared rig's skylight
+    // and hemisphere terms are gated by the sky-visibility volume, whose cells
+    // here are 6.0 x 1.0 x 2.9 m, and next to a 32 m shed they return near
+    // their floor - so a wall standing in the open photographs as if it were
+    // inside a cave. That is a shared-system finding and it is reported as one.
+    //
+    // What this level can legitimately do about it is model the source the rig
+    // has no term for. Two hundred metres of white concrete under a vertical
+    // sun is not a metaphor - it is a bounce card the size of the level, and
+    // in every real photograph of AMARG it is what fills the shaded side of
+    // every airframe. So the level publishes it: two wide, warm, SHADOWLESS
+    // directionals from the anti-sun quadrant at a shallow angle. They are
+    // physically the reflected slab, they cannot touch a sunlit face (its
+    // lambert term against them is negative), and they are aimed off the real
+    // sun in update() rather than off the authored one.
+    this._buildBounceFill();
+
     // ---- the shade record ------------------------------------------------------
     this.shadeZones = this.anchors.shadeZones;
     this.heatShimmer = {
@@ -3141,6 +4055,58 @@
         { x: 76, z: 30, r: 30 }, { x: 0, z: 40, r: 26 }
       ]
     };
+  };
+
+  // ---------------------------------------------------------------------------
+  // The slab bounce, as two shadowless directionals on the level's own root.
+  // A level owning a light is not a new idea in this build - the harbor runs a
+  // hand-built rig and every level publishes practicalLights - but a POINT
+  // light cannot do this job: inverse-square over a 32 m wall means either a
+  // hotspot at one end or nothing at the other, and what a bounce card gives
+  // is a near-parallel wash. Neither light casts a shadow, so the cost is two
+  // extra lambert terms and no extra depth pass.
+  // ---------------------------------------------------------------------------
+  var BOUNCE_ELEV = 12.0 * Math.PI / 180;
+  var BOUNCE_SPREAD = 48.0 * Math.PI / 180;
+
+  LevelBoneyard.prototype._buildBounceFill = function () {
+    this._bounce = [];
+    var i;
+    for (i = 0; i < 2; i++) {
+      var L = new THREE.DirectionalLight(0xffffff, 0.0);
+      // A slab bounce is the sun's colour reflected off warm concrete, so it
+      // is WARMER than the key and slightly desaturated, never the cool sky
+      // blue an ambient probe would give.
+      L.color.setHex(0xffe8cc, THREE.SRGBColorSpace);
+      L.castShadow = false;
+      // 1.15, calibrated by sweep: at 0.46 an anti-sun airframe panel measured
+      // 0.016 linear (23:1 against its own lit face) and at 3.0 it measured
+      // 0.085, which is brighter than the shaded ground it stands on and
+      // flattens every shaded form in the yard. 1.15 lands airframe skin at
+      // roughly 10:1 and leaves the ground bounce reading as bounce.
+      L.intensity = 1.15;
+      var tgt = new THREE.Object3D();
+      tgt.position.set(0, 0, 0);
+      this.root.add(tgt);
+      L.target = tgt;
+      this.root.add(L);
+      this._bounce.push(L);
+    }
+    this._aimBounce(SUN_AZ, SUN_EL);
+  };
+
+  // Aim both fills at +/- BOUNCE_SPREAD either side of the anti-sun bearing.
+  LevelBoneyard.prototype._aimBounce = function (az, el) {
+    if (!this._bounce || !this._bounce.length) return;
+    var back = az + Math.PI;
+    for (var i = 0; i < this._bounce.length; i++) {
+      var a = back + (i ? BOUNCE_SPREAD : -BOUNCE_SPREAD);
+      var ce = Math.cos(BOUNCE_ELEV);
+      var dx = Math.sin(a) * ce, dz = -Math.cos(a) * ce, dy = Math.sin(BOUNCE_ELEV);
+      this._bounce[i].position.set(dx * 160, dy * 160 + 6, dz * 160);
+      this._bounce[i].updateMatrixWorld();
+    }
+    void el;
   };
 
   // ---------------------------------------------------------------------------
@@ -3337,16 +4303,34 @@
         var r, g, b;
 
         if (mode === 'ground') {
-          // ---- R: everything that has settled on the slab -------------------
-          var dust = sandCover(x, z, noise) * 0.62;
-          // rubber and oil down the taxiway centre and across every row entry
+          // -----------------------------------------------------------------
+          // R: everything that has settled on the slab - CAPPED.
+          //
+          // This term used to saturate. Sand (0.62) + a lane-wide rubber wash
+          // (0.20) + a 3 m-wide tyre band (0.30) + soot + crack dirt all
+          // stacked into `1 - saturate(dust)*0.70`, so the middle of taxiway
+          // Alpha - where two of the three hero eyes stand - bottomed out at a
+          // 0.30 multiplier and measured 0.048 linear against 0.226-0.333 for
+          // the IDENTICAL material 40 m away, with no shadow to explain it.
+          // The foreground of the level's signature frame was a dead cold grey
+          // field reading as damp asphalt in brutal sun.
+          //
+          // Two changes. The cap: 0.45, so the darkest slab keeps a 0.685
+          // multiplier and the near apron cannot fall more than ~1.5x below
+          // the far apron. And the rubber: real tyre deposit is a NARROW PAIR
+          // OF RIBBONS on a pale slab - contrast, not a uniform darkening - so
+          // the lane-wide wash is nearly gone and the tracks are 0.5 m wide
+          // and twice as dark as they were.
+          // -----------------------------------------------------------------
+          var dust = sandCover(x, z, noise) * 0.46;
           var lane = 1 - M.saturate(Math.abs(x) / TAXI_HALF);
-          dust += lane * lane * 0.20;
-          // tyre tracks: two parallel bands either side of the centreline, and
+          dust += lane * lane * 0.06;
+          // tyre tracks: two narrow bands either side of the centreline, and
           // they WANDER, because a tug driver does not drive a ruled line
           var wob = Math.sin(z * 0.045) * 1.4 + Math.sin(z * 0.017 + 2.1) * 2.2;
           var tt = Math.min(Math.abs(x - 3.6 - wob), Math.abs(x + 3.6 - wob));
-          if (tt < 1.5) dust += (1 - tt / 1.5) * 0.30;
+          if (tt < 0.52) dust += (1 - tt / 0.52) * 0.40;
+          else if (tt < 1.6) dust += (1 - (tt - 0.52) / 1.08) * 0.07;
           // soot fans behind every parked jet pipe
           var soot = 0;
           for (var si = 0; si < ROWS_X.length; si++) {
@@ -3359,11 +4343,14 @@
               }
             }
           }
-          dust += M.saturate(soot) * 0.45;
-          // the crack field reads as a dark line because dirt collects in it
+          dust += M.saturate(soot) * 0.34;
+          // The crack field is now PAINTED at its real 1 cm width by the pad
+          // overlay, so the vertex pass only carries the broad dirt halo round
+          // it - at 0.42 on a 1.5 m grid it was a field of soft blobs standing
+          // in for cracks it could never resolve.
           var cr = crackField(x, z, noise);
-          dust += cr * 0.42 + jointDip(x, z) * 9.0;
-          r = 1 - M.saturate(dust) * 0.70;
+          dust += cr * 0.16 + jointDip(x, z) * 3.5;
+          r = 1 - Math.min(M.saturate(dust), 0.45) * 0.70;
           // ---- G: dry, except where something has leaked --------------------
           g = 1.0;
           for (var pi = 0; pi < spills.length; pi++) {
@@ -3372,7 +4359,7 @@
             if (sd2 < sp[2]) g = Math.min(g, M.lerp(0.30, 1.0, sd2 / sp[2]));
           }
           // ---- B: chipped arrises and spalled crack edges --------------------
-          b = 1 - M.saturate(cr * 0.55 + jointDip(x, z) * 7.0) * 0.55;
+          b = 1 - M.saturate(cr * 0.40 + jointDip(x, z) * 5.0) * 0.55;
           // and a slow low-frequency variation so 200 m of slab is not one value
           var vv = noise.fbm2(x * 0.028 + 40, z * 0.028 - 17, 3) * 0.10;
           r = M.saturate(r + vv); b = M.saturate(b + vv * 0.5);
@@ -3416,7 +4403,7 @@
           // and it is precisely that patchwork - not a normal map - that makes a
           // 44 m aluminium tube read as a real one.
           var pan = noise.fbm2(x * 0.55 + z * 0.13 + 60, y * 1.7 - z * 0.42, 3);
-          var chalk = 1 + pan * 0.085;
+          var chalk = 1 + pan * 0.048;
           // sun bleach on up-facing surfaces, grime on down-facing ones
           var upf = M.saturate(ny);
           var dnf = M.saturate(-ny);
@@ -3639,12 +4626,52 @@
     //   * the T-tail at 30 m and 24 degrees up, against open sky
     //   * a maintenance stand in the shade beside the fuselage for mid-ground
     // ------------------------------------------------------------------------
-    var ex = s7.centre.x - 13.5;
-    var band = s7.shade.at(ex);
-    var ez = (band ? band.z1 : s7.centre.z - 4.0) + 9.2;
+    // ------------------------------------------------------------------------
+    // RE-SOLVED, because the first solve did not photograph.
+    //
+    // What it produced: the horizon on the vertical centreline, the left half
+    // three stacked grey bands (sky at 0.005 local sd, ridge, apron) with no
+    // vertical and no mid-ground mass, the reticle on empty concrete, both
+    // nacelles illegible, and the wing shadow reading as an isolated black
+    // rectangle with no visible caster. Cell-mean range 3.5x against the
+    // shipped market street's 10.6x.
+    //
+    // The diagnosis was standpoint, not aim. From 13.5 m out along the wing the
+    // whole aeroplane subtends about 50 degrees at 22-27 m, so it sits in the
+    // middle of the frame and nothing can fill the outer thirds - there is
+    // simply no other object within 60 m of that spot.
+    //
+    // So the eye moves to the PORT WING TIP - one metre outboard of it, on the
+    // sunlit slab south of the shade ribbon - and turns to look back along the
+    // wing toward the root. That single move fixes all four complaints at once,
+    // and every number below is derived from the wing recipe rather than typed:
+    //
+    //   LEFT THIRD    the port outboard nacelle, 12 m out and 2.6 m above the
+    //                 eye: a hard dark mass closing the side, with the T-tail
+    //                 at 29 m above it and the hulk row at 69 m directly behind
+    //                 it, so the third has three depths in it
+    //   CENTRE        the inboard nacelle, the main bogie and the maintenance
+    //                 stand at 15-22 m, and the wing's own shadow edge crossing
+    //                 the slab at 8-14 m with the wing that casts it visibly
+    //                 above it in the same frame
+    //   RIGHT THIRD   the sunlit port fuselage flank running away to the nose -
+    //                 the frame's highlight anchor, sitting directly over the
+    //                 shadow line
+    //   HORIZON       pitch +11 degrees puts it 64% down the frame, so the fin
+    //                 and the wing get open sky to sit against
+    //   FOREGROUND    x = -5.6 is four metres clear of the nearer wandering
+    //                 tyre track, so the bottom of the frame is pale slab and
+    //                 the shadow can be black against it
+    //   SUN           heading 073, key at 319: 114 degrees off axis, the widest
+    //                 separation of any pose in the set
+    // ------------------------------------------------------------------------
+    var s7semi = s7.shade.semiSpan;
+    var ex = s7.centre.x - (s7semi + 0.5);
+    var ez = s7.centre.z + 7.0;
     gy = this.sampleGround(ex, ez);
     var hero1 = pose(ex, gy + 1.66, ez,
-      s7.centre.x - 2.0, 3.2, s7.centre.z - 12.5);
+      s7.centre.x - TYPES.transport4.r * 1.06, s7.wingY - 0.15,
+      s7.centre.z - TYPES.transport4.wing.rootZ - 1.0);
 
     // ---- HERO 2 --------------------------------------------------------------
     // A DIFFERENT SPACE AND A DIFFERENT DEPTH, which is what the roster asks
@@ -3823,11 +4850,43 @@
     if (!this._fogSet && ctx && ctx.sky && typeof ctx.sky.setFog === 'function') {
       this._fogSet = true;
       try {
+        // heightScale 15, not 3.2. A 3.2 m e-folding height keeps the haze
+        // clinging to the tarmac, which is what a heat shimmer does - but it
+        // also means the ESTABLISHING eye, 22 m up on the water tower, spends
+        // its entire sightline above the layer and gets no aerial perspective
+        // at all. The same 430 m range measured 0.153 linear from the 1.66 m
+        // hero3 eye and 0.0376 from the tower: a nine-fold inconsistency in
+        // the one cue that tells the audience the yard is 200 m across.
+        // Density comes down to keep the near-field air where it was.
+        // heightScale 30, and the last number in this level to be argued out
+        // rather than measured. At 15 m the haze column still ended below the
+        // range's own crest - exp(-96/15) is 0.0016 - so the tops of the
+        // mountains got no aerial perspective at all and their sun-facing
+        // spurs printed as hard pale patches against their shaded ones: the
+        // "cream blotches that read as snow" and a straight palette collision
+        // with snowbound. A desert haze column is tens of metres deep, not
+        // three; at 30 m the crests finally sit inside it and the range
+        // compresses to one value with a gradient, which is what it is.
         ctx.sky.setFog({
-          density: 0.0062, heightScale: 3.2, startDistance: 6.0,
-          desaturate: 0.10, mieG: 0.58
+          density: 0.0046, heightScale: 30.0, startDistance: 8.0,
+          desaturate: 0.12, mieG: 0.58
         });
       } catch (e) { GAME.logError('boneyard.fog', e); }
+    }
+
+    // ---- THE CASCADE ----------------------------------------------------
+    // 82 m of default shadow distance in a yard that is 204 x 168 m with an
+    // establishing eye 22 m up. Everything past 82 m cast NOTHING, so the one
+    // gift a hard noon sun gives this level - thirty-four aeroplane shadows
+    // raking across pale hardstanding - was switched off across most of the
+    // frame it matters in, and the yard band of the overview measured
+    // 0.507-0.573 mean across all six columns: exactly the flat, white,
+    // contrastless frame the brief names as the trap.
+    if (!this._shadowSet && ctx && ctx.lighting &&
+        typeof ctx.lighting.setShadowDistance === 'function') {
+      this._shadowSet = true;
+      try { ctx.lighting.setShadowDistance(210); }
+      catch (e) { GAME.logError('boneyard.shadowdist', e); }
     }
 
     if (!this._sunChecked && ctx && ctx.sky && ctx.sky.sunDirection) {
@@ -3848,6 +4907,10 @@
           zz.centre.x += nx - old.x; zz.centre.z += nz - old.z;
         }
         this.anchors.yard.sunElevation = el;
+        // and re-aim the slab bounce off the REAL key rather than the authored
+        // one, so the fill can never end up on the same side as the sun
+        try { this._aimBounce(Math.atan2(sd.x, -sd.z), el); }
+        catch (e2) { GAME.logError('boneyard.bounce', e2); }
       }
     }
 

@@ -912,7 +912,7 @@
         var ang = -Math.PI * 0.5 + rng.range(-1.25, 1.25);
         var len = H * rng.range(0.30, 0.78);
         var tx = baseX + Math.cos(ang) * len, ty = baseY + Math.sin(ang) * len;
-        stem(baseX + rng.range(-6, 6), baseY, tx, ty, H * rng.range(0.006, 0.014), '#9c8b6c');
+        stem(baseX + rng.range(-6, 6), baseY, tx, ty, H * rng.range(0.006, 0.014), '#c2b291');
         if (rng.bool(0.5)) {
           stem(tx, ty, tx + rng.range(-H * 0.16, H * 0.16), ty - rng.range(0, H * 0.18),
             H * 0.006, '#b0a184');
@@ -920,7 +920,7 @@
       }
       for (var l = 0; l < 26; l++) {
         leaflet(baseX + rng.gaussian(0, H * 0.16), baseY - rng.range(0, H * 0.5),
-          H * rng.range(0.008, 0.017), 'rgba(150,132,96,0.80)');
+          H * rng.range(0.008, 0.017), 'rgba(196,176,132,0.80)');
       }
     })();
 
@@ -2257,6 +2257,63 @@
 
   // Alpha-tested cloth with a rigid shadow is an obvious tell, so anything that
   // moves gets a depth material running the SAME displacement.
+  // ==========================================================================
+  // SUN-THROUGH.
+  //
+  // The measurement that produced this: a tumbleweed sitting on 0.0898 linear
+  // apron measured 0.0342 - a backlit straw ball, in a level whose entire
+  // subject is the sun, coming out DARKER than the concrete under it.  That is
+  // the same failure mode as the 2,626 ferns that rendered as black confetti,
+  // and it has the same cause: an alpha card is opaque to the renderer, so a
+  // plant lit from behind is a silhouette and nothing else.
+  //
+  // Real dry vegetation is close to a diffuser.  Two terms, both cheap:
+  //   WRAP      the lambert term is remapped so light still arrives at up to
+  //             ~60 degrees past the terminator, which is what a thin leaf or a
+  //             straw stem does
+  //   BACK      a view-dependent lobe along the light's direction of travel, so
+  //             a ball of dry twigs between the camera and the sun GLOWS rather
+  //             than blocking
+  // The sun vector is a uniform this module owns and refreshes from
+  // ctx.sky.sunDirection, not a guess at which entry of directionalLights[] the
+  // key happens to be.
+  // ==========================================================================
+  var TRANS_PARS = [
+    'uniform vec3 byfSunDir;',
+    'uniform vec3 byfSunCol;',
+    'uniform float byfTrans;'
+  ].join('\n');
+
+  var TRANS_BODY = [
+    '{',
+    '  vec3 byLw = normalize( byfSunDir );',
+    '  vec3 byLv = normalize( ( viewMatrix * vec4( byLw, 0.0 ) ).xyz );',
+    '  vec3 byV = normalize( vViewPosition );',
+    // past-the-terminator wrap: 0 at 145 degrees, 1 facing the sun
+    '  float byWrapT = max( 0.0, ( dot( normal, byLv ) + 0.82 ) / 1.82 );',
+    // and the forward lobe: the camera looking INTO the light through the plant
+    '  float byBack = pow( max( 0.0, dot( byV, -byLv ) ), 2.4 );',
+    '  vec3 byT = diffuseColor.rgb * byfSunCol * byfTrans *',
+    '             ( byWrapT * 0.34 + byBack * 1.05 * byWrapT );',
+    '  gl_FragColor.rgb += byT;',
+    '}'
+  ].join('\n');
+
+  var TRANS_ANCHOR = ['#include <opaque_fragment>', '#include <output_fragment>'];
+
+  function applyTranslucency(mat, uSunDir, uSunCol, uAmt, keySuffix) {
+    if (!mat) return mat;
+    return chainCompile(mat, 'bytrans' + (keySuffix || ''), function (shader) {
+      shader.uniforms.byfSunDir = uSunDir;
+      shader.uniforms.byfSunCol = uSunCol;
+      shader.uniforms.byfTrans = uAmt;
+      var f = injectAfter(shader.fragmentShader, TRANS_ANCHOR, TRANS_BODY);
+      if (f.idx < 0) return;
+      shader.fragmentShader = f.src.replace('#include <common>',
+        '#include <common>\n' + TRANS_PARS);
+    });
+  }
+
   function windDepthMaterial(uTime, uWind, uWindDir, map, alphaTest, side) {
     var d = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
     if (map) { d.map = map; d.alphaTest = alphaTest === undefined ? 0.5 : alphaTest; }
@@ -2319,6 +2376,13 @@
     this.windDir = new THREE.Vector2(0.66, 0.75).normalize();
     this.uWindDir = { value: this.windDir.clone() };
     this.windSpeed = 5.0;
+    // The key, for the vegetation sun-through term. Seeded with the bearing
+    // level_boneyard authors against (319 at 30 degrees up) and replaced by
+    // ctx.sky.sunDirection on the first frame that has one.
+    this.uSunDir = { value: new THREE.Vector3(-0.571, 0.500, -0.651).normalize() };
+    this.uSunCol = { value: new THREE.Color(1.0, 0.92, 0.78) };
+    this.uTrans = { value: 1.0 };
+    this.devils = [];
 
     this.tex = {};
     this.mats = {};
@@ -2380,6 +2444,8 @@
     await this._phase('desert', this._dressDesert);
     await this._phase('joints', this._dressJointWeeds);
     await this._phase('drifts', this._dressDrifts);
+    await this._phase('shade', this._dressShade);
+    await this._phase('devils', this._dressDevils);
     await this._phase('commit', this._commit);
     clearCaches();
     return this;
@@ -2589,6 +2655,7 @@
     m.plant.shadowSide = THREE.DoubleSide;
     m.plant.name = 'by_plant';
     applyWind(m.plant, this.uTime, this.uWind, this.uWindDir, 'p');
+    applyTranslucency(m.plant, this.uSunDir, this.uSunCol, this.uTrans, 'p');
     this.plantDepth = windDepthMaterial(this.uTime, this.uWind, this.uWindDir,
       this.tex.plants, 0.42, THREE.DoubleSide);
 
@@ -3011,6 +3078,10 @@
       // plants: the R channel does the dying, not the B
       plantLife: { noise: N, dust: 0.26, grime: 0.30, edge: 0.10, hiY: 1.0 }
     };
+    // Published, because the dressing passes build one-off geometry too (hose
+    // runs, cable runs) and a wear preset invented at the call site is how a
+    // prop set stops reading as one place.
+    this.W = W;
 
     // Build one Item into a set of parallel batches.
     function combo(key, item, spec, max, shadow) {
@@ -3970,6 +4041,106 @@
     this._put('barrier', hg.x0 + 26.0, hg.z0 + 2.6, o({
       yaw: Math.PI * 0.5, r: 1.5, h: 0.9, collider: [0.32, 0.42, 1.25], material: 'concrete'
     }));
+
+    // ---- THE FLOOR ---------------------------------------------------------
+    // Measured at 0.0284 linear with a 0.074 local sd across a 400 x 130 px
+    // sample: an empty grey plane. This is the level's best frame and its floor
+    // carried literally nothing - no bay lines, no oil, no swarf, no hoses, no
+    // bay number - which is the "empty geometry with no props, clutter or wear"
+    // instant-fail wearing a good light rig.
+    var fw = hg.x1 - hg.x0, fd = hg.z1 - hg.z0;
+    var bayY = fy + 0.010;
+
+    // Bay outline paint. Two bays, laid out on the door centreline the way a
+    // real shed is marked, in the same worn safety yellow as the stands.
+    function line(x0, z0, x1, z1, wdt) {
+      var ddx = x1 - x0, ddz = z1 - z0;
+      var len = Math.sqrt(ddx * ddx + ddz * ddz);
+      if (len < 0.1) return;
+      var yaw = Math.atan2(ddx, ddz);
+      // broken into 1.4 m runs so the paint can be missing in places
+      var n = Math.max(1, Math.round(len / 1.4));
+      for (var q = 0; q < n; q++) {
+        if (R.next() < 0.13) continue;
+        var t0 = (q + 0.06 + R.range(0, 0.10)) / n, t1 = (q + 0.94 - R.range(0, 0.10)) / n;
+        var mx = M.lerp(x0, x1, (t0 + t1) * 0.5), mz = M.lerp(z0, z1, (t0 + t1) * 0.5);
+        self.S.yellow.push(part(bx(wdt * R.range(0.85, 1.1), 0.012, len * (t1 - t0), 0.004),
+          Tn(mx, bayY, mz, 0, yaw, 0)));
+      }
+    }
+    var self = this;
+    var b1x0 = hg.x0 + 5.0, b1x1 = hg.x0 + 26.0;
+    var b1z0 = hg.doorZ0 - 2.0, b1z1 = hg.doorZ1 + 2.0;
+    line(b1x0, b1z0, b1x1, b1z0, 0.14);
+    line(b1x0, b1z1, b1x1, b1z1, 0.14);
+    line(b1x0, b1z0, b1x0, b1z1, 0.14);
+    line(b1x1, b1z0, b1x1, b1z1, 0.14);
+    // the nose-stop T and the centreline the aircraft is towed in on
+    line(hg.x0 + 2.0, (b1z0 + b1z1) * 0.5, b1x1 - 3.0, (b1z0 + b1z1) * 0.5, 0.11);
+    line(b1x1 - 3.0, (b1z0 + b1z1) * 0.5 - 1.6, b1x1 - 3.0, (b1z0 + b1z1) * 0.5 + 1.6, 0.16);
+    // a walkway edge down the bench side, and the hazard hatching at the door
+    line(hg.x1 - 3.4, hg.z0 + 2.0, hg.x1 - 3.4, hg.z1 - 2.0, 0.10);
+    for (i = 0; i < 9; i++) {
+      var hx = hg.x0 + 1.2 + i * 0.9;
+      line(hx, hg.doorZ0 - 3.4, hx - 0.9, hg.doorZ0 - 1.6, 0.10);
+    }
+
+    // The bay number, stencilled on the floor where an inventory yard puts it.
+    this._sign('signC', hg.x0 + 3.0, hg.z0 + 4.4, Math.PI * 0.5, 1.5, 0.78, 2.0);
+
+    // Swarf, rivet heads and offcuts: the field of small bright metal a
+    // strip-down leaves on a floor. Clustered under the aircraft and along the
+    // bench run, never scattered evenly.
+    if (jk) {
+      for (i = 0; i < 26; i++) {
+        var sa = R.range(0, TAU), sr2 = Math.sqrt(R.next()) * 5.5;
+        this._drop(this._var('scrap', 3), jk.x + Math.cos(sa) * sr2, jk.z + Math.sin(sa) * sr2, o({
+          r: 0.10, low: true, tilt: 0.5, scale: R.range(0.16, 0.34), noClear: true
+        }));
+      }
+      // hose and cable runs, from the wall to the aircraft - the thing that
+      // makes a hangar read as plugged in rather than as a shed with a jet in it
+      var hose = new Item();
+      var hx0 = hg.x1 - 2.2, hz0 = jk.z - 4.0;
+      var px2 = hx0, pz2 = hz0;
+      for (i = 1; i <= 7; i++) {
+        var t2 = i / 7;
+        var nx2 = M.lerp(hx0, jk.x + 1.2, t2) + Math.sin(t2 * 5.1) * 0.9;
+        var nz2 = M.lerp(hz0, jk.z - 0.6, t2) + Math.cos(t2 * 4.3) * 0.7;
+        hose.tube('rubber', 0.035, px2, fy + 0.035, pz2, nx2, fy + 0.035, nz2, 6);
+        px2 = nx2; pz2 = nz2;
+      }
+      var hg2 = hose.merge('rubber');
+      if (hg2) {
+        this._finishGeo(hg2, 'rubber', this.W && this.W.rubber, 420);
+        this.S.rubber.push(part(hg2, null));
+      }
+      var cab = new Item();
+      var cx3 = hg.x0 + 1.6, cz3 = jk.z + 4.6;
+      var qx = cx3, qz = cz3;
+      for (i = 1; i <= 6; i++) {
+        var t3 = i / 6;
+        var mx3 = M.lerp(cx3, jk.x - 1.0, t3) + Math.sin(t3 * 3.7 + 1.1) * 1.1;
+        var mz3 = M.lerp(cz3, jk.z + 1.2, t3) + Math.cos(t3 * 6.1) * 0.6;
+        cab.tube('steel', 0.026, qx, fy + 0.026, qz, mx3, fy + 0.026, mz3, 5);
+        qx = mx3; qz = mz3;
+      }
+      var cg = cab.merge('steel');
+      if (cg) {
+        this._finishGeo(cg, 'painted_metal', this.W && this.W.plant, 420);
+        this.S.steel.push(part(cg, null));
+      }
+      // more drip pans, in the cluster a jacked airframe actually has
+      for (i = 0; i < 3; i++) {
+        this._drop(this.B.dripPan, jk.x + R.range(-2.4, 2.4), jk.z + R.range(-4.5, 4.5), o({
+          r: 0.55, yaw: R.range(0, TAU), low: true
+        }));
+      }
+      this._stain(1, jk.x - 1.4, jk.z + 3.2, 3.4, 3.0, 0.7);
+      this._stain(0, jk.x + 1.8, jk.z - 2.6, 1.8, 1.6, 1.9);
+      this._stain(3, hg.x0 + 6.0, jk.z, 10.0, 12.0, 0.0);
+    }
+    void fw; void fd;
   };
 
   // ==========================================================================
@@ -4772,6 +4943,182 @@
   };
 
   // ==========================================================================
+  // SHADE IS THE SCARCE RESOURCE, AND IT IS WHERE THINGS GET PUT DOWN.
+  //
+  // The level publishes 34 shade rectangles for exactly this and this file read
+  // them once. The count that mattered: inside the hero1 90 m frustum there
+  // were ~355 instances, of which 150 were weeds, 48 chocks and 31 sand drifts,
+  // so the readable clutter was a couple of dozen objects across a 200 m yard -
+  // and what there was read as evenly-sprinkled confetti on open concrete
+  // rather than as gear grouped where crews work.
+  //
+  // A crew working an airframe at noon does not put its cart in the sun. So
+  // every shade zone gets a small, coherent CLUSTER on its lee side: a couple
+  // of drums, a pallet stack, a bin, a cart, a couple of crates. Same objects,
+  // ten times the read, and none of it is a new asset.
+  // ==========================================================================
+  PropsBoneyard.prototype._dressShade = function () {
+    if (!this.shade || !this.shade.length) return;
+    var R = this.rng;
+    var wd = this.windDir;
+    for (var i = 0; i < this.shade.length; i++) {
+      var s = this.shade[i];
+      if (!s || s.source === 'hangar') continue;      // the shed has its own pass
+      var hw = (s.x1 - s.x0) * 0.5, hd = (s.z1 - s.z0) * 0.5;
+      if (!(hw > 1.2 && hd > 1.2)) continue;
+      // the lee corner of the zone, which is also the deepest part of it
+      var cx = M.lerp(s.x0, s.x1, 0.5 + R.range(-0.28, 0.28)) + wd.x * hw * 0.35;
+      var cz = M.lerp(s.z0, s.z1, 0.5 + R.range(-0.28, 0.28)) + wd.y * hd * 0.35;
+      var kind = i % 5;
+      if (kind === 0) {
+        // a pair of drums and a jerrycan beside them
+        this._against(this._var('drum', 4), cx - 0.9, cz, cx + 0.9, cz, 0, 1, 2,
+          { r: 0.34, off: 0.10, low: true, noClear: true, foot: false });
+        this._drop(this.B.jerrycan, cx + 1.5, cz + 0.5, {
+          r: 0.22, low: true, noClear: true, foot: false, yaw: R.range(0, TAU)
+        });
+      } else if (kind === 1) {
+        this._stack(this.B.pallet, cx, cz, R.int(3, 6), 0.145,
+          { r: 0.7, yaw: R.range(0, TAU) });
+        this._drop(this.B.partsBin, cx + 1.3, cz - 0.7, {
+          r: 0.24, low: true, noClear: true, foot: false, yaw: R.range(0, TAU)
+        });
+      } else if (kind === 2) {
+        this._put('toolCart', cx, cz, {
+          yaw: R.range(0, TAU), r: 0.9, h: 1.0, taxi: true, noClear: true, foot: false
+        });
+        this._heap(this.B.partsBin, cx + 1.6, cz + 0.9, 3, 0.9,
+          { r: 0.24, low: true, tilt: 0.03 });
+      } else if (kind === 3) {
+        this._drop(this.B.crate, cx, cz, {
+          r: 0.7, yaw: R.range(0, TAU), noClear: true, foot: false,
+          scale: R.range(0.80, 1.0)
+        });
+        this._drop(this.B.crate, cx + 1.15, cz + 0.35, {
+          r: 0.5, yaw: R.range(0, TAU), noClear: true, foot: false,
+          sx: 0.58, sy: 0.54, sz: 0.66
+        });
+        this._drop(this.B.bucket, cx - 0.9, cz + 0.8, {
+          r: 0.22, low: true, noClear: true, foot: false
+        });
+      } else {
+        this._tyreRow(cx, cz, R.int(3, 5), R.range(0, Math.PI), {});
+        this._drop(this.B.dripPan, cx + 1.4, cz - 1.0, {
+          r: 0.55, low: true, noClear: true, foot: false, yaw: R.range(0, TAU)
+        });
+      }
+      // and the mark a stack leaves after twenty summers in the same spot
+      if (R.next() < 0.45) this._stain(3, cx, cz, R.range(2.4, 4.4), R.range(2.0, 3.6), R.range(0, 3));
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // A dust-devil column: a soft vertical alpha smear, tiling in v so the UV
+  // scroll never shows a seam, with a torn edge so the column is ragged.
+  // --------------------------------------------------------------------------
+  TX.devil = function (size, seed) {
+    var c = TX.canvas(size, size * 2);
+    if (!c) return null;
+    var g = c.getContext('2d');
+    if (!g) return null;
+    var rng = new GAME.RNG(seed);
+    var W = c.width, H = c.height, i;
+    g.clearRect(0, 0, W, H);
+    // the core: a dense vertical band that thins toward the edges
+    for (i = 0; i < 260; i++) {
+      var x = W * 0.5 + rng.gaussian(0, W * 0.17);
+      var y = rng.next() * H;
+      var r = rng.range(W * 0.03, W * 0.16);
+      var a = (1 - Math.abs(x - W * 0.5) / (W * 0.5)) * rng.range(0.14, 0.46);
+      if (a <= 0) continue;
+      var gr = g.createRadialGradient(x, y, 0, x, y, r);
+      gr.addColorStop(0, 'rgba(216,190,150,' + a.toFixed(3) + ')');
+      gr.addColorStop(1, 'rgba(214,188,148,0)');
+      g.fillStyle = gr;
+      g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill();
+      // wrapped copy so the vertical scroll is seamless
+      var y2 = y > H * 0.5 ? y - H : y + H;
+      var gr2 = g.createRadialGradient(x, y2, 0, x, y2, r);
+      gr2.addColorStop(0, 'rgba(216,190,150,' + a.toFixed(3) + ')');
+      gr2.addColorStop(1, 'rgba(214,188,148,0)');
+      g.fillStyle = gr2;
+      g.beginPath(); g.arc(x, y2, r, 0, TAU); g.fill();
+    }
+    // fade the top so the column dissipates instead of ending
+    var fade = g.createLinearGradient(0, 0, 0, H * 0.28);
+    fade.addColorStop(0, 'rgba(0,0,0,1)');
+    fade.addColorStop(1, 'rgba(0,0,0,0)');
+    g.globalCompositeOperation = 'destination-out';
+    g.fillStyle = fade;
+    g.fillRect(0, 0, W, H * 0.28);
+    g.globalCompositeOperation = 'source-over';
+    return c;
+  };
+
+  PropsBoneyard.prototype._dressDevils = function () {
+    var A = this.A;
+    if (!A || !A.dustDevils || !A.dustDevils.length) return;
+    var R = this.rng;
+    var canvas = TX.devil(128, 0xD3711);
+    var tex = TX.tex(canvas, true, 1, 1, this._aniso || 4);
+    if (!tex) return;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    // Only two at a time. A yard with a devil at every published fetch reads as
+    // a weather event; two is a hot afternoon.
+    var pick = [0, 1];
+    for (var k = 0; k < pick.length; k++) {
+      var a = A.dustDevils[pick[k] % A.dustDevils.length];
+      if (!a) continue;
+      // fog:false, and it is not a shortcut. A dust column IS haze, and at
+      // 140 m the shader fog was blending it toward the very colour it is made
+      // of - so a 16 m column dissolved into the sky it was standing against
+      // and the frame gained nothing. It carries its own aerial perspective in
+      // its albedo instead: a sunlit dust column at noon is brighter and warmer
+      // than the horizon sky behind it, which is exactly what makes one
+      // readable in a photograph from two kilometres away.
+      var mat = new THREE.MeshBasicMaterial({
+        map: tex, color: 0xe4d2ae, transparent: true, opacity: 0.7,
+        depthWrite: false, side: THREE.DoubleSide, fog: false,
+        blending: THREE.NormalBlending
+      });
+      mat.name = 'by_devil';
+      var obj = new THREE.Object3D();
+      var H = R.range(13.0, 19.0);
+      // Four cards on a fan, each a tapered trapezoid: wide and soft at the
+      // top, tight at the foot, which is the shape of the real thing.
+      for (var i = 0; i < 4; i++) {
+        var g = new THREE.PlaneGeometry(1, 1, 1, 3);
+        var p = g.attributes.position, uvA = g.attributes.uv;
+        for (var v = 0; v < p.count; v++) {
+          var fy = uvA.getY(v);                       // 0 at the foot, 1 at the top
+          var wdt = M.lerp(1.5, 6.5, Math.pow(fy, 0.75));
+          p.setX(v, p.getX(v) * wdt);
+          p.setY(v, fy * H);
+          // the column leans downwind as it rises
+          p.setZ(v, fy * fy * 2.2);
+        }
+        g.computeVertexNormals();
+        var mesh = new THREE.Mesh(g, mat);
+        mesh.rotation.y = (i / 4) * Math.PI + R.range(-0.12, 0.12);
+        mesh.castShadow = false;
+        mesh.receiveShadow = false;
+        obj.add(mesh);
+      }
+      obj.position.set(a.x, this._ground(a.x, a.z) - 0.2, a.z);
+      obj.matrixAutoUpdate = false;
+      obj.updateMatrix();
+      this.root.add(obj);
+      this.devils.push({
+        obj: obj, mat: mat, x: a.x, z: a.z,
+        rate: R.range(1.5, 2.6), phase: R.range(0, TAU),
+        pulse: R.range(0.09, 0.16), speed: R.range(0.9, 1.6), run: 90,
+        alpha: R.range(0.52, 0.72)
+      });
+    }
+  };
+
+  // ==========================================================================
   // PER FRAME
   //
   // The yard is dead aeroplanes on hot concrete; the only things alive in it
@@ -4816,6 +5163,56 @@
     wv.x = 0.030 + 0.050 * s;
     wv.y = 1.35 + 1.20 * s;
     wv.z = 0.30 + 0.26 * s;
+
+    // The key, for the vegetation sun-through term.  Read, never written.
+    try {
+      var sd = ctx && ctx.sky && ctx.sky.sunDirection;
+      if (sd && isFinite(sd.x) && (sd.x * sd.x + sd.y * sd.y + sd.z * sd.z) > 0.5) {
+        this.uSunDir.value.copy(sd).normalize();
+      }
+      if (ctx && ctx.sky && ctx.sky.sunColor && ctx.sky.sunColor.isColor) {
+        this.uSunCol.value.copy(ctx.sky.sunColor);
+      }
+    } catch (e) { /* the authored bearing is a fine fallback */ }
+
+    this._updateDevils(dt);
+  };
+
+  // --------------------------------------------------------------------------
+  // THE DUST DEVILS.
+  //
+  // level.anchors.dustDevils has published four open-fetch positions since the
+  // level was written and nothing in src/ ever read them, so the brief's dust
+  // devils were simply absent - and the only airborne particulate in any
+  // boneyard frame was the shared VFX dust field, which at this sky area prints
+  // as 1-2 px white squares scattered over the upper sky and reads as stuck
+  // sensor pixels.
+  //
+  // A devil is a rotating column of alpha cards with a warm tan tint, a slow
+  // vertical UV scroll and a downwind drift.  It is the only moving vertical
+  // element the far field has, and it goes in the open right half of the
+  // establishing shot where there is otherwise nothing at all.
+  // --------------------------------------------------------------------------
+  PropsBoneyard.prototype._updateDevils = function (dt) {
+    var i, d;
+    if (!this.devils || !this.devils.length) return;
+    var wd = this.uWindDir.value;
+    for (i = 0; i < this.devils.length; i++) {
+      d = this.devils[i];
+      var t = this.time * d.rate + d.phase;
+      d.obj.rotation.y = t;
+      // it wanders and leans, and its life cycle fades it in and out so the
+      // yard never has the same two columns standing in the same two places
+      var life = 0.5 + 0.5 * Math.sin(this.time * d.pulse + d.phase * 2.1);
+      var drift = (this.time * d.speed) % d.run;
+      d.obj.position.x = d.x + wd.x * drift + Math.sin(t * 0.31) * 1.6;
+      d.obj.position.z = d.z + wd.y * drift + Math.cos(t * 0.27) * 1.6;
+      d.obj.rotation.z = 0.06 * Math.sin(this.time * 0.44 + d.phase);
+      d.obj.scale.set(1, 0.72 + 0.44 * life, 1);
+      if (d.mat) d.mat.opacity = d.alpha * (0.58 + 0.42 * life);
+      if (d.mat && d.mat.map) d.mat.map.offset.y = -this.time * 0.11 * d.rate;
+      d.obj.updateMatrix();
+    }
   };
 
   PropsBoneyard.prototype.resize = function () { /* nothing viewport-dependent */ };
