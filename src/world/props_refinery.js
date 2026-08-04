@@ -2054,6 +2054,7 @@
     await this._phase('flare', this._dressFlarePad);
     await this._phase('pumphouse', this._dressPumpHouse);
     await this._phase('control', this._dressControl);
+    await this._phase('entrance', this._dressEntrance);
     await this._phase('deck', this._dressRackDeck);
     await this._phase('sand', this._dressSand);
     await this._phase('scrub', this._dressScrub);
@@ -2485,9 +2486,30 @@
   // the AO channel, and paint the dust/wear mask.  Every instanced prop goes
   // through here so texture density does not visibly jump between a 0.3 m cone
   // and a 6 m container - the tell that a prop set was authored piecemeal.
-  PropsRefinery.prototype._fin = function (geo, matName, wear, texels) {
+  // ---- uvAbs, AND WHY IT HAD TO EXIST -------------------------------------
+  // MEASURED IN THE SIGNATURE FRAME. Two jersey barriers at 18 and 22 m from the
+  // hero1 mark printed as FLAT PALE PINK SLABS - no hazard striping, no texture
+  // of any kind - which is item one on the instant-fail list on two of the
+  // largest props in the near field.
+  //
+  // The cause is this function. Every batch is re-UV'd to the library's declared
+  // TEXEL DENSITY for its material name, and `uvScaleFor('concrete', 480)` is
+  // 480 / (1024 * repeat) = about 0.23 tiles per metre - correct for a 1024-texel
+  // concrete map. But a barrier does not wear concrete; it wears the LOCAL hazard
+  // tile, which is 256 px carrying 2.7 stripe pairs and therefore has to run at
+  // roughly 1.5 tiles per metre to put a 120 mm band on the world. At 0.23 the
+  // whole 2.3 m barrier sampled a 0.27 x 0.19 corner of the tile - one flat
+  // region between two diagonals - so it rendered as a single colour.
+  //
+  // Texel density is the right default and stays the default. `uvAbs` is the
+  // override for a prop whose map is authored in WORLD units rather than in
+  // texels, which is every hazard-striped thing on the site.
+  PropsRefinery.prototype._fin = function (geo, matName, wear, texels, uvAbs) {
     if (!geo) return null;
-    try { Geo.worldUV(geo, this._uvScale(matName, texels)); } catch (e) { /* keep builder uv */ }
+    try {
+      Geo.worldUV(geo, (uvAbs !== undefined && uvAbs > 0)
+        ? uvAbs : this._uvScale(matName, texels));
+    } catch (e) { /* keep builder uv */ }
     Geo.copyUV1(geo);
     paintWear(geo, wear || {});
     try { geo.computeBoundingSphere(); geo.computeBoundingBox(); } catch (e2) { /* ignore */ }
@@ -2497,7 +2519,9 @@
   PropsRefinery.prototype._buildKit = function () {
     var N = this.noise, R = this.rng, m = this.mats, self = this;
     var G = this.G = {};
-    function fin(g, name, wear, texels) { return self._fin(g, name, wear, texels); }
+    function fin(g, name, wear, texels, uvAbs) {
+      return self._fin(g, name, wear, texels, uvAbs);
+    }
     // A batch is ALWAYS created, even if its builder returned nothing: forty
     // dressing call sites reach into this.B by name, and making one of them
     // conditional on a geometry that might be null turns a cosmetic failure
@@ -2514,56 +2538,69 @@
 
     // ---- drums, in three services -------------------------------------------
     G.drum = fin(K.drum(N, R), 'painted_metal', { noise: N, grime: 0.46, edge: 0.34, dust: 0.7, hiY: 0.9 }, 620);
-    bat('drumBlue', G.drum, m.paintBlue, 90);
-    bat('drumRust', G.drum.clone(), m.rust, 90);
-    bat('drumPale', G.drum.clone(), m.paintPale, 70);
+    bat('drumBlue', G.drum, m.paintBlue, 104);
+    bat('drumRust', G.drum.clone(), m.rust, 104);
+    bat('drumPale', G.drum.clone(), m.paintPale, 84);
     G.drumSide = fin(K.drum(N, R), 'painted_metal', { noise: N, grime: 0.52, edge: 0.38, dust: 0.6, hiY: 0.9 }, 620);
     bat('drumSide', G.drumSide, m.rust, 46);
 
     // ---- unit loads ----------------------------------------------------------
-    bat('ibc', fin(K.ibc(N), 'painted_metal', { noise: N, grime: 0.34, edge: 0.22, dust: 0.6, hiY: 1.2 }, 560), m.paintPale, 30);
-    bat('pallet', fin(K.pallet(N, R), 'wood_plank', { noise: N, grime: 0.52, edge: 0.40, dust: 0.5, hiY: 0.2 }, 520), m.timber, 90);
+    // ---- CAPS -----------------------------------------------------------------
+    // An overflowing batch drops every placement after the cap AND calls
+    // GAME.logError from _commit, which fails the capture outright - so the caps
+    // on every batch the gate-approach pass draws from are raised by more than
+    // the pass can possibly consume. Unused instance slots cost nothing at draw
+    // time (mesh.count is set to n), only a few hundred bytes of buffer.
+    bat('ibc', fin(K.ibc(N), 'painted_metal', { noise: N, grime: 0.34, edge: 0.22, dust: 0.6, hiY: 1.2 }, 560), m.paintPale, 44);
+    bat('pallet', fin(K.pallet(N, R), 'wood_plank', { noise: N, grime: 0.52, edge: 0.40, dust: 0.5, hiY: 0.2 }, 520), m.timber, 112);
     bat('sacks', fin(K.sackPallet(N, R), 'fabric', { noise: N, grime: 0.40, edge: 0.16, dust: 0.8, hiY: 0.8 }, 420), m.sackcloth, 24);
-    bat('crate', fin(K.crate(N, R), 'wood_plank', { noise: N, grime: 0.44, edge: 0.36, dust: 0.6, hiY: 0.9 }, 520), m.timber, 40);
+    bat('crate', fin(K.crate(N, R), 'wood_plank', { noise: N, grime: 0.44, edge: 0.36, dust: 0.6, hiY: 0.9 }, 520), m.timber, 56);
 
     // ---- traffic and safety ---------------------------------------------------
-    bat('cone', fin(K.cone(), 'plastic', { noise: N, grime: 0.50, edge: 0.24, dust: 0.7, hiY: 0.6 }, 700), m.paintRed, 100, true);
-    bat('barrier', fin(K.barrier(N), 'concrete', { noise: N, grime: 0.44, edge: 0.30, dust: 0.6, hiY: 0.9 }, 480), m.hazard, 52);
-    bat('bollard', fin(K.bollard(), 'painted_metal', { noise: N, grime: 0.42, edge: 0.34, dust: 0.5, hiY: 1.0 }, 640), m.hazard, 80);
-    bat('ext', fin(K.extStation(), 'painted_metal', { noise: N, grime: 0.30, edge: 0.20, dust: 0.5, hiY: 1.4 }, 620), m.paintRed, 22);
+    bat('cone', fin(K.cone(), 'plastic', { noise: N, grime: 0.50, edge: 0.24, dust: 0.7, hiY: 0.6 }, 700), m.paintRed, 132, true);
+    // uvAbs 1.5: both of these wear the LOCAL hazard tile, not a library map, and
+    // it has to be scaled in world units - see the note on _fin.
+    bat('barrier', fin(K.barrier(N), 'concrete', { noise: N, grime: 0.44, edge: 0.30, dust: 0.6, hiY: 0.9 }, 480, 1.5), m.hazard, 64);
+    bat('bollard', fin(K.bollard(), 'painted_metal', { noise: N, grime: 0.42, edge: 0.34, dust: 0.5, hiY: 1.0 }, 640, 1.5), m.hazard, 96);
+    bat('ext', fin(K.extStation(), 'painted_metal', { noise: N, grime: 0.30, edge: 0.20, dust: 0.5, hiY: 1.4 }, 620), m.paintRed, 30);
     bat('shower', fin(K.safetyShower(), 'painted_metal', { noise: N, grime: 0.30, edge: 0.18, dust: 0.5, hiY: 2.0 }, 620), m.paintGreen, 12);
     bat('monitor', fin(K.fireMonitor(), 'painted_metal', { noise: N, grime: 0.36, edge: 0.24, dust: 0.5, hiY: 1.6 }, 620), m.paintRed, 14);
-    bat('sign', fin(K.signPost(), 'painted_metal', { noise: N, grime: 0.34, edge: 0.20, dust: 0.5, hiY: 1.6 }, 620), m.paintPale, 64, false);
-    bat('signBent', fin(K.signPost(0.78, 0.56, 1.55, true), 'painted_metal', { noise: N, grime: 0.44, edge: 0.30, dust: 0.6, hiY: 1.6 }, 620), m.paintPale, 32, false);
+    bat('sign', fin(K.signPost(), 'painted_metal', { noise: N, grime: 0.34, edge: 0.20, dust: 0.5, hiY: 1.6 }, 620), m.paintPale, 80, false);
+    bat('signBent', fin(K.signPost(0.78, 0.56, 1.55, true), 'painted_metal', { noise: N, grime: 0.44, edge: 0.30, dust: 0.6, hiY: 1.6 }, 620), m.paintPale, 44, false);
     bat('hose', fin(K.hoseReel(N), 'painted_metal', { noise: N, grime: 0.36, edge: 0.22, dust: 0.5, hiY: 1.1 }, 620), m.paintRed, 18);
-    bat('coil', fin(K.coilHose(), 'rubber', { noise: N, grime: 0.52, edge: 0.18, dust: 0.7, hiY: 0.3 }, 620), m.rubber, 22, false);
+    bat('coil', fin(K.coilHose(), 'rubber', { noise: N, grime: 0.52, edge: 0.18, dust: 0.7, hiY: 0.3 }, 620), m.rubber, 32, false);
 
     // ---- process odds and ends -----------------------------------------------
     bat('valve', fin(K.valveStand(N), 'painted_metal', { noise: N, grime: 0.40, edge: 0.28, dust: 0.5, hiY: 1.6 }, 560), m.paintGreen, 34);
     bat('bottle', fin(K.gasBottle(), 'painted_metal', { noise: N, grime: 0.36, edge: 0.26, dust: 0.5, hiY: 1.3 }, 640), m.paintGreen, 64, false);
-    bat('bottlePack', fin(K.bottlePack(), 'painted_metal', { noise: N, grime: 0.38, edge: 0.26, dust: 0.5, hiY: 1.5 }, 560), m.paintPale, 18);
+    bat('bottlePack', fin(K.bottlePack(), 'painted_metal', { noise: N, grime: 0.38, edge: 0.26, dust: 0.5, hiY: 1.5 }, 560), m.paintPale, 32);
     bat('jbox', fin(K.junctionBox(), 'painted_metal', { noise: N, grime: 0.44, edge: 0.24, dust: 0.5, hiY: 0.4 }, 700), m.paintPale, 48, false);
     bat('tray', fin(K.cableTray(2.4), 'structural_steel', { noise: N, grime: 0.46, edge: 0.26, dust: 0.6, hiY: 0.3 }, 560), m.steel, 46, false);
-    bat('toolbox', fin(K.toolChest(), 'painted_metal', { noise: N, grime: 0.42, edge: 0.34, dust: 0.5, hiY: 0.9 }, 620), m.paintRed, 16);
+    bat('toolbox', fin(K.toolChest(), 'painted_metal', { noise: N, grime: 0.42, edge: 0.34, dust: 0.5, hiY: 0.9 }, 620), m.paintRed, 24);
     bat('cableDrum', fin(K.cableDrum(N, true), 'wood_plank', { noise: N, grime: 0.46, edge: 0.30, dust: 0.6, hiY: 1.4 }, 480), m.timber, 22);
     bat('cableDrumBare', fin(K.cableDrum(N, false), 'wood_plank', { noise: N, grime: 0.52, edge: 0.36, dust: 0.6, hiY: 1.4 }, 480), m.timber, 10);
     bat('gully', fin(K.gully(N), 'steel_grate', { noise: N, grime: 0.62, edge: 0.30, dust: 0.4, hiY: 0.2 }, 640), m.grate, 44, false);
 
     // ---- laydown -------------------------------------------------------------
-    bat('pipe', fin(K.pipeLength(N, 0.16, 6.0), 'painted_metal', { noise: N, grime: 0.44, edge: 0.28, dust: 0.7, hiY: 0.4 }, 520), m.paintPale, 190);
+    bat('pipe', fin(K.pipeLength(N, 0.16, 6.0), 'painted_metal', { noise: N, grime: 0.44, edge: 0.28, dust: 0.7, hiY: 0.4 }, 520), m.paintPale, 212);
     bat('pipeFat', fin(K.pipeLength(N, 0.30, 5.2), 'rusted_metal', { noise: N, grime: 0.50, edge: 0.30, dust: 0.7, hiY: 0.7 }, 520), m.rust, 70);
-    bat('dunnage', fin(K.dunnage(N), 'wood_plank', { noise: N, grime: 0.56, edge: 0.40, dust: 0.6, hiY: 0.2 }, 520), m.timber, 110, false);
-    bat('skip', fin(K.skip(N), 'rusted_metal', { noise: N, grime: 0.50, edge: 0.36, dust: 0.6, hiY: 1.3 }, 420), m.rust, 10);
+    bat('dunnage', fin(K.dunnage(N), 'wood_plank', { noise: N, grime: 0.56, edge: 0.40, dust: 0.6, hiY: 0.2 }, 520), m.timber, 124, false);
+    bat('skip', fin(K.skip(N), 'rusted_metal', { noise: N, grime: 0.50, edge: 0.36, dust: 0.6, hiY: 1.3 }, 420), m.rust, 14);
 
     // ---- ground cover --------------------------------------------------------
-    bat('drift', fin(K.sandDrift(N, 3.7), 'sand', { noise: N, grime: 0.18, edge: 0.05, dust: 0.2, hiY: 0.5 }, 260), m.sand, 240, false);
-    bat('drift2', fin(K.sandDrift(N, 11.3), 'sand', { noise: N, grime: 0.20, edge: 0.05, dust: 0.2, hiY: 0.5 }, 260), m.sand, 180, false);
-    bat('scrub', fin(K.scrub(N, R), 'dirt', { noise: N, grime: 0.30, edge: 0.10, dust: 0.4, hiY: 0.6 }, 420), m.scrub, 420, false);
-    bat('weed', fin(K.tumbleweed(N, R), 'dirt', { noise: N, grime: 0.24, edge: 0.08, dust: 0.3, hiY: 0.5 }, 420), m.scrub, 34, false);
-    bat('offcut', fin(K.offcut(N, R), 'rusted_metal', { noise: N, grime: 0.60, edge: 0.36, dust: 0.7, hiY: 0.2 }, 620), m.rust, 130, false);
-    bat('plank', fin(K.plank(N, R), 'wood_plank', { noise: N, grime: 0.62, edge: 0.40, dust: 0.7, hiY: 0.1 }, 520), m.timber, 110, false);
-    bat('rag', fin(K.rag(N, R), 'fabric', { noise: N, grime: 0.64, edge: 0.20, dust: 0.8, hiY: 0.1 }, 420), m.sackcloth, 90, false);
-    bat('hat', fin(K.hardHat(), 'plastic', { noise: N, grime: 0.42, edge: 0.24, dust: 0.6, hiY: 0.2 }, 700), m.paintYellow, 12, false);
+    // MEASURED THE HARD WAY: drift2 overflowed by 13 and the harness failed the
+    // capture, which is exactly what the overflow report is for. The demand is
+    // ~194 sand banks and it moves whenever a pass is added, because a shifted
+    // RNG stream changes which placements the occupancy grid rejects. Both drift
+    // caps now carry 50% headroom over measured demand.
+    bat('drift', fin(K.sandDrift(N, 3.7), 'sand', { noise: N, grime: 0.18, edge: 0.05, dust: 0.2, hiY: 0.5 }, 260), m.sand, 340, false);
+    bat('drift2', fin(K.sandDrift(N, 11.3), 'sand', { noise: N, grime: 0.20, edge: 0.05, dust: 0.2, hiY: 0.5 }, 260), m.sand, 300, false);
+    bat('scrub', fin(K.scrub(N, R), 'dirt', { noise: N, grime: 0.30, edge: 0.10, dust: 0.4, hiY: 0.6 }, 420), m.scrub, 480, false);
+    bat('weed', fin(K.tumbleweed(N, R), 'dirt', { noise: N, grime: 0.24, edge: 0.08, dust: 0.3, hiY: 0.5 }, 420), m.scrub, 52, false);
+    bat('offcut', fin(K.offcut(N, R), 'rusted_metal', { noise: N, grime: 0.60, edge: 0.36, dust: 0.7, hiY: 0.2 }, 620), m.rust, 160, false);
+    bat('plank', fin(K.plank(N, R), 'wood_plank', { noise: N, grime: 0.62, edge: 0.40, dust: 0.7, hiY: 0.1 }, 520), m.timber, 140, false);
+    bat('rag', fin(K.rag(N, R), 'fabric', { noise: N, grime: 0.64, edge: 0.20, dust: 0.8, hiY: 0.1 }, 420), m.sackcloth, 116, false);
+    bat('hat', fin(K.hardHat(), 'plastic', { noise: N, grime: 0.42, edge: 0.24, dust: 0.6, hiY: 0.2 }, 700), m.paintYellow, 18, false);
   };
 
   // Elevated placement: the rack walkway and the column catwalks are not
@@ -2683,9 +2720,12 @@
     this._compound(41.2, 47.2, 0.06);
 
     // The gatehouse approach: a store container and a skip inside the fence.
+    // MOVED WEST. level_refinery now stands the guard hut at (-14.5, 72.5) - it
+    // is the emissive content that carries the west wing of the establishing
+    // frame - and a 6 m container at (-14, 70) was 0.9 m off its south wall.
     var cbox3 = K.container(N, false);
-    this._placeRig(cbox3, -14.0, 70.0, 1.62, { r: 4.2, maxRelief: 0.45 });
-    this._place(this.B.skip, -21.0, 66.0, { r: 2.4, h: 1.3, yaw: 1.4, collider: [1.8, 0.65, 0.95] });
+    this._placeRig(cbox3, -25.5, 67.5, 1.62, { r: 4.2, maxRelief: 0.45 });
+    this._place(this.B.skip, -33.0, 63.5, { r: 2.4, h: 1.3, yaw: 1.4, collider: [1.8, 0.65, 0.95] });
 
     // Laydown-yard stores.
     var cbox4 = K.container(N, true);
@@ -3776,6 +3816,182 @@
     this._mark(MARK.arrow, cb.x0 - 4.5, cb.z0 + 8.0, 2.2, 1.4, Math.PI * 0.5);
   };
 
+  // ==========================================================================
+  // THE GATE APPROACH.
+  //
+  // level_refinery now builds a weighbridge, a kiosk, two boom barriers, a
+  // marked truck park and a drum-store canopy across x 11..54, z 43..75, and
+  // stands a 15.4 m four-head floodlight tower over them - because the
+  // establishing frame's bottom third measured a median luminance of 0.043 with
+  // 59.7% of its pixels under 0.05.  That is the plant.  This is the traffic:
+  // the tanker on the deck waiting to be weighed, the flatbed reversed into
+  // bay 3, the drums and totes that came off it, the cones that keep everything
+  // else off the deck, and the signage a gate carries.
+  //
+  // It runs LAST of the fixed dressing passes on purpose.  Every prop here is
+  // within thirty metres of the establishing eye, so it is the one place on the
+  // site where a rejected placement is visible - and by running after the
+  // containers, the skips and the compound have taken their ground, nothing here
+  // has to compete for it.
+  // ==========================================================================
+  PropsRefinery.prototype._dressEntrance = function () {
+    var A = this.A, R = this.rng, N = this.noise;
+    var en = A && A.entrance;
+    if (!en) return;
+    var wb = en.weighbridge, ki = en.kiosk, by = en.bays, cn = en.canopy;
+    var i, k;
+
+    // ---- 1. the tanker on the weighbridge -----------------------------------
+    // Standing ON the deck, which is the whole reason the deck exists: an 11 m
+    // vehicle is the one object in the frame whose size a viewer knows without
+    // being told, and putting it on the weighbridge makes both of them read.
+    if (wb) {
+      var wbCx = (wb.x0 + wb.x1) * 0.5, wbCz = (wb.z0 + wb.z1) * 0.5;
+      // lift 0.14: it stands on the DECK, not on the slab. _ground reports the
+      // level's authored surface, and the weigh plates sit 0.14 m over it.
+      this._placeRig(K.tanker(N), wbCx + 0.15, wbCz + 0.4, 0.012,
+        { r: 5.2, maxRelief: 0.9, lift: 0.14 });
+      this._occupy(wbCx, wbCz, 6.0);
+      // the driver's cone and the chock he actually put down
+      this._place(this.B.cone, wb.x1 + 1.05, wb.z0 - 1.6,
+        { r: 0.30, h: 0.7, low: true, road: true, yaw: R.range(0, 6), tilt: 0.05 });
+      this._place(this.B.cone, wb.x0 - 1.05, wb.z1 + 1.4,
+        { r: 0.30, h: 0.7, low: true, road: true, yaw: R.range(0, 6), tilt: 0.05 });
+      this._mark(MARK.oil, wbCx + 0.4, wb.z0 - 3.4, 2.6, 2.0, 0.05, { maxRelief: 0.7 });
+      this._mark(MARK.scuff, wbCx, wb.z0 - 7.0, 3.6, 8.0, 0.0, { maxRelief: 0.7 });
+      this._mark(MARK.scuff, wbCx, wb.z1 + 6.0, 3.6, 7.0, 0.0, { maxRelief: 0.7 });
+      // the queue: barriers channelling traffic onto the deck
+      this._barrierRun(wb.x1 + 1.9, wb.z0 - 8.5, wb.x1 + 1.9, wb.z0 - 1.5, 0.0);
+    }
+
+    // ---- 2. the kiosk's own housekeeping ------------------------------------
+    if (ki && ki.centre) {
+      var kc = ki.centre;
+      for (i = 0; i < 4; i++) {
+        this._place(this.B.bollard, kc.x - ki.w * 0.5 - 1.5, kc.z - 2.4 + i * 1.7,
+          { r: 0.36, h: 1.0, tilt: 0.03, collider: [0.14, 0.5, 0.14] });
+      }
+      this._place(this.B.ext, kc.x - ki.w * 0.5 - 0.4, kc.z + ki.d * 0.5 + 0.5,
+        { r: 0.7, h: 1.5, yaw: Math.PI * 0.5 });
+      this._signPost(kc.x - ki.w * 0.5 - 2.6, kc.z + 3.4, Math.PI, MARK.ppe, { bentP: 0.0 });
+      this._signPost(kc.x + ki.w * 0.5 + 1.8, kc.z - 2.8, Math.PI, MARK.nosmoke);
+      this._place(this.B.drumRust, kc.x + ki.w * 0.5 + 1.0, kc.z + ki.d * 0.5 + 0.9,
+        { r: 0.34, h: 0.9, yaw: R.range(0, 6), collider: [0.30, 0.44, 0.30] });
+      this._mark(MARK.tread, kc.x - ki.w * 0.5 - 1.0, kc.z + ki.d * 0.5 - 0.9, 2.0, 1.8,
+        Math.PI * 0.5);
+    }
+
+    // ---- 3. the truck park, in use ------------------------------------------
+    // One flatbed reversed into a bay with its load still on it, and the bays
+    // either side of it holding what came off the last one.  A car park with
+    // painted bays and nothing standing in them is a car park nobody uses.
+    if (by) {
+      var bayZ = function (n) { return by.z0 + (n + 0.5) * by.pitch; };
+      // bay 0: pipe spools on dunnage, squared off against the bay line.
+      // _pipeStack tests the GRADE but not the occupancy grid, and a skip from
+      // the contractor's compound stands 2 m away, so the test is made here -
+      // the alternative is a stack of pipe growing through a skip.
+      if (!this._occupied(by.x0 + 5.4, bayZ(0), 3.6)) {
+        this._pipeStack(by.x0 + 5.4, bayZ(0), 1.571, 3, 5, false);
+      }
+      // bay 1: the fork truck, mid-job with a pallet still down
+      if (!this._occupied(by.x0 + 3.4, bayZ(1) - 0.4, 2.8)) {
+        this._placeRig(K.forklift(N), by.x0 + 3.4, bayZ(1) - 0.4, -1.62,
+          { r: 2.6, maxRelief: 0.5 });
+      }
+      for (i = 0; i < 3; i++) {
+        this._place(this.B.pallet, by.x0 + 8.2 + i * 1.35, bayZ(1) + 1.2,
+          { r: 0.85, h: 0.16, yaw: R.range(-0.2, 0.2) });
+      }
+      // bay 2: out of service. Coned off, taped, and the reason is on the deck.
+      this._coneRing(by.x0 + 5.6, bayZ(2), 3.6, 1.4, 7, { road: true, lay: 4 });
+      this._mark(MARK.oil, by.x0 + 5.6, bayZ(2), 3.4, 2.4, 0.15, { lift: 0.011 });
+      this._place(this.B.hat, by.x0 + 2.4, bayZ(2) - 1.5,
+        { r: 0.25, h: 0.2, low: true, road: true, tilt: 0.06 });
+      // bay 3: a store container dropped in it, which is what an idle bay grows
+      if (!this._occupied(by.x0 + 6.4, bayZ(3), 4.4)) {
+        this._placeRig(K.container(N, false), by.x0 + 6.4, bayZ(3), 1.575,
+          { r: 4.2, maxRelief: 0.6 });
+      }
+      for (i = 0; i < 3; i++) {
+        this._place(this.B.ibc, by.x1 - 2.4, bayZ(3) - 1.3 + i * 1.25,
+          { r: 0.85, h: 1.2, yaw: Math.PI * 0.5 + R.range(-0.08, 0.08),
+            collider: [0.55, 0.6, 0.62] });
+      }
+      // bay 4: the drum line and the crates that came off the last flatbed. A
+      // row of drums at 1.05 m centres reads as a GRID from above, which is what
+      // a steeply-viewed apron needs and had none of.
+      for (i = 0; i < 7; i++) {
+        var dbx = by.x0 + 2.0 + i * 1.05;
+        var bb = R.next();
+        this._place(bb < 0.42 ? this.B.drumBlue : (bb < 0.74 ? this.B.drumRust : this.B.drumPale),
+          dbx, bayZ(4) - 0.9 + R.range(-0.12, 0.12),
+          { r: 0.34, h: 0.9, yaw: R.range(0, 6), collider: [0.30, 0.44, 0.30] });
+      }
+      for (i = 0; i < 5; i++) {
+        this._place(this.B.crate, by.x0 + 2.6 + i * 1.5, bayZ(4) + 1.1,
+          { r: 0.92, h: 0.9, yaw: R.range(-0.3, 0.3), collider: [0.62, 0.45, 0.52] });
+      }
+      this._place(this.B.skip, by.x1 - 2.2, bayZ(4) + 0.4,
+        { r: 2.4, h: 1.3, yaw: 1.58, collider: [1.8, 0.65, 0.95] });
+      // and the tracks the traffic actually leaves at the head of the row
+      for (i = 0; i < by.n; i++) {
+        this._mark(MARK.scuff, by.x0 - 2.6, bayZ(i), 4.4, 3.2, Math.PI * 0.5,
+          { lift: 0.011, maxRelief: 0.5 });
+      }
+      this._mark(MARK.grime, by.x0 + 7.0, bayZ(3), 6.0, 5.0, 0.1, { lift: 0.010 });
+    }
+
+    // ---- 4. the drum store under the canopy --------------------------------
+    if (cn && cn.centre) {
+      var cc = cn.centre;
+      for (i = 0; i < 5; i++) {
+        this._place(this.B.pallet, cc.x - cn.w * 0.5 + 1.0 + i * 1.7, cc.z + cn.d * 0.5 - 1.0,
+          { r: 0.82, h: 0.16, yaw: R.range(-0.15, 0.15) });
+      }
+      for (i = 0; i < 4; i++) {
+        this._place(this.B.bottlePack, cc.x - cn.w * 0.5 + 1.2 + i * 2.1,
+          cc.z + cn.d * 0.5 + 1.3,
+          { r: 0.68, h: 1.5, yaw: R.range(0, 6), collider: [0.45, 0.78, 0.45] });
+      }
+      this._place(this.B.toolbox, cc.x + cn.w * 0.5 - 1.0, cc.z - cn.d * 0.5 + 0.9,
+        { r: 0.7, h: 0.9, yaw: 1.2 });
+      this._place(this.B.coil, cc.x - cn.w * 0.5 - 1.2, cc.z + 0.4,
+        { r: 0.55, h: 0.2, low: true });
+      this._signPost(cc.x - cn.w * 0.5 - 2.0, cc.z - cn.d * 0.5 - 1.4, Math.PI, MARK.flam);
+      this._mark(MARK.oil, cc.x, cc.z + cn.d * 0.5 + 2.2, 3.0, 2.2, 0.1);
+    }
+
+    // ---- 5. the gate itself -------------------------------------------------
+    // Signage on the approach, and the sand that has been drifting against the
+    // south fence for nine years - which is the one thing in this quarter of the
+    // site that is not man-made.
+    var bz = en.boomZ === undefined ? 70.5 : en.boomZ;
+    this._signPost(this.road.x1 + 2.6, bz + 2.6, Math.PI, MARK.danger, { bentP: 0.0 });
+    this._signPost(this.road.x0 - 2.6, bz + 2.6, Math.PI, MARK.nosmoke, { bentP: 0.0 });
+    this._signPost(this.road.x1 + 2.4, bz - 5.0, Math.PI, MARK.ppe);
+    for (i = 0; i < 5; i++) {
+      this._place(this.B.cone, this.road.x1 + 0.9 + R.range(-0.2, 0.2), bz - 2.0 - i * 1.6,
+        { r: 0.28, h: 0.7, low: true, road: true, yaw: R.range(0, 6), tilt: 0.05,
+          lay: (i === 2) ? R.range(0.18, 0.36) : 0 });
+    }
+    var yawW = Math.atan2(this._wx(), this._wz());
+    for (i = 0; i < 14; i++) {
+      var sx = R.range(en.x0 + 2, en.x1 - 2), sz = R.range(en.z1 - 2, en.z1 + 5);
+      this._place(this.B.drift2, sx, sz,
+        { r: 0.7, h: 0.2, low: true, road: true, tilt: 0, yaw: yawW + R.range(-0.45, 0.45),
+          sx: R.range(1.8, 3.8), sy: R.range(0.35, 0.9), sz: R.range(1.0, 2.4),
+          sink: 0.045, maxRelief: 0.7 });
+    }
+    // a couple of tumbleweeds caught against the boom pedestals, because the
+    // gate is where everything the wind carries finally stops
+    for (i = 0; i < 3; i++) {
+      this._place(this.B.weed, this.road.x1 + R.range(1.2, 3.6), bz + R.range(-1.4, 1.4),
+        { r: 0.45, h: 0.5, low: true, road: true, tilt: 0.08,
+          scale: R.range(0.7, 1.15), maxRelief: 0.8 });
+    }
+  };
+
   // ---- the rack walkway, 11 m up -------------------------------------------
   // hero2 stands on this deck, so its foreground is whatever is lying on it.
   // Everything here is small, to one side and lashed down, because a walkway
@@ -4222,7 +4438,21 @@
           pos[v * 3 + 1] = base[v * 3 + 1] = e[1];
           pos[v * 3 + 2] = base[v * 3 + 2] = e[2];
           nrm[v * 3] = pxn; nrm[v * 3 + 1] = 0; nrm[v * 3 + 2] = pzn;
-          uv[v * 2] = e[3] * len * 1.6 + (i / SEG) * 0; uv[v * 2 + 1] = e[4];
+          // ---- BUG, MEASURED IN THE SIGNATURE FRAME -----------------------
+          // This was `e[3] * len * 1.6`, and e[3] is the QUAD-LOCAL u (0 or 1).
+          // So every one of the nine segments in a run was given the full
+          // 0..len*1.6 range across its own 0.36 m - about fourteen chevron
+          // repeats per metre. At the 14 m the hero1 mark puts the road-works
+          // cordon at, that is far past Nyquist, so the mip chain resolved the
+          // whole ribbon to the texture's AVERAGE and the tape rendered as a
+          // FLAT PALE PINK BAND with no chevrons in it at all - a two-metre
+          // untextured single-colour surface in the near field of the level's
+          // signature image, which is item one on the instant-fail list.
+          //
+          // e[5] is the parameter along the WHOLE run, which is what the
+          // expression was reaching for. At 1.7 tiles per metre the texture's
+          // 5.9 chevron pairs land at a 0.10 m pitch, which is real barrier tape.
+          uv[v * 2] = e[5] * len * 1.7; uv[v * 2 + 1] = e[4];
           perp[v * 3] = pxn; perp[v * 3 + 1] = 0; perp[v * 3 + 2] = pzn;
           flex[v] = e[6];
           phase[v] = dPhase + e[5] * len * 0.9;
