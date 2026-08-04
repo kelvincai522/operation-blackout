@@ -3845,6 +3845,39 @@
     // height behind it, which is what a revetment is for.
     this._sandbagWall(V.x0 + 4.9, -2.55, V.x0 + 4.4, 1.35, 7, 0.148);
     this._sandbagWall(V.x0 + 4.55, 1.60, V.x0 + 6.9, 3.35, 6, 0.148);
+    // ---- WHAT HAS COME OFF IT ----------------------------------------------
+    // A revetment with a perfectly regular field of bags in it is a diagram of a
+    // revetment. Eleven loose bags - some pulled off the coping and lying where
+    // they fell, some never laid - and a scaffold board across the top break the
+    // lattice, and the board is the one straight horizontal in an object that is
+    // otherwise all repeated curvature.
+    var LOOSE = [
+      [4.05, -2.95, 0.00], [4.35, -3.25, 0.00], [3.75, 2.05, 0.00],
+      [3.95, 2.55, 0.00], [7.55, 3.10, 0.00], [7.25, 2.55, 0.00],
+      [4.10, 1.05, 0.00], [3.80, -0.35, 0.00], [4.20, 0.35, 0.00],
+      [6.35, 3.55, 0.00], [5.05, 3.60, 0.00]
+    ];
+    for (i = 0; i < LOOSE.length; i++) {
+      this._drop((i % 3 === 1) ? this.B.sackB : this.B.sack,
+        V.x0 + LOOSE[i][0], LOOSE[i][1], {
+          r: 0.17, yaw: R.range(0, TAU), tilt: 0.20, lay: R.gaussian(0, 0.30),
+          scale: R.range(0.90, 1.12), dry: true, halo: true, lens: true
+        });
+    }
+    // the scaffold board laid across the coping as a rest, and the two bags
+    // holding it down
+    this._drop(this.B.plank, V.x0 + 4.62, 0.30, {
+      r: 0.30, y: this._ground(V.x0 + 4.62, 0.30) + 0.93, yaw: 0.10,
+      tilt: 0.05, lay: 0.04, noClear: true, halo: false, dry: true, stack: true, lens: true
+    });
+    for (i = 0; i < 2; i++) {
+      this._drop(this.B.sack, V.x0 + 4.58, -0.85 + i * 2.30, {
+        r: 0.16, y: this._ground(V.x0 + 4.58, -0.85 + i * 2.30) + 0.95,
+        yaw: R.range(0, TAU), tilt: 0.09, lay: R.gaussian(0, 0.10),
+        scale: R.range(0.94, 1.08), noClear: true, halo: false, dry: true,
+        stack: true, lens: true
+      });
+    }
     this._drop(this.B.caseS, V.x0 + 5.65, -0.55, { r: 0.36, yaw: 1.4, tilt: 0.03 });
     this._drop(this.B.caseS, V.x0 + 5.60, -0.10, { r: 0.36, yaw: 1.2, tilt: 0.04, noClear: true });
     this._drop(this.B.bag, V.x0 + 6.15, 0.85, { r: 0.34, yaw: 0.6, tilt: 0.07 });
@@ -4718,6 +4751,15 @@
       for (var i = i0; i < i1; i++) {
         var t = (i + 0.5 + off) / n;
         if (t > 1.02) continue;
+        // ---- ROUND 3: THE COPING IS RAGGED ------------------------------
+        // Two courses short at the ends is a PROFILE; it is not the same thing
+        // as wear. hero3's whole lower third came back as a regular diagonal
+        // lattice of near-identical bulges - a tray of bread rolls again, for a
+        // different reason this time. A revetment that has stood for forty years
+        // has bags missing off the top, bags that have rotted through and
+        // slumped, and bags that have been pulled out and never put back.
+        if (c >= courses - 2 &&
+            R.next() < (c === courses - 1 ? 0.30 : 0.12)) continue;
         var px = x0 + dx * t + R.gaussian(0, 0.030);
         var pz = z0 + dz * t + R.gaussian(0, 0.030);
         // alternate the two lots on a 3-cycle offset per course, so neither the
@@ -4731,11 +4773,23 @@
         var load = 1 - c / Math.max(1, courses - 1);          // 1 at the bottom
         var squash = 1 - load * R.range(0.09, 0.14);
         var spread = 1 + load * R.range(0.04, 0.08);
+        // END-FOR-END, AND THAT IS THE FIX THE WALL ACTUALLY NEEDED.
+        // Two bag geometries served the whole revetment and every instance was
+        // laid within six degrees of the same yaw, so all ninety of them
+        // presented the SAME pucker field to the SAME overhead flood and caught
+        // an identical highlight in an identical place. A bag reversed end for
+        // end is a different object to the eye at no cost at all, and a nailer
+        // does not care which way round the choke goes.
+        var flip = ((i * 3 + c * 7) % 5) < 2 ? Math.PI : 0;
         this._drop(bat, px, pz, {
-          r: 0.15, y: baseY + c * bagH * 0.86 + R.range(-0.010, 0.010),
-          yaw: yaw + R.gaussian(0, 0.10) + (i % 2 ? 0.045 : -0.045), tilt: 0.055,
-          scale: R.range(0.94, 1.10), sy: squash * R.range(0.94, 1.05),
-          sx: spread, sz: spread * R.range(0.97, 1.06),
+          r: 0.15, y: baseY + c * bagH * 0.86 + R.range(-0.014, 0.014),
+          yaw: yaw + flip + R.gaussian(0, 0.17) + (i % 2 ? 0.045 : -0.045),
+          tilt: 0.055,
+          // and each one rolled a little off level: a bag beds down on whatever
+          // is under it, and the course beneath is not flat
+          lay: R.gaussian(0, 0.075),
+          scale: R.range(0.90, 1.13), sy: squash * R.range(0.92, 1.07),
+          sx: spread * R.range(0.96, 1.05), sz: spread * R.range(0.95, 1.08),
           noClear: true, halo: c === 0, dry: true, lens: true, stack: c > 0
         });
       }
