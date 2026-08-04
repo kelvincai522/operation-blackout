@@ -111,9 +111,16 @@
 //   setWind(dirX, dirZ, mps) shears the rivulets, drives the sea.
 //   water(opts)              the harbour surface: two-scale animated wave
 //                            normals, Beer-Lambert absorption down the view
-//                            path, water Fresnel, quay-edge foam.
+//                            path, water Fresnel, quay-edge foam. `opts.reflect`
+//                            adds a real planar reflection - see below.
 //   setWaterFoamEdges(segs)  [[x0,z0,x1,z1], ...] world lines the sea foams
 //                            against (the quay face, the hull waterline).
+//   setWaterReflection(o)    reconfigure the planar-reflection pass after the
+//                            material exists (scale, far, interval, exclude,
+//                            maxY, strength, gain, distort, graze, grazePow,
+//                            blur, roughFade, y). false switches it off.
+//                            Returns the live config so a caller can read what
+//                            it got.
 //   rippleTexture()          the packed rain-ripple field, so weather.js can
 //                            drive its splash decals off the same impacts the
 //                            puddles ripple with.
@@ -2317,6 +2324,24 @@
       try { this._syncWeather(ctx || this.ctx); }
       catch (e) { GAME.logError('materials.weather', e); }
     }
+    // THE PLANAR WATER REFLECTION. Only exists if a water() call turned it on,
+    // which the two frozen levels never do - see _reflectWanted(). Runs HERE, in
+    // update(), rather than from an onBeforeRender hook on the water mesh: a
+    // nested renderer.render() inside postfx's own pass would have to survive
+    // whatever render target and MRT attachment that pass had bound, and this
+    // build's composer is not three's. update() is called from step(), outside
+    // any render, so the only state to restore is the renderer's.
+    if (this._refl && this._refl.on) {
+      try { this._reflectRender(ctx || this.ctx); }
+      catch (e) {
+        // Once. Then the feature switches itself off and the water falls back
+        // to the environment-only look it shipped with - a degradation, not a
+        // black frame, and not forty identical errors in the capture report.
+        this._refl.on = false;
+        if (this._reflCfg) this._reflCfg.value.x = 0;
+        GAME.logError('materials.reflect', e);
+      }
+    }
   };
 
   // --------------------------------------------------------------------------
@@ -4029,6 +4054,18 @@
       U.gbFoamColor = { value: srgb(F.foamColor) };
       U.gbFoamWidth = { value: F.foamWidth };
       U.gbWaveAmp = { value: F.waveAmp };
+      // Planar reflection. All three are the SHARED library objects, so the
+      // per-frame pass is three writes that reach every water surface at once.
+      // The sampler is legitimately null until the first pass lands - three
+      // binds its own empty texture for that, and gbReflCfg.x is 0 until then,
+      // so the branch multiplies out to the environment-only look regardless.
+      if (F.reflect) {
+        try { self._reflectState(); } catch (eS) { /* objects already exist */ }
+        U.gbReflMap = self._reflTex;
+        U.gbReflMtx = self._reflMtx;
+        U.gbReflCfg = self._reflCfg;
+        U.gbReflCfg2 = self._reflCfg2;
+      }
     }
 
     // Non-enumerable so THREE.Material.copy()'s JSON round-trip of userData
@@ -4077,6 +4114,9 @@
     if (F.lodDet) ck += '_K';
     if (F.microAA && F.specAA) ck += '_N';
     if (F.water) ck += '_Z';
+    // Appended to the water key, so the harbor's sea - which can never set
+    // F.reflect - keeps the exact '_Z' it shipped with.
+    if (F.reflect) ck += 'r';
 
     var obc = function (shader) {
       try {
@@ -6285,6 +6325,17 @@
     F.foamColor = opts.foam !== undefined ? opts.foam : 0x9fb0b4;
     F.foamWidth = opts.foamWidth !== undefined ? opts.foamWidth : 1.5;
     F.waveAmp = opts.waveAmp !== undefined ? opts.waveAmp : 1.0;
+    // THE PLANAR REFLECTION. Off for market and harbor by construction - see
+    // _reflectWanted() - and off in the shader until the first reflection pass
+    // has actually landed a frame in the target, so a failure anywhere in the
+    // chain degrades to exactly the surface this function shipped with.
+    F.reflect = false;
+    if (this._reflectWanted(opts)) {
+      try {
+        this._reflectEnable(opts.reflect === true ? null : opts.reflect, opts);
+        F.reflect = true;
+      } catch (eR) { F.reflect = false; GAME.logError('materials.reflectInit', eR); }
+    }
     this._patch(mat, F);
 
     mat.name = key;
@@ -6295,6 +6346,579 @@
     this.cache[key] = mat;
     return mat;
   };
+
+  // ==========================================================================
+  // PLANAR WATER REFLECTION - opt-in, levels 3-10
+  // ==========================================================================
+  //
+  // WHY THIS EXISTS. water() had exactly one reflection term: the PMREM
+  // environment. An environment probe is a point sample of the sky taken at the
+  // origin, so it carries no PARALLAX and no LOCAL geometry - a far bank, a
+  // stand of mangrove roots, a helicopter wreck standing three metres out of
+  // the river - and a river with no local reflection is a flat plate holding
+  // one specular sun smear. Measured on the jungle's hero2 framing: 17.2% flat
+  // area, the highest in the set, on the surface the level brief calls "water
+  // that reflects".
+  //
+  // WHAT IT IS. One extra scene render per (interval) frames from a camera
+  // mirrored about the water plane into a half-resolution HalfFloat target,
+  // with Lengyel's oblique near plane pinned to the water surface so nothing
+  // below the waterline leaks in. The result is mixed into `radiance` - the
+  // environment's SPECULAR term - BEFORE the environment BRDF runs, so it picks
+  // up water's own F0 = 0.02 / F90 = 1.0 Fresnel from the same code path the
+  // envMap does and needs no Fresnel of its own.
+  //
+  // HOW IT IS COMBINED, which is the part that took three measurements to get
+  // right and is NOT the obvious crossfade. The probe and the planar sample are
+  // not interchangeable signals: the probe is uniformly bright, has no local
+  // occlusion, and is sampled along the true mirror vector so the waves modulate
+  // it hard. Swapping the planar sample in for it darkened the jungle river by
+  // 2.5x AND flattened it, losing on the exact metric the pass was built to fix.
+  // So by default the sample is applied as a STRUCTURE TRANSFER - its ratio to
+  // its own local level modulates the radiance the level authored - with a
+  // handover to its absolute value toward grazing incidence, where the interface
+  // really is a mirror. See `graze` and the block in _waterShader.
+  //
+  // WHAT IT COSTS. One scene draw pass at `scale` of the backbuffer, every
+  // `interval` frames, and only on frames where a water mesh is actually inside
+  // the player camera's frustum. It is NOT free and it is not hidden: the pass
+  // runs in update(), and main.js resets renderer.info at the top of render(), so
+  // the capture report's draw/triangle figures do NOT include it. Budget it by
+  // hand. The knobs that actually move the number are `interval` (2 halves it),
+  // `far` (a shorter far plane culls the fogged-out background) and `exclude`.
+  // `maxY` is there for completeness but think twice before culling a canopy
+  // with it: on the jungle the reflected canopy IS the structure that fixed the
+  // frame, and dropping it puts the flat bright plate straight back.
+  //
+  // THE GATE. Nothing here runs unless a water() caller asked for it:
+  //   opts.reflect === false            hard off
+  //   opts.reflect === true | {...}     hard on, with config
+  //   env.waterReflect on the level def on/off without touching the level file
+  //   otherwise                         on for DECLARATIVE levels only
+  // market and harbor carry env: null, so this.declarative is false for both,
+  // so neither can reach this code however water() is called. That is the same
+  // marker every other levels-3-10 addition in this file hangs off.
+  // --------------------------------------------------------------------------
+
+  var REFLECT_DEFAULTS = {
+    // Half res. The reflection is band-limited by the wave normal anyway and
+    // the mix weight falls off with roughness, so the sharpness that a full-res
+    // pass buys is not visible on water.
+    scale: 0.5,
+    // Frames between passes. 2 costs half as much and is invisible at 60 fps:
+    // the texture matrix is stored WITH the target, so a stale reflection is
+    // still projected from the camera that rendered it and stays geometrically
+    // consistent - it lags in parallax, not in registration.
+    interval: 2,
+    // 0 = inherit the player camera's far plane.
+    far: 0,
+    // Objects whose world bounding box sits entirely above this Y are dropped
+    // from the pass. Infinity = keep everything.
+    maxY: Infinity,
+    // Substrings matched against object.name, case-insensitive.
+    exclude: null,
+    // Master weight on the planar term, 0..1.
+    strength: 1.0,
+    // Linear gain on the sampled radiance. 1.0 = the reflection carries the
+    // same energy the geometry did, which is the physical answer.
+    gain: 1.0,
+    // WAVE DISTORTION, as a multiplier on the physically-derived scale - 1.0
+    // means "deflect the sample by exactly the angle the wave normal deflects
+    // the reflected ray". It is not a UV constant any more, and it must not be:
+    // a tilt of s radians turns the mirror ray by 2s, which covers
+    // 2s/(2*tan(fov/2)) of the frame, so the correct UV offset depends on the
+    // FOV and the aspect and is otherwise distance-INDEPENDENT. The first
+    // version used a flat 0.045 UV per unit slope, which at this river's wave
+    // amplitude worked out to about five pixels - so the planar sample carried
+    // no wave modulation at all while the environment probe, sampled along the
+    // true mirror vector, carried plenty. Crossfading to it therefore REMOVED
+    // the ripple texture from the water: measured, the river's row standard
+    // deviation fell at every depth and frame flat_area rose.
+    distort: 1.0,
+    // HOW THE PLANAR TERM IS WEIGHTED AGAINST THE PROBE. Measured, and the
+    // measurement is the reason these four exist at all - see the note above
+    // _waterShader's reflection block. A straight replace of the environment by
+    // the planar sample costs more than it buys, because the two signals are
+    // not interchangeable: the probe is a sky-only point sample, uniformly
+    // bright, and every water body in this build has its colour tuned with that
+    // brightness leaking in through the low-angle Fresnel. Swap it for the
+    // canopy the mirror actually sees and the near river loses an order of
+    // magnitude and crushes.
+    //
+    // So the reflection is applied as a STRUCTURE TRANSFER by default: the
+    // sample's ratio to its own local level modulates the radiance the level
+    // authored, which keeps the value and the ripple and adds the far bank, the
+    // roots, the wreck and the canopy gaps.
+    //
+    // graze    0..1. How far to hand over to the sample's ABSOLUTE value toward
+    //          grazing incidence, where the interface really is a mirror and the
+    //          true brightness of the reflected world is the point. 0 keeps the
+    //          authored level everywhere; 1 becomes a straight physical replace
+    //          at glancing angles. Measured on the jungle river: 0.5 buys the
+    //          far field real value range for a 14% drop in its mean.
+    graze: 0.5,
+    // The ramp exponent. This is an AUTHORED crossfade, not Schlick's 5 - the
+    // Fresnel magnitude is already applied downstream by EnvironmentBRDF and
+    // must not be applied twice. 2 was measured against 4 and 5 on the jungle's
+    // river: the reflection of an object standing h above the water, seen from
+    // eye height e at horizontal distance d, lands at d*e/(e+h) - so the wreck
+    // 3 m up and 15 m out reflects only 5 m in front of the camera, at an
+    // incidence where an exponent of 4 had already faded the term to a quarter.
+    // The subjects a planar pass exists to show live much closer to the eye
+    // than the geometry casting them.
+    grazePow: 2.0,
+    // Prefilter radius, in UV, at full roughness. A planar pass has one sharp
+    // mip; without this the term has to be thrown away wherever the lobe has
+    // widened, which is precisely the far field where the water is MOST
+    // mirror-like. 0 disables the taps and restores the single sharp fetch.
+    // 0.008 UV is about five texels of a half-res target - enough to stop the
+    // sharp fetch crawling, not enough to dissolve the far bank it is there to
+    // show. It was 0.020 for one measurement and that dissolved it.
+    blur: 0.008,
+    // Roughness at which the planar term is fully handed back to the (correctly
+    // prefiltered) environment. The taps only stand in for a mip up to a point.
+    roughFade: 0.85,
+    // Explicit water plane height. null = measured off the meshes that carry a
+    // gbWater material, which is what a level that never published one wants.
+    y: null,
+    // Below this height above the plane the eye is effectively in the water and
+    // the mirror camera degenerates; the term fades out instead of exploding.
+    minHeight: 0.25,
+    // Lengyel's clip bias. Pulls the oblique near plane a hair back so the
+    // waterline itself does not z-fight out of the reflection.
+    clipBias: 0.0035
+  };
+
+  // Is a planar reflection wanted for this water() call? See the gate note
+  // above. Kept as its own function so the answer is testable and so there is
+  // exactly one place that decides.
+  MaterialLibrary.prototype._reflectWanted = function (opts) {
+    if (opts && opts.reflect !== undefined && opts.reflect !== null) return !!opts.reflect;
+    var ldef = null;
+    try { ldef = this.ctx && this.ctx.levelDef; } catch (e) { ldef = null; }
+    var env = ldef && ldef.env;
+    if (env && env.waterReflect !== undefined) return !!env.waterReflect;
+    // Declarative levels (3-10) get it; market and harbor carry env: null and
+    // can never reach this branch.
+    return !!this.declarative;
+  };
+
+  // The shared uniform OBJECTS, exactly like _time and _wetGlobal: one set for
+  // the whole library, so the per-frame pass is three writes that reach every
+  // water surface with no iteration and no recompile.
+  MaterialLibrary.prototype._reflectState = function () {
+    if (!this._refl) {
+      this._reflTex = { value: null };
+      this._reflMtx = { value: new THREE.Matrix4() };
+      // x = mix weight (0 until the first pass lands), y = distortion,
+      // z = gain, w = grazing bias
+      this._reflCfg = { value: new THREE.Vector4(0, 0.045, 1.0, REFLECT_DEFAULTS.graze) };
+      // x = grazing exponent, y = prefilter radius in UV at full roughness,
+      // z = roughness at which the term is handed back to the environment,
+      // w = the target's height:width, so the prefilter disc is round in
+      //     PIXELS rather than an ellipse stretched by the 16:9 aspect.
+      this._reflCfg2 = {
+        value: new THREE.Vector4(REFLECT_DEFAULTS.grazePow, REFLECT_DEFAULTS.blur,
+          REFLECT_DEFAULTS.roughFade, 0.5625)
+      };
+      var cfg = {};
+      for (var k in REFLECT_DEFAULTS) cfg[k] = REFLECT_DEFAULTS[k];
+      this._refl = {
+        on: false, cfg: cfg, rt: null, cam: null, w: 0, h: 0,
+        planeY: null, frame: 0, hide: null, hideAge: 1e9, ready: false,
+        plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+        clip: new THREE.Vector4(), q: new THREE.Vector4(),
+        mtx: new THREE.Matrix4(), v0: new THREE.Vector3(),
+        v1: new THREE.Vector3(), box: new THREE.Box3(),
+        size: new THREE.Vector2(), clear: new THREE.Color(0, 0, 0),
+        prevClear: new THREE.Color(0, 0, 0)
+      };
+    }
+    return this._refl;
+  };
+
+  MaterialLibrary.prototype._reflectEnable = function (conf) {
+    var R = this._reflectState();
+    R.on = true;
+    this.setWaterReflection(conf);
+    // NOTE: no waveAmp compensation. An earlier version divided the distortion
+    // by waveAmp so a calm river and a wind sea got "the same visual wobble" -
+    // which is only a sensible thing to want while the distortion is an
+    // arbitrary UV constant. Now that it is the real ray deflection, waveAmp
+    // already scales the slopes and compensating for it would be undoing the
+    // level's own choice about how rough its water is.
+    this._reflCfg.value.z = R.cfg.gain;
+    return R;
+  };
+
+  /**
+   * setWaterReflection(conf) -> the live config object.
+   *
+   * Re-tune the planar pass after the material exists. Every field is
+   * optional; see REFLECT_DEFAULTS. Passing `false` switches the pass off and
+   * drops the term out of the shader (the program is unchanged - it just
+   * multiplies by zero), which is the safe way to A/B it or to shed the cost
+   * on a low-quality tier.
+   */
+  MaterialLibrary.prototype.setWaterReflection = function (conf) {
+    var R = this._reflectState();
+    if (conf === false) {
+      R.on = false;
+      this._reflCfg.value.x = 0;
+      return R.cfg;
+    }
+    if (conf === true) conf = null;
+    if (conf) {
+      for (var k in R.cfg) {
+        if (conf[k] !== undefined && conf[k] !== null) R.cfg[k] = conf[k];
+      }
+      if (conf.y !== undefined) R.planeY = (conf.y === null ? null : conf.y);
+    }
+    R.cfg.scale = M.clamp(R.cfg.scale, 0.25, 1.0);
+    R.cfg.interval = Math.max(1, Math.round(R.cfg.interval) || 1);
+    R.cfg.strength = M.saturate(R.cfg.strength);
+    R.cfg.gain = M.clamp(R.cfg.gain, 0.0, 4.0);
+    R.cfg.distort = M.clamp(R.cfg.distort, 0.0, 3.0);
+    R.cfg.graze = M.saturate(R.cfg.graze);
+    R.cfg.grazePow = M.clamp(R.cfg.grazePow, 1.0, 12.0);
+    R.cfg.blur = M.clamp(R.cfg.blur, 0.0, 0.08);
+    R.cfg.roughFade = M.clamp(R.cfg.roughFade, 0.10, 1.0);
+    if (R.cfg.y !== null && R.cfg.y !== undefined && isFinite(R.cfg.y)) R.planeY = R.cfg.y;
+    // NOT .y - the distortion uniform carries distort/tan(fov/2) and only the
+    // pass, which can see the camera, is in a position to write it.
+    this._reflCfg.value.z = R.cfg.gain;
+    this._reflCfg.value.w = R.cfg.graze;
+    this._reflCfg2.value.x = R.cfg.grazePow;
+    this._reflCfg2.value.y = R.cfg.blur;
+    this._reflCfg2.value.z = R.cfg.roughFade;
+    R.hideAge = 1e9;                 // re-scan: exclude/maxY may have changed
+    return R.cfg;
+  };
+
+  // Where the water plane is. A level that publishes nothing still gets a
+  // correct answer, because the material itself is the marker: every surface
+  // water() built carries userData.gbWater, so the meshes wearing one ARE the
+  // plane. The widest one wins - a level with a river and a puddle plate should
+  // mirror about the river.
+  MaterialLibrary.prototype._reflectFindPlaneY = function (scene) {
+    var R = this._refl, best = null, bestArea = -1;
+    if (!scene || !scene.traverse) return null;
+    var box = R.box;
+    scene.traverse(function (o) {
+      if (!o || !o.isMesh || !o.visible || !o.geometry) return;
+      var m = o.material;
+      if (Array.isArray(m)) m = m[0];
+      if (!m || !m.userData || !m.userData.gbWater) return;
+      try {
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        box.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+      } catch (e) { return; }
+      var a = (box.max.x - box.min.x) * (box.max.z - box.min.z);
+      if (a > bestArea) { bestArea = a; best = box.max.y; }
+    });
+    return (best !== null && isFinite(best)) ? best : null;
+  };
+
+  // Everything the mirror camera must not draw. Rebuilt occasionally rather
+  // than every frame: props and AI come and go, but a full scene traverse per
+  // frame to find half a dozen objects is the kind of cost that hides in a
+  // profile.
+  MaterialLibrary.prototype._reflectHideList = function (scene) {
+    var R = this._refl, cfg = R.cfg, out = [];
+    // Collected in the same traverse: the water meshes themselves, so the pass
+    // can ask whether any of them is on screen before paying for a scene render.
+    var wm = R.wmesh = [];
+    var ex = cfg.exclude;
+    if (typeof ex === 'string') ex = [ex];
+    var nEx = (ex && ex.length) || 0;
+    var maxY = cfg.maxY;
+    var useY = isFinite(maxY);
+    var box = R.box;
+    scene.traverse(function (o) {
+      if (!o || !o.visible) return;
+      // The water must not appear in its own reflection. The oblique clip
+      // already cuts it, but a surface lying EXACTLY on the clip plane is the
+      // one case that plane cannot decide.
+      var m = o.material;
+      if (Array.isArray(m)) m = m[0];
+      if (m && m.userData && m.userData.gbWater) {
+        out.push(o);
+        if (o.isMesh && o.geometry) wm.push(o);
+        return;
+      }
+      // The published opt-out, so any other module can keep something out of
+      // the pass without this file knowing what levels contain.
+      if (o.userData && o.userData.gbNoReflect) { out.push(o); return; }
+      if (nEx && o.name) {
+        var n = o.name.toLowerCase();
+        for (var i = 0; i < nEx; i++) {
+          if (n.indexOf(String(ex[i]).toLowerCase()) >= 0) { out.push(o); return; }
+        }
+      }
+      if (useY && o.isMesh && o.geometry) {
+        try {
+          if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+          box.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+          if (box.min.y > maxY) out.push(o);
+        } catch (e) { /* unbounded geometry stays in */ }
+      }
+    });
+    return out;
+  };
+
+  // Is any water mesh inside the player camera's frustum? Conservative by
+  // construction - a world-space AABB always contains the geometry - so a false
+  // NEGATIVE (a visible river skipped) is not reachable through a bad bound,
+  // only through a bad matrix, and the matrix is the camera's own.
+  MaterialLibrary.prototype._reflectWaterOnScreen = function (camera) {
+    var R = this._refl, list = R.wmesh, i, o;
+    if (!list || !list.length) return true;
+    if (!R.frustum) { R.frustum = new THREE.Frustum(); R.fmtx = new THREE.Matrix4(); }
+    R.fmtx.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    R.frustum.setFromProjectionMatrix(R.fmtx);
+    for (i = 0; i < list.length; i++) {
+      o = list[i];
+      if (!o || !o.visible || !o.geometry) continue;
+      try {
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        R.box.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+        if (R.frustum.intersectsBox(R.box)) return true;
+      } catch (e) {
+        return true;                 // unbounded geometry: assume it is in shot
+      }
+    }
+    return false;
+  };
+
+  MaterialLibrary.prototype._reflectTarget = function (renderer) {
+    var R = this._refl;
+    renderer.getSize(R.size);
+    var w = Math.max(64, Math.round(R.size.x * R.cfg.scale));
+    var h = Math.max(64, Math.round(R.size.y * R.cfg.scale));
+    if (R.rt && R.w === w && R.h === h) return R.rt;
+    if (R.rt) { try { R.rt.dispose(); } catch (e) { /* already gone */ } }
+    R.rt = new THREE.WebGLRenderTarget(w, h, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      // HDR, per the render contract. The scene is rendered with tone mapping
+      // OFF (postfx owns it), so an 8-bit target would clip every highlight in
+      // the reflection to white and then hand that back as "radiance".
+      type: THREE.HalfFloatType,
+      depthBuffer: true,
+      stencilBuffer: false,
+      generateMipmaps: false
+    });
+    // The target holds LINEAR radiance, not display-referred colour. Tagging it
+    // sRGB would make three encode on write and this shader decode nothing.
+    R.rt.texture.colorSpace = THREE.NoColorSpace;
+    R.rt.texture.wrapS = R.rt.texture.wrapT = THREE.ClampToEdgeWrapping;
+    R.rt.texture.name = 'gb_water_reflection';
+    R.w = w; R.h = h;
+    R.ready = false;
+    this._reflTex.value = R.rt.texture;
+    // The prefilter disc is authored as a radius in UV; without this it would be
+    // 16:9 wider than it is tall and a rough reflection would smear sideways.
+    this._reflCfg2.value.w = h / w;
+    return R.rt;
+  };
+
+  MaterialLibrary.prototype._reflectRender = function (ctx) {
+    var R = this._refl;
+    if (!R || !R.on || !ctx) return;
+    var renderer = ctx.renderer, scene = ctx.scene, camera = ctx.camera;
+    if (!renderer || !scene || !camera || !camera.isPerspectiveCamera) return;
+
+    R.frame++;
+    camera.updateMatrixWorld();
+
+    // The distortion is authored as a multiple of the true ray deflection, so
+    // the projection scale that turns a normal tilt into a UV offset has to come
+    // from the live camera, not from a constant. Written before the throttle
+    // returns so a stale pass still projects with the current lens.
+    var tanH = Math.tan(camera.fov * 0.5 * Math.PI / 180.0);
+    this._reflCfg.value.y = R.cfg.distort / Math.max(0.05, tanH);
+
+    // ---- where is the water? -----------------------------------------------
+    if (R.planeY === null || !isFinite(R.planeY)) {
+      R.planeY = this._reflectFindPlaneY(scene);
+      // No water in the scene yet (the level may still be building). Leave the
+      // term at zero and try again next frame - never guess a height.
+      if (R.planeY === null) { this._reflCfg.value.x = 0; return; }
+    }
+    var h = R.planeY;
+    var above = camera.position.y - h;
+    // Eye at or under the surface: the mirror camera coincides with it and the
+    // oblique projection degenerates. Fade out rather than divide by nothing.
+    var hFade = M.saturate((above - R.cfg.minHeight * 0.5) / Math.max(1e-3, R.cfg.minHeight));
+    if (hFade <= 0.0) { this._reflCfg.value.x = 0; return; }
+
+    // ---- what not to draw, and is there anything to draw it FOR? -----------
+    // Rebuilt occasionally rather than every frame: props and AI come and go,
+    // but a full scene traverse per frame to find half a dozen objects is the
+    // kind of cost that hides in a profile.
+    R.hideAge++;
+    if (!R.hide || R.hideAge > 30) { R.hide = this._reflectHideList(scene); R.hideAge = 0; }
+
+    // A whole extra scene render is the most expensive possible way to change
+    // nothing, and most framings of a level with a river in it do not have the
+    // river in shot. The cost of this pass does NOT appear in the capture
+    // report - main.js resets renderer.info at the top of render() and this runs
+    // in update() - so on a level already at the draw ceiling it is the one part
+    // of the feature nobody can see. Box test, not the bounding sphere three
+    // uses: the sphere around a river plane is enormous and intersects the
+    // frustum from halfway across the level.
+    if (R.wmesh && R.wmesh.length && !this._reflectWaterOnScreen(camera)) {
+      this._reflCfg.value.x = 0;
+      return;
+    }
+
+    // ---- throttle ----------------------------------------------------------
+    if (R.ready && R.cfg.interval > 1 && (R.frame % R.cfg.interval) !== 0) {
+      this._reflCfg.value.x = R.cfg.strength * hFade;
+      return;
+    }
+
+    var rt = this._reflectTarget(renderer);
+    if (!rt) return;
+
+    // ---- the mirror camera -------------------------------------------------
+    // Reflect the eye and its look-at point through the plane, then negate the
+    // reflected up vector. Position and target alone would give a left-handed
+    // basis and a horizontally flipped image; the negate puts the handedness
+    // back, which is why this is a plain lookAt camera and not a mirrored
+    // matrix. Sampling is projective (see gbReflMtx), so a point above the
+    // water lands on exactly the texel the reflected view ray reaches.
+    var cam = R.cam;
+    if (!cam) {
+      cam = R.cam = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+      cam.matrixAutoUpdate = true;
+    }
+    cam.fov = camera.fov;
+    cam.aspect = camera.aspect;
+    cam.near = camera.near;
+    cam.far = (R.cfg.far > 0) ? Math.min(R.cfg.far, camera.far) : camera.far;
+    cam.zoom = camera.zoom;
+    cam.filmOffset = camera.filmOffset;
+    cam.updateProjectionMatrix();
+
+    var lookAt = R.v0.set(0, 0, -1).applyQuaternion(camera.quaternion)
+      .add(camera.position);
+    var up = R.v1.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    cam.position.set(camera.position.x, 2 * h - camera.position.y, camera.position.z);
+    cam.up.set(-up.x, up.y, -up.z);
+    cam.lookAt(lookAt.x, 2 * h - lookAt.y, lookAt.z);
+    cam.updateMatrixWorld(true);
+
+    // ---- oblique near plane (Lengyel) --------------------------------------
+    // Cheaper and far safer than renderer.clippingPlanes: a global clip plane
+    // adds NUM_CLIPPING_PLANES to every material's program key in the scene, so
+    // switching it on for one pass and off for the next compiles a second
+    // variant of every shader in the level. This is four writes into the
+    // projection matrix and nothing recompiles.
+    R.plane.normal.set(0, 1, 0);
+    R.plane.constant = -h;
+    R.plane.applyMatrix4(cam.matrixWorldInverse);
+    var cv = R.clip.set(R.plane.normal.x, R.plane.normal.y, R.plane.normal.z, R.plane.constant);
+    var pe = cam.projectionMatrix.elements;
+    var q = R.q;
+    q.x = (sgn(cv.x) + pe[8]) / pe[0];
+    q.y = (sgn(cv.y) + pe[9]) / pe[5];
+    q.z = -1.0;
+    q.w = (1.0 + pe[10]) / pe[14];
+    var dq = cv.dot(q);
+    if (Math.abs(dq) > 1e-6) {
+      cv.multiplyScalar(2.0 / dq);
+      pe[2] = cv.x;
+      pe[6] = cv.y;
+      pe[10] = cv.z + 1.0 - R.cfg.clipBias;
+      pe[14] = cv.w;
+      cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
+    }
+
+    // ---- what not to draw --------------------------------------------------
+    var hide = R.hide, i;
+    for (i = 0; i < hide.length; i++) hide[i].visible = false;
+
+    // ---- the sky dome ------------------------------------------------------
+    // sky.js parks a UNIT sphere on the player's eye and reads its object-space
+    // position as the view ray. From a camera a metre and a half the other side
+    // of the water that sphere is entirely below the clip plane and the whole
+    // reflection comes back with no sky in it at all. Moving it onto the mirror
+    // camera keeps the view ray exact (the shader normalises object space) and
+    // scaling it past the water plane keeps it in frame. Both restored below;
+    // sky.update() rewrites the position every frame anyway but never the scale.
+    var dome = null, domeS = 1;
+    try {
+      var sk = ctx.sky;
+      if (sk && sk.mesh && sk.mesh.isMesh && sk.mesh.visible) dome = sk.mesh;
+    } catch (e) { dome = null; }
+    if (dome) {
+      R.domePos = R.domePos || new THREE.Vector3();
+      R.domeScale = R.domeScale || new THREE.Vector3();
+      R.domePos.copy(dome.position);
+      R.domeScale.copy(dome.scale);
+      domeS = Math.max(4.0, cam.far * 0.45);
+      dome.position.copy(cam.position);
+      dome.scale.set(domeS, domeS, domeS);
+    }
+
+    // ---- render ------------------------------------------------------------
+    var prevRT = renderer.getRenderTarget();
+    var prevCube = renderer.getActiveCubeFace();
+    var prevMip = renderer.getActiveMipmapLevel();
+    var prevAutoClear = renderer.autoClear;
+    var prevShadowAuto = renderer.shadowMap ? renderer.shadowMap.autoUpdate : true;
+    var prevXr = (renderer.xr && renderer.xr.enabled) || false;
+    var prevAlpha = renderer.getClearAlpha();
+    renderer.getClearColor(R.prevClear);
+    // The fog colour, not black: the only pixels that can survive the oblique
+    // clip with nothing drawn on them are below the water's own horizon line,
+    // and a wave distortion that nudges a far sample across that line should
+    // pick up haze, not a black scar along the waterline.
+    if (scene.fog && scene.fog.color) R.clear.copy(scene.fog.color);
+    else R.clear.setRGB(0, 0, 0);
+
+    try {
+      if (renderer.xr) renderer.xr.enabled = false;
+      // Reuse last frame's shadow maps. Re-rendering every cascade for a
+      // half-res reflection doubles the shadow cost for a difference nothing
+      // in the frame can resolve.
+      if (renderer.shadowMap) renderer.shadowMap.autoUpdate = false;
+      renderer.autoClear = false;
+      renderer.setRenderTarget(rt);
+      renderer.setClearColor(R.clear, 1);
+      renderer.clear(true, true, false);
+      renderer.render(scene, cam);
+      R.ready = true;
+    } finally {
+      renderer.setClearColor(R.prevClear, prevAlpha);
+      renderer.setRenderTarget(prevRT, prevCube, prevMip);
+      renderer.autoClear = prevAutoClear;
+      if (renderer.shadowMap) renderer.shadowMap.autoUpdate = prevShadowAuto;
+      if (renderer.xr) renderer.xr.enabled = prevXr;
+      if (dome) { dome.position.copy(R.domePos); dome.scale.copy(R.domeScale); }
+      for (i = 0; i < hide.length; i++) hide[i].visible = true;
+    }
+
+    // ---- publish -----------------------------------------------------------
+    // world -> the mirror camera's clip space -> [0,1] texture space, stored
+    // WITH the frame it belongs to. A stale target sampled through its own
+    // matrix is still registered correctly; sampling it through the current
+    // camera's matrix is what makes lagged planar reflections slide.
+    R.mtx.set(0.5, 0.0, 0.0, 0.5,
+      0.0, 0.5, 0.0, 0.5,
+      0.0, 0.0, 0.5, 0.5,
+      0.0, 0.0, 0.0, 1.0);
+    R.mtx.multiply(cam.projectionMatrix);
+    R.mtx.multiply(cam.matrixWorldInverse);
+    this._reflMtx.value.copy(R.mtx);
+    this._reflTex.value = rt.texture;
+    this._reflCfg.value.x = R.cfg.strength * hFade;
+    this._reflCfg.value.z = R.cfg.gain;
+  };
+
+  function sgn(x) { return x < 0 ? -1 : (x > 0 ? 1 : 0); }
 
   // --------------------------------------------------------------------------
   // The sea's fragment shader. Kept separate from _fragmentShader rather than
@@ -6322,6 +6946,32 @@
     pars.push('#define GB_FOAM_MAX ' + FOAM_MAX);
     pars.push('float gbFoam = 0.0;');
     pars.push('float gbWDist = 0.0;');
+    if (F.reflect) {
+      pars.push('uniform sampler2D gbReflMap;');
+      pars.push('uniform mat4 gbReflMtx;');
+      // x = mix weight, y = distortion in UV per unit slope, z = gain,
+      // w = grazing bias
+      pars.push('uniform vec4 gbReflCfg;');
+      // x = grazing exponent, y = prefilter radius, z = rough hand-back,
+      // w = target height:width
+      pars.push('uniform vec4 gbReflCfg2;');
+      // Every fetch of the reflection goes through here. A tap that walks off
+      // the target reads the edge texel rather than wrapping to the far side of
+      // the frame, which would put a mirrored strip of the opposite bank into
+      // the river.
+      pars.push('vec3 gbReflTap( vec2 uv ) {');
+      pars.push('  return texture2D( gbReflMap, clamp( uv, vec2( 0.0015 ), vec2( 0.9985 ) ) ).rgb;');
+      pars.push('}');
+      // The roughness BEFORE the geometric specular-AA variance term is folded
+      // in. The reflection prefilter has to be driven off this and not off the
+      // final roughness: the variance term is an ANTIALIASING device that
+      // reports how fast the normal is changing per pixel, and it legitimately
+      // pushes the sea past 0.5 in the crawling band. Feeding that into a blur
+      // radius double-counts it - measured, it drove most of the river to the
+      // maximum tap radius and washed the reflection into a flat dark smear,
+      // which subtracted value without adding any structure at all.
+      pars.push('float gbRough0 = 0.05;');
+    }
     pars.push(G_COMMON);
     pars.push(G_WAVE);
     pars.push(G_RIPPLE);
@@ -6420,6 +7070,7 @@
     // Folding the measured normal variance into roughness converts those
     // specks into the correct broad shimmer - which is what a glitter path
     // actually is.
+    if (F.reflect) brdf.push('gbRough0 = material.roughness;');
     brdf.push('{');
     brdf.push('  vec3 gbWdx = dFdx( normal ), gbWdy = dFdy( normal );');
     brdf.push('  float gbWv = max( dot( gbWdx, gbWdx ), dot( gbWdy, gbWdy ) );');
@@ -6435,6 +7086,160 @@
     brdf.push('material.specularColor = mix( material.specularColor, vec3( 0.045 ), gbFoam );');
     src = src.replace('#include <lights_physical_fragment>',
       '#include <lights_physical_fragment>\n' + brdf.join('\n'));
+
+    // ---- planar reflection --------------------------------------------------
+    // Injected into `radiance` - the environment's SPECULAR radiance, before
+    // RE_IndirectSpecular runs. That placement is the whole trick: the planar
+    // term then goes through EnvironmentBRDF with the F0 = 0.02 / F90 = 1.0
+    // Fresnel set eight lines above, so its absolute level is Fresnel-weighted
+    // by exactly the same code as the envMap and there is no second Fresnel to
+    // keep in step with the first.
+    //
+    // Three things below are not the obvious implementation and all three are
+    // there because the obvious one was measured and was a net loss: the sample
+    // is DISPLACED by the true ray deflection rather than a token UV constant,
+    // it is PREFILTERED with a tap ring rather than faded out where the surface
+    // roughens, and it is applied as a STRUCTURE TRANSFER onto the authored
+    // radiance rather than replacing it. See the note on each.
+    if (F.reflect) {
+      var rf = [];
+      rf.push('#if defined( RE_IndirectSpecular )');
+      rf.push('{');
+      // The mirror camera is the eye reflected in the water plane, so the
+      // reflected view ray through this point and the mirror camera's ray
+      // through it are the SAME ray. The texel under the point's own
+      // projection is therefore exactly what the surface reflects - and
+      // because the matrix travels with the frame it was rendered from, a
+      // throttled pass stays registered instead of sliding.
+      rf.push('  vec4 gbRp = gbReflMtx * vec4( gbWP, 1.0 );');
+      rf.push('  float gbRw = max( gbRp.w, 1e-4 );');
+      rf.push('  vec2 gbRuv = gbRp.xy / gbRw;');
+      // WAVE DISTORTION, and it is the whole reason the crossfade is worth
+      // doing at all. getIBLRadiance samples the probe along the true mirror
+      // vector, so the wave normals modulate it strongly - that modulation IS
+      // the ripple texture the surface reads by. A planar sample taken at the
+      // fragment's own projection carries none of it, so a crossfade with a
+      // token offset trades a rippled surface for a smooth one and loses more
+      // than the local reflection gains. Measured, twice.
+      //
+      // So the offset is the real thing: the mirror ray turns by twice the
+      // normal tilt, and the tilt is taken in VIEW space against the flat water
+      // plane's own view-space normal, which makes it a screen-aligned quantity
+      // that maps onto the reflection target's axes whatever the camera's yaw
+      // is. (The mirror camera negates its up vector precisely so its screen
+      // axes still agree with the player camera's.) gbReflCfg.y carries
+      // distort/tan(fov/2) and gbReflCfg2.w the aspect, which is the projection
+      // of that angle onto UV; there is no distance term in it because there is
+      // none in the physics - an angular deflection covers the same fraction of
+      // the frame at any range.
+      rf.push('  vec3 gbNv0 = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );');
+      rf.push('  vec2 gbRoff = ( normal - gbNv0 ).xy * vec2( gbReflCfg2.w, 1.0 ) * gbReflCfg.y;');
+      // A light distance damp and a hard cap. Not physics: at range one pixel
+      // covers many wavelengths, the slope it reports is aliased, and an
+      // unbounded offset lets a single freak fragment fetch from the far side of
+      // the frame - which reads as a lone bright speck, not as water.
+      rf.push('  gbRoff /= ( 1.0 + gbWDist * 0.02 );');
+      rf.push('  gbRoff = clamp( gbRoff, vec2( -0.12 ), vec2( 0.12 ) );');
+      rf.push('  vec2 gbRs = clamp( gbRuv + gbRoff, vec2( 0.0015 ), vec2( 0.9985 ) );');
+      // THE PREFILTER. A planar pass has exactly one sharp mip, and the sea
+      // shader roughens with distance (12 m -> 90 m) and with the measured
+      // normal variance on top of that, so a sharp fetch is unusable over most
+      // of the surface. The first version of this block answered that by fading
+      // the term out above roughness 0.34 - which deleted it across the whole
+      // mid and far field, i.e. exactly where incidence is grazing, Fresnel is
+      // approaching unity and the water is MOST like a mirror. Measured on the
+      // jungle's hero2 framing: the term survived only in the near field, where
+      // Fresnel is 2-6%, so all it could do there was subtract.
+      //
+      // Six taps on a hexagonal ring plus the centre, radius following the
+      // roughness, stand in for the mip that does not exist. Round in PIXELS,
+      // not in UV (gbReflCfg2.w), or a rough reflection smears 16:9 sideways.
+      // A hex ring rather than a cross because a cross lays a visible plus over
+      // every high-contrast edge in the reflection.
+      rf.push('  vec2 gbRax = vec2( gbReflCfg2.w, 1.0 );');
+      rf.push('  vec3 gbC0 = gbReflTap( gbRs );');
+      rf.push('  vec3 gbRefA = gbC0;');
+      rf.push('  float gbBr = min( gbRough0 * 3.0, 1.0 ) * gbReflCfg2.y;');
+      rf.push('  if ( gbBr > 5e-4 ) {');
+      rf.push('    vec2 gbBa = gbRax * gbBr;');
+      rf.push('    vec3 gbAcc = gbC0;');
+      rf.push('    gbAcc += gbReflTap( gbRs + vec2(  1.000,  0.000 ) * gbBa );');
+      rf.push('    gbAcc += gbReflTap( gbRs + vec2(  0.500,  0.866 ) * gbBa );');
+      rf.push('    gbAcc += gbReflTap( gbRs + vec2( -0.500,  0.866 ) * gbBa );');
+      rf.push('    gbAcc += gbReflTap( gbRs + vec2( -1.000,  0.000 ) * gbBa );');
+      rf.push('    gbAcc += gbReflTap( gbRs + vec2( -0.500, -0.866 ) * gbBa );');
+      rf.push('    gbAcc += gbReflTap( gbRs + vec2(  0.500, -0.866 ) * gbBa );');
+      rf.push('    gbRefA = gbAcc * ( 1.0 / 7.0 );');
+      rf.push('  }');
+      rf.push('  gbRefA *= gbReflCfg.z;');
+      // THE LOCAL LEVEL of the reflection: the same signal at a deliberately
+      // WIDE radius, four taps. It is what the environment probe would have
+      // said if the probe knew there was a jungle overhead - the low-frequency
+      // brightness of what this patch of water faces.
+      rf.push('  vec2 gbWa = gbRax * 0.055;');
+      rf.push('  vec3 gbRefM = gbC0;');
+      rf.push('  gbRefM += gbReflTap( gbRs + vec2(  1.0,  0.0 ) * gbWa );');
+      rf.push('  gbRefM += gbReflTap( gbRs + vec2( -1.0,  0.0 ) * gbWa );');
+      rf.push('  gbRefM += gbReflTap( gbRs + vec2(  0.0,  1.0 ) * gbWa );');
+      rf.push('  gbRefM += gbReflTap( gbRs + vec2(  0.0, -1.0 ) * gbWa );');
+      rf.push('  gbRefM *= ( gbReflCfg.z / 5.0 );');
+      rf.push('  float gbRk = gbReflCfg.x * step( 1e-4, gbRp.w );');
+      // Nothing outside the pass's own frame, feathered so the boundary is a
+      // gradient into the environment rather than a line across the river. The
+      // feather is wider than the local-level ring so a fragment whose wide taps
+      // are clamping against the border is already fading out.
+      rf.push('  vec2 gbRe = smoothstep( vec2( 0.0 ), vec2( 0.060 ), gbRuv ) *');
+      rf.push('    smoothstep( vec2( 1.0 ), vec2( 0.940 ), gbRuv );');
+      rf.push('  gbRk *= gbRe.x * gbRe.y;');
+      // Past the prefilter's reach the environment is the correctly filtered
+      // version of the same signal, so hand it back rather than alias.
+      rf.push('  gbRk *= 1.0 - smoothstep( gbReflCfg2.z * 0.55, gbReflCfg2.z, gbRough0 );');
+      rf.push('  gbRk *= 1.0 - gbFoam;');
+      // STRUCTURE TRANSFER, and this is the part that took three measurements to
+      // arrive at. The obvious implementation - crossfade `radiance` from the
+      // probe to the planar sample - is wrong here, and wrong in a way that a
+      // still frame hides and a measurement does not:
+      //
+      //   * the probe is a sky-only point sample with no local occlusion. It is
+      //     uniformly bright and roughly an order of magnitude brighter than the
+      //     canopy the mirror actually sees. Every water body in this library
+      //     has its colour authored with that brightness leaking in through the
+      //     low-angle Fresnel, so a straight swap drops the river by 2.5x and
+      //     crushes it: measured on the jungle's hero2 river, row means
+      //     65.7 -> 36.7 and 37.5 -> 15.3, and the auto-exposure then opened 5%
+      //     and washed the rest of the frame to compensate.
+      //   * the probe is sampled along the true mirror vector, so the wave
+      //     normals modulate it hard, and that modulation is most of the ripple
+      //     texture the surface reads by. A planar sample is a near-flat field
+      //     by comparison, so the swap also FLATTENED the water - row standard
+      //     deviation 10.6 -> 6.8 at mid depth. Both losses land on the very
+      //     complaint the pass was built to answer.
+      //
+      // What the planar pass genuinely knows, and the probe cannot, is the
+      // STRUCTURE: where the far bank is, where the mangrove roots are, where
+      // the wreck standing out of the river is, where the canopy opens to sky.
+      // So take the ratio of the sharp sample to its own local level and apply
+      // that as a modulation of the radiance the level authored. The water keeps
+      // its value and its ripple and gains the reflected shapes. The ratio is
+      // per-channel, so the green of reflected foliage and the white of a sky
+      // gap both survive; it is clamped because a ratio against a near-black
+      // local level is a division by nothing.
+      rf.push('  vec3 gbRatio = clamp( gbRefA / max( gbRefM, vec3( 2.0e-3 ) ),');
+      rf.push('    vec3( 0.25 ), vec3( 4.0 ) );');
+      // ...and toward grazing, hand over to the sample's ABSOLUTE value. There
+      // the interface really is a mirror, Fresnel is approaching unity, and the
+      // true brightness of the far bank against the true brightness of the sky
+      // behind it is the whole point. `graze` is how far to go; 0 keeps the
+      // authored level everywhere.
+      rf.push('  float gbNV = clamp( dot( geometryNormal, geometryViewDir ), 0.0, 1.0 );');
+      rf.push('  float gbAbsW = gbReflCfg.w * pow( 1.0 - gbNV, gbReflCfg2.x );');
+      rf.push('  vec3 gbReflC = mix( radiance * gbRatio, gbRefA, clamp( gbAbsW, 0.0, 1.0 ) );');
+      rf.push('  radiance = mix( radiance, gbReflC, clamp( gbRk, 0.0, 1.0 ) );');
+      rf.push('}');
+      rf.push('#endif');
+      src = src.replace('#include <lights_fragment_maps>',
+        '#include <lights_fragment_maps>\n' + rf.join('\n'));
+    }
 
     return pars.join('\n') + '\n' + src;
   };

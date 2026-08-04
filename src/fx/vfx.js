@@ -1525,14 +1525,30 @@
     'uniform float uCap;',
     'uniform float uShaftFloor;',
     'uniform float uShaft[' + DUST_CELLS + '];',
+    // ---- declarative-environment extras -------------------------------------
+    // Every one of these is referenced ONLY inside #ifdef DUST_ADV, which is
+    // defined for levels that carry an env profile. The preprocessor deletes
+    // the blocks for market and harbor, so those two compile the same program
+    // they compiled before this existed.
+    'uniform float uGain;',      // overall brightness multiplier
+    'uniform float uDepthAtt;',  // 1/(1 + dist*att): far motes thin out
+    'uniform vec2  uFade;',      // far-cut start/end as a fraction of uBox.x
+    'uniform vec3  uPx;',        // min px, max px, dim-penalty for the min clamp
+    'uniform float uHiThin;',    // thin the population above eye level
     'varying vec2  vLocal;',
     'varying float vBright;',
     'varying vec4  vScreen;',
     'varying float vViewZ;',
+    '#ifdef DUST_ADV',
+    'varying float vShaftV;',
+    '#endif',
     '#include <fog_pars_vertex>',
     'void main() {',
     '  vLocal = vec2(0.0); vBright = 0.0;',
     '  vScreen = vec4(0.0, 0.0, 1.0, 1.0); vViewZ = 1.0;',
+    '  #ifdef DUST_ADV',
+    '    vShaftV = 0.0;',
+    '  #endif',
     '  float ph = aSeed.w;',
     '  if (ph > uDensity) {',
     '    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);',
@@ -1590,11 +1606,31 @@
     // the shaft, which is the one thing this field exists to draw.
     '  float bright = aStyle.y * (0.25 + 1.10 * hg) * uShaftFloor',
     '               * mix(1.0, 3.4, shaft) * mix(0.72, 1.0, band);',
+    '  #ifdef DUST_ADV',
+    '    vShaftV = shaft;',
+    // A mote above eye level is sitting in air with nothing under it to throw a
+    // shaft; in the upper half of a frame it is pure high-frequency noise
+    // competing with whatever the real subject is. Thin that population rather
+    // than pay for it.
+    '    bright *= mix(1.0, 1.0 - uHiThin, clamp(rel.y / max(uBox.y * 0.5, 1e-3), 0.0, 1.0));',
+    '  #endif',
     // The far cut used to sit at 30-48% of the box, which in a 10 m interior
     // put the entire field inside a 3-4.8 m shell - a room's worth of dust
     // clipped away just past the counter. 45-70% keeps motes all the way to the
     // far wall indoors and 13-21 m down the street outdoors.
-    '  bright *= 1.0 - smoothstep(uBox.x * 0.45, uBox.x * 0.70, dist);',
+    '  #ifdef DUST_ADV',
+    '    bright *= 1.0 - smoothstep(uBox.x * uFade.x, uBox.x * uFade.y, dist);',
+    // Depth attenuation ON TOP of the far cut. The legacy field applies one
+    // smoothstep and nothing else, so a mote 3 m from the lens and a mote 12 m
+    // away arrive at the same value and both clip on uCap - which is what makes
+    // a 1300-mote field print as one uniform speck size at one uniform
+    // brightness, i.e. as lens dirt. Inverse-linear in range puts the
+    // population on a real gradient, so the near motes carry the atmosphere and
+    // the far ones fall under the local background where they belong.
+    '    bright *= uGain / (1.0 + dist * uDepthAtt);',
+    '  #else',
+    '    bright *= 1.0 - smoothstep(uBox.x * 0.45, uBox.x * 0.70, dist);',
+    '  #endif',
     // A mote a hand's width from the lens is not atmosphere, it is a speck on
     // the sensor - but the near motes are also the ones that subtend any solid
     // angle at all, so excluding everything inside 1.3 m threw away most of the
@@ -1611,6 +1647,21 @@
     // invisible in every capture. Hold 2.0 px and compensate only partially:
     // energy conservation is the wrong objective for something whose whole job
     // is to be a legible speck.
+    // The 2.4 px floor against the 4.0 px cap is a 1.67:1 window, and the
+    // instance sizes span 5:1 - so the clamp EATS the whole distribution and
+    // every mote in the frame lands between 2.4 and 4 px whether it is 1 m away
+    // or 20. uPx opens the window to roughly 1.1-6.5 px for a level that asks
+    // for it, which is the 3:1 near/far spread the field was always meant to
+    // have; the alpha penalty for inflating a sub-pixel mote goes up to match,
+    // so the far end reads as a faint smudge instead of a hard white dot.
+    '  #ifdef DUST_ADV',
+    '    if (pxs < uPx.x) {',
+    '      float f = uPx.x / max(pxs, 1e-3);',
+    '      size *= f;',
+    '      bright /= (1.0 + (f - 1.0) * uPx.z);',
+    '    }',
+    '    else if (pxs > uPx.y) { size *= uPx.y / pxs; }',
+    '  #else',
     '  if (pxs < 2.4) {',
     '    float f = 2.4 / max(pxs, 1e-3);',
     '    size *= f;',
@@ -1618,6 +1669,7 @@
     '  }',
     // and hard-cap the apparent size: dust is a point, never a disc
     '  else if (pxs > 4.0) { size *= 4.0 / pxs; }',
+    '  #endif',
     '  mvPosition.xy += position.xy * size;',
     '  vViewZ = viewZ;',
     '  gl_Position = projectionMatrix * mvPosition;',
@@ -1636,10 +1688,16 @@
     'uniform vec3 uTint;',
     'uniform sampler2D uDepth;',
     'uniform float uSoft;',
+    'uniform vec3 uTintLit;',
+    'uniform vec3 uTintDim;',
+    'uniform vec2 uSkyDamp;',   // x = damp amount, y = view depth that counts as sky
     'varying vec2  vLocal;',
     'varying float vBright;',
     'varying vec4  vScreen;',
     'varying float vViewZ;',
+    '#ifdef DUST_ADV',
+    'varying float vShaftV;',
+    '#endif',
     '#include <fog_pars_fragment>',
     'void main() {',
     '  vec2 q = vLocal * 2.0;',
@@ -1652,8 +1710,24 @@
     '    vec2 suv = (vScreen.xy / max(vScreen.w, 1e-5)) * 0.5 + 0.5;',
     '    float sceneZ = texture2D(uDepth, suv).r;',
     '    if (sceneZ > 0.02) a *= clamp((sceneZ - vViewZ) / 0.40, 0.0, 1.0);',
+    // A mote is an ADDITIVE speck. Over a wall it raises local contrast and
+    // reads as air; over open sky - or over a backdrop range at 2 km - the
+    // background is already the brightest thing in the frame, so the mote adds
+    // nothing legible and leaves only a dot. That is the "sensor dirt" read.
+    // Damp it where the depth buffer says there is nothing behind it.
+    '  #ifdef DUST_ADV',
+    '    a *= mix(1.0, 1.0 - uSkyDamp.x, step(uSkyDamp.y, sceneZ));',
+    '  #endif',
     '  }',
+    '  #ifdef DUST_ADV',
+    // A mote takes the colour of the light it is standing in: the key where the
+    // sun/practical reaches it, the sky/bounce term where it does not. A single
+    // uTint cannot express that, which is how a desert level ended up with
+    // neutral-to-cyan motes over ochre ground.
+    '  vec3 col = mix(uTintDim, uTintLit, clamp(vShaftV, 0.0, 1.0));',
+    '  #else',
     '  vec3 col = uTint;',
+    '  #endif',
     '  #ifdef USE_FOG',
     '    #ifdef FOG_EXP2',
     '      float fogFactor = 1.0 - exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);',
@@ -1667,8 +1741,13 @@
     '}'
   ].join('\n');
 
-  function DustField(cap, rng, shared) {
+  // `adv` opts the field into the declarative-environment behaviour by defining
+  // DUST_ADV, which is what enables every #ifdef block above. It is set for a
+  // level that carries an env profile and left off for the two legacy levels,
+  // so market and harbor compile byte-for-byte the shader they always did.
+  function DustField(cap, rng, shared, adv) {
     this.cap = Math.max(32, cap | 0);
+    this.adv = !!adv;
     var geo = new THREE.InstancedBufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
       -0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0
@@ -1707,7 +1786,17 @@
       uPixelScale: { value: 700 }, uDensity: { value: 1 }, uCap: { value: 0.75 },
       uShaftFloor: { value: 0.05 },
       uTint: { value: new THREE.Color(1.0, 0.86, 0.66) },
-      uDepth: { value: null }, uSoft: { value: 0 }
+      uDepth: { value: null }, uSoft: { value: 0 },
+      // Declarative-environment extras. These defaults reproduce the legacy
+      // numbers exactly, so a level that opts in but sets nothing gets the old
+      // field; they are only read at all under DUST_ADV.
+      uGain: { value: 1.0 }, uDepthAtt: { value: 0.0 },
+      uFade: { value: new THREE.Vector2(0.45, 0.70) },
+      uPx: { value: new THREE.Vector3(2.4, 4.0, 1.35) },
+      uHiThin: { value: 0.0 },
+      uTintLit: { value: new THREE.Color(1.0, 0.86, 0.66) },
+      uTintDim: { value: new THREE.Color(1.0, 0.86, 0.66) },
+      uSkyDamp: { value: new THREE.Vector2(0.0, 1e6) }
     }]);
     uni.uTime = shared.uTime;
     uni.uWind = shared.uWind;
@@ -1718,7 +1807,7 @@
     // UniformsUtils.merge cannot clone a typed-array uniform, so add it after.
     uni.uShaft = { value: shaft };
 
-    this.material = new THREE.ShaderMaterial({
+    var matDef = {
       uniforms: uni,
       vertexShader: DUST_VERT,
       fragmentShader: DUST_FRAG,
@@ -1727,7 +1816,12 @@
       blending: THREE.AdditiveBlending,
       side: THREE.DoubleSide,
       fog: true
-    });
+    };
+    // No `defines` key at all on the legacy path: three.js emits an empty
+    // define block either way, but not passing it keeps the material
+    // description identical to the one the frozen levels shipped with.
+    if (this.adv) matDef.defines = { DUST_ADV: '' };
+    this.material = new THREE.ShaderMaterial(matDef);
     this.mesh = new THREE.Mesh(geo, this.material);
     this.mesh.frustumCulled = false;
     this.mesh.matrixAutoUpdate = false;
@@ -1762,6 +1856,136 @@
   DustField.prototype.setShaftFloor = function (f) {
     this.material.uniforms.uShaftFloor.value = M.clamp(f, 0.0, 16.0);
   };
+
+  // ---- declarative-environment controls -------------------------------------
+  // All no-ops on the legacy path: the uniforms exist but nothing in the
+  // compiled program reads them, so calling these on market or harbor cannot
+  // change a pixel. Guarded by this.adv anyway so the intent is explicit.
+  DustField.prototype.setProfile = function (p) {
+    if (!this.adv || !p) return;
+    var u = this.material.uniforms;
+    if (p.gain != null) u.uGain.value = M.clamp(p.gain, 0.0, 4.0);
+    if (p.att != null) u.uDepthAtt.value = M.clamp(p.att, 0.0, 1.0);
+    if (p.fade) {
+      u.uFade.value.set(M.clamp(p.fade[0], 0.05, 0.95),
+        M.clamp(Math.max(p.fade[1], p.fade[0] + 0.02), 0.07, 1.20));
+    }
+    if (p.px) {
+      u.uPx.value.set(M.clamp(p.px[0], 0.5, 4.0),
+        M.clamp(Math.max(p.px[1], p.px[0] + 0.2), 1.0, 16.0),
+        M.clamp(p.px[2], 0.5, 6.0));
+    }
+    if (p.hiThin != null) u.uHiThin.value = M.clamp(p.hiThin, 0.0, 0.95);
+    if (p.skyDamp != null) u.uSkyDamp.value.x = M.clamp(p.skyDamp, 0.0, 1.0);
+    if (p.skyZ != null) u.uSkyDamp.value.y = Math.max(p.skyZ, 1.0);
+  };
+  // Lit / unlit hue pair. Colour objects, so the caller can fold the level's
+  // real key and bounce light into them each frame.
+  DustField.prototype.setTintPair = function (lit, dim) {
+    if (!this.adv) return;
+    var u = this.material.uniforms;
+    if (lit) u.uTintLit.value.copy(lit);
+    if (dim) u.uTintDim.value.copy(dim);
+  };
+
+  // ==========================================================================
+  // Declarative dust profiles.
+  //
+  // The mote field used to take its whole character from two hard-coded lerps
+  // in _updateDust: a warm tint for day, a cool one for night, one cap, one
+  // shaft floor. That is a market-street recipe, and on a level it was never
+  // written for it prints as the wrong thing entirely - neutral-to-cyan specks
+  // over ochre desert at noon, uniform white dots against a dawn sky at 0.38
+  // luminance, hard sensor-dirt pixels competing with a refinery flare.
+  //
+  // A profile is DATA, not a code path: it only ever moves uniforms that the
+  // #ifdef DUST_ADV blocks read, and it is only consulted for a level that
+  // carries an `env` profile in the LEVELS table. market and harbor have
+  // env:null, resolve to no profile at all, and keep the legacy shader.
+  //
+  //   density   multiplier on the existing density term (mote COUNT)
+  //   gain      multiplier on mote radiance
+  //   cap       absolute clamp on radiance (was a flat 1.05-1.15)
+  //   att       inverse-linear falloff per metre: brightness /= 1 + dist*att
+  //   fade      far cut start/end, as a fraction of the box's X extent
+  //   px        [min, max, penalty] apparent size window in pixels
+  //   hiThin    fraction removed from the population above eye level
+  //   skyDamp   how much a mote drawn against sky/backdrop is damped (0..1)
+  //   skyZ      view depth beyond which the background counts as sky, metres
+  //   floor     [outdoor, indoor] shaft floor override
+  //   lit/dim   base hue for a mote in a lit / unlit cell
+  //   lightMix  how far the level's real key and bounce colours pull the hues
+  //
+  // A level can override any field by publishing `dust` in its env profile, or
+  // `dustProfile` on its Level or Props instance - which is the opt-in route
+  // for the four levels not listed here.
+  // ==========================================================================
+  var DUST_ENV = {
+    // Sunset, open floor plates, 36 m of column shadow. The motes were the
+    // highest-frequency signal in the hero frame at 1.48x local contrast and
+    // 862 discrete specks in a 500x400 crop, all the same size.
+    highrise: {
+      density: 0.70, gain: 0.46, cap: 0.58, att: 0.062,
+      fade: [0.30, 0.66], px: [1.15, 6.0, 2.4], hiThin: 0.30,
+      skyDamp: 0.75, skyZ: 140, floor: [2.2, 6.0],
+      lit: 0xffd7a8, dim: 0x8f9bb0, lightMix: 0.38
+    },
+    // High noon in a desert. 211 specks measured at rgb 117/124/122 against a
+    // background of 98 - round, neutral, faintly GREEN over red, tracking
+    // against a 2 km range. Airborne dust at 40 C is ochre and reads as haze.
+    boneyard: {
+      density: 0.50, gain: 0.30, cap: 0.44, att: 0.058,
+      fade: [0.28, 0.62], px: [1.15, 5.0, 2.6], hiThin: 0.35,
+      skyDamp: 0.82, skyZ: 140, floor: [1.6, 5.0],
+      lit: 0xd8bc92, dim: 0xa28c6a, lightMix: 0.30
+    },
+    // Dusk petrochemical haze. Wanted a 3:1 size spread, a tint taken from the
+    // practical the mote is sitting in, and a third fewer of them in the upper
+    // half of the frame where there is no shaft to sit in.
+    refinery: {
+      density: 0.68, gain: 0.42, cap: 0.54, att: 0.055,
+      fade: [0.28, 0.64], px: [1.10, 6.5, 2.4], hiThin: 0.36,
+      skyDamp: 0.80, skyZ: 150, floor: [2.0, 6.0],
+      lit: 0xffb066, dim: 0x5f6d80, lightMix: 0.45
+    },
+    // Dawn, ground mist, whole frame at 0.25-0.30 mean. An unlit mote has to
+    // sit AT OR BELOW the local background here, which a floor of 3.0 against a
+    // cap of 1.05 could never do - every mote clipped on the cap.
+    ruins: {
+      density: 0.85, gain: 0.24, cap: 0.30, att: 0.075,
+      fade: [0.22, 0.56], px: [1.10, 5.5, 2.6], hiThin: 0.28,
+      skyDamp: 0.90, skyZ: 120, floor: [1.2, 5.0],
+      lit: 0xffe2b8, dim: 0x74808c, lightMix: 0.35
+    }
+  };
+
+  // Strip the magnitude off a light colour so only its hue survives. A 6.0-lux
+  // noon sun and a 0.4-lux dawn one then contribute the same tilt to a mote
+  // tint, and the profile stays in charge of how bright the field is.
+  function hueOf(src, out) {
+    var m = Math.max(src.r, src.g, src.b, 1e-4);
+    out.setRGB(src.r / m, src.g / m, src.b / m);
+    return out;
+  }
+
+  // Merge the built-in profile with whatever the level published. Returns null
+  // for a legacy level (env == null) and for a declarative level that has
+  // neither a built-in entry nor published data - both then keep the legacy
+  // shader and the legacy tint path verbatim.
+  function resolveDustProfile(ctx) {
+    var def = ctx && ctx.levelDef;
+    var env = (def && def.env) || null;
+    if (!env) return null;
+    var base = DUST_ENV[ctx.levelId] || null;
+    var pub = env.dust ||
+              (ctx.level && ctx.level.dustProfile) ||
+              (ctx.props && ctx.props.dustProfile) || null;
+    if (!base && !pub) return null;
+    var out = {}, k;
+    if (base) { for (k in base) if (Object.prototype.hasOwnProperty.call(base, k)) out[k] = base[k]; }
+    if (pub) { for (k in pub) if (Object.prototype.hasOwnProperty.call(pub, k)) out[k] = pub[k]; }
+    return out;
+  }
 
   // Refresh a few sun-visibility cells per frame. 32 cells at ~6/frame means
   // the whole field is current inside 6 frames for a walking player, at a cost
@@ -2558,6 +2782,9 @@
     this.shells = null;
     this.litter = null;
     this.dust = null;
+    this.dustProfile = null;
+    this._dustLit = null;
+    this._dustDim = null;
     this.tracers = null;
     this.lights = null;
     this.viewLights = null;
@@ -2625,7 +2852,20 @@
       // around 5% of them - 900 motes put roughly 45 specks on screen, i.e.
       // nothing. They are instanced quads with a vertex early-out, so the ones
       // that miss cost a vertex shader and no fragments at all.
-      this.dust = new DustField(Math.round(2400 * qp), this.rng, this.shared);
+      // Resolve the level's dust profile BEFORE the field is constructed: a
+      // profile is what opts the shader into its DUST_ADV blocks, and a level
+      // with no profile (market, harbor, and any declarative level that has not
+      // asked) must compile the legacy program.
+      this.dustProfile = null;
+      try { this.dustProfile = resolveDustProfile(ctx); }
+      catch (e) { this.dustProfile = null; }
+      this.dust = new DustField(Math.round(2400 * qp), this.rng, this.shared,
+        !!this.dustProfile);
+      if (this.dustProfile) {
+        this.dust.setProfile(this.dustProfile);
+        this._dustLit = new THREE.Color();
+        this._dustDim = new THREE.Color();
+      }
       this.decals = new DecalField(this.decalCap, dAtlas, 4);
 
       var chunkGeo = makeChunkGeometry(this.rng.fork(7));
@@ -2943,21 +3183,43 @@
     // street: wide and thin. The interior box is 10x4x10, not 14x5x14, so the
     // same 900 motes are ~3x denser in the room the player is standing in.
     var nk = this._night;
+    var prof = this.dustProfile;
     d.setBox(M.lerp(30, 10, k), M.lerp(11, 4, k), M.lerp(30, 10, k));
-    d.setDensity(M.clamp(this.qp, 0.2, 1.6) * M.lerp(0.75, 1.05, k));
+    d.setDensity(M.clamp(this.qp, 0.2, 1.6) * M.lerp(0.75, 1.05, k) *
+      (prof && prof.density != null ? M.clamp(prof.density, 0.05, 2.0) : 1.0));
     // warm sun-lit dust by day, cool and much dimmer under moonlight - an
     // unchanged warm field in a 0.08-mean frame reads as falling snow
     d.setTint(M.lerp(M.lerp(0.95, 1.00, k), 0.62, nk),
       M.lerp(M.lerp(0.82, 0.85, k), 0.70, nk),
       M.lerp(M.lerp(0.62, 0.60, k), 0.92, nk));
-    d.setCap(M.lerp(1.05, 1.15, k) * (1.0 - 0.62 * nk));
+    d.setCap(prof && prof.cap != null
+      ? prof.cap * M.lerp(1.0, 1.12, k)
+      : M.lerp(1.05, 1.15, k) * (1.0 - 0.62 * nk));
+    // A profiled level pulls its two mote hues toward the light that is
+    // actually in the scene: the key colour where the sun/practical reaches the
+    // cell, the hemisphere/bounce colour where it does not. Both are normalised
+    // to unit peak first so they act as HUE and the profile keeps control of
+    // radiance - otherwise a 6.0-intensity noon sun would drive the motes to
+    // white and we would be back to neutral specks over ochre ground.
+    if (prof && this._dustLit) {
+      var mix = prof.lightMix == null ? 0.35 : M.clamp(prof.lightMix, 0, 1);
+      _c1.setHex(prof.lit == null ? 0xffffff : prof.lit);
+      _c2.setHex(prof.dim == null ? 0xffffff : prof.dim);
+      this._dustLit.copy(_c1).lerp(hueOf(this._sunLin, _c1), mix);
+      this._dustDim.copy(_c2).lerp(hueOf(this.shared.uAmbient.value, _c2), mix);
+      d.setTintPair(this._dustLit, this._dustDim);
+    }
     // The floor is what a mote in a cell the SUN cannot reach is worth, and
     // outdoors that is not "nothing" - ART_DIRECTION's headline is thick air,
     // and a raking 14 deg sun means every cell in the canyon fails the sun
     // probe. 0.05 there switched the whole field off in the street, the alley
     // and the interior alike. The shaft CONTRAST now comes from the 2.20
     // multiplier over a real floor, not from a floor of nearly zero.
-    d.setShaftFloor(M.lerp(3.00, 7.00, k));
+    // A profiled level overrides both ends: outdoors at dawn a floor of 3.00
+    // puts an UNLIT mote above the sky behind it, which is the one thing the
+    // comment above says it must never do.
+    if (prof && prof.floor) d.setShaftFloor(M.lerp(prof.floor[0], prof.floor[1], k));
+    else d.setShaftFloor(M.lerp(3.00, 7.00, k));
 
     // Float32Array uniforms are compared element-wise by three, so mutating
     // d.shaft in place is enough - no reassignment needed.
@@ -3276,6 +3538,33 @@
       // it, which is exactly what the burnt-out sedan was rendering.
       heat: opts.heat === undefined ? 0 : opts.heat,
       fireAccum: 0,
+      // ---- opt-in: incandescent ejecta (cut-off saw, grinder, angle grinder)
+      //
+      // OFF BY DEFAULT (0), so nothing that exists today changes. This is the
+      // only AMBIENT fragment population in the module, and it runs ADDITIVELY
+      // on purpose: abrasive-cut ejecta is incandescent - white-hot leaving the
+      // wheel, decaying through orange, dark only once it has stopped burning.
+      // A lit, dark-tinted shard sprayed over a sunlit deck is 90% darker than
+      // its background and reads as hair or a render error, which is precisely
+      // the failure this option exists to avoid. Weapon impacts keep their own
+      // (correct) spark path, so market and harbor are untouched either way.
+      //
+      //   hot      fragments per second, scaled: 0 = off, 1 = a working saw
+      //   hotDir   spray axis (defaults to straight up)
+      //   hotSpeed muzzle speed of a fragment, m/s
+      //   hotLen   HARD CAP on streak length in metres. Stretch is solved from
+      //            each fragment's own speed instead of being a constant, so a
+      //            burst 12 m from the lens cannot subtend 60 px however fast
+      //            the fragment left the wheel.
+      //   hotCold  fraction of fragments that hand over to a dark, cold,
+      //            falling card instead of burning out (the finding's last 20%)
+      hot: opts.hot === undefined ? 0 : opts.hot,
+      hotDir: (opts.hotDir && opts.hotDir.isVector3)
+        ? new THREE.Vector3().copy(opts.hotDir).normalize() : null,
+      hotSpeed: opts.hotSpeed === undefined ? 7.0 : opts.hotSpeed,
+      hotLen: opts.hotLen === undefined ? 0.20 : opts.hotLen,
+      hotCold: opts.hotCold === undefined ? 0.20 : opts.hotCold,
+      hotAccum: 0,
       // Absolute sim time at which this emitter retires. Set by explosion() so
       // a crater burns for a legible dozen seconds and then stops, without any
       // per-frame timer or allocation.
@@ -3298,29 +3587,50 @@
         if (p && typeof p.x === 'number') { this.addSmokeEmitter(p, e && e.opts); placed++; }
       }
     }
-    if (placed) return;
     // Fallback: the burnt-out sedan mid-street from ART_DIRECTION. Only place
     // it if the level really does have ground there, so a different layout
     // never gets a smoke column hanging inside a wall.
-    var candidates = [[1.6, -18.0], [-2.4, -30.0]];
-    for (var c = 0; c < candidates.length; c++) {
-      var x = candidates[c][0], z = candidates[c][1];
-      var gy = this._groundY(x, 3.0, z, null);
-      if (gy === null) continue;
-      if (gy < -0.6 || gy > 0.9) continue;
-      this.addSmokeEmitter(_v1.set(x, gy + 0.55, z), {
-        rate: c === 0 ? 7 : 3.6,
-        radius: 0.55, rise: 1.35,
-        size0: 0.55, size1: c === 0 ? 5.5 : 3.6,
-        life: c === 0 ? 6.5 : 5.0,
-        // Value contrast against the haze is the entire job. 0.19 is fog.
-        opacity: c === 0 ? 0.42 : 0.26,
-        tint: [0.16, 0.145, 0.13],
-        embers: c === 0 ? 0.7 : 0.2,
-        heat: c === 0 ? 1.0 : 0.35
-      });
-      placed++;
-      if (placed >= 2) break;
+    //
+    // THE GROUND TEST IS NOT ENOUGH. These are MARKET STREET COORDINATES, and
+    // every level has ground at (1.6, -18) - so a 2100 K flickering practical,
+    // a fire population and a near-black plume at tint 0.16/0.145/0.13 were
+    // being planted on the highrise slab, on the boneyard hardstanding at noon
+    // and on the refinery apron, with nothing underneath any of them to explain
+    // the fire. Measured: amb=1 @1.6,0.6,-18.0 on highrise, amb=2 on boneyard
+    // and refinery. An unexplained warm point throwing dark particle mass over
+    // a sunlit deck is exactly what it looks like.
+    //
+    // A level that carries an env profile (levels 3-10) therefore gets an
+    // ambient plume only if it PUBLISHES one, which ruins does. The two legacy
+    // levels are unaffected: market and harbor have env:null and still fall
+    // through to the sedan.
+    var legacy = !(ctx.levelDef && ctx.levelDef.env);
+    if (!placed && legacy) {
+      var candidates = [[1.6, -18.0], [-2.4, -30.0]];
+      for (var c = 0; c < candidates.length; c++) {
+        var x = candidates[c][0], z = candidates[c][1];
+        var gy = this._groundY(x, 3.0, z, null);
+        if (gy === null) continue;
+        if (gy < -0.6 || gy > 0.9) continue;
+        this.addSmokeEmitter(_v1.set(x, gy + 0.55, z), {
+          rate: c === 0 ? 7 : 3.6,
+          radius: 0.55, rise: 1.35,
+          size0: 0.55, size1: c === 0 ? 5.5 : 3.6,
+          life: c === 0 ? 6.5 : 5.0,
+          // Value contrast against the haze is the entire job. 0.19 is fog.
+          opacity: c === 0 ? 0.42 : 0.26,
+          tint: [0.16, 0.145, 0.13],
+          embers: c === 0 ? 0.7 : 0.2,
+          heat: c === 0 ? 1.0 : 0.35
+        });
+        placed++;
+        if (placed >= 2) break;
+      }
+    }
+    if (GAME.params && GAME.params.vfxdbg) {
+      GAME.logError('vfx.dbg', 'amb=' + placed + ' n=' + this.emitters.length +
+        (this.emitters[0] ? (' @' + this.emitters[0].pos.x.toFixed(1) + ',' +
+          this.emitters[0].pos.y.toFixed(1) + ',' + this.emitters[0].pos.z.toFixed(1)) : ''));
     }
   };
 
@@ -3442,6 +3752,58 @@
                     rf.range(0.7, 1.0);
           q2.seed = rf.next();
           this._add(this.layers.fire, q2);
+        }
+      }
+
+      // Incandescent ejecta. Opt-in; see addSmokeEmitter.
+      if (em.hot > 0) {
+        em.hotAccum += dt * 30.0 * em.hot * this.qp;
+        var nh = Math.floor(em.hotAccum);
+        em.hotAccum -= nh;
+        if (nh > 6) nh = 6;
+        for (var g = 0; g < nh; g++) {
+          var rh = this.rng;
+          rh.inCone(em.hotDir || UP, 0.80, _v6);
+          var q3 = E();
+          q3.x = em.pos.x + rh.gaussian(0, em.radius * 0.16);
+          q3.y = em.pos.y + rh.gaussian(0, em.radius * 0.16);
+          q3.z = em.pos.z + rh.gaussian(0, em.radius * 0.16);
+          var hs = em.hotSpeed * rh.range(0.45, 1.35);
+          q3.vx = _v6.x * hs; q3.vy = _v6.y * hs; q3.vz = _v6.z * hs;
+          q3.drag = rh.range(2.4, 4.6); q3.gravity = 1.0; q3.turb = 0.10;
+          q3.life = rh.range(0.16, 0.44);
+          q3.fadeIn = 0.05; q3.fadeOut = 0.58;
+          q3.size0 = rh.range(0.006, 0.013); q3.size1 = 0.0025;
+          q3.frame = rh.bool(0.78) ? PT.STREAK : PT.DOT;
+          // EMBER runs (2.6,1.55,0.55) -> (1.9,0.85,0.22) -> (0.95,0.22,0.035)
+          // -> (0.22,0.03,0.004): a white-hot head through orange into a dying
+          // red, evaluated over the fragment's own life. That is the ramp.
+          q3.ramp = RAMP.EMBER;
+          q3.intensity = rh.range(3.2, 6.2);
+          // Rendered length is size * (1 + stretch * |v|), so solving stretch
+          // from the speed pins the streak at hotLen metres regardless.
+          q3.stretch = M.clamp(em.hotLen / Math.max(hs, 0.5), 0.003, 0.055);
+          q3.seed = rh.next();
+          this._add(this.layers.add, q3);
+          // the fragments that stop burning before they land: dark, slower,
+          // falling below and behind the spray rather than fanning out of it
+          if (em.hotCold > 0 && rh.bool(em.hotCold)) {
+            var q4 = E();
+            q4.x = q3.x; q4.y = q3.y; q4.z = q3.z;
+            q4.vx = _v6.x * hs * 0.35; q4.vz = _v6.z * hs * 0.35;
+            q4.vy = _v6.y * hs * 0.20 - 0.4;
+            q4.drag = 2.0; q4.gravity = 1.15; q4.turb = 0.05;
+            q4.delay = q3.life * 0.80;
+            q4.life = rh.range(0.30, 0.70);
+            q4.fadeIn = 0.05; q4.fadeOut = 0.40;
+            q4.size0 = q3.size0 * 0.9; q4.size1 = q3.size0 * 0.7;
+            q4.frame = PT.CHIP;
+            q4.r = 0.22; q4.g = 0.19; q4.b = 0.17;
+            q4.opacity = 0.85;
+            q4.rot = rh.range(0, M.TAU); q4.rotSpd = rh.gaussian(0, 8.0);
+            q4.seed = rh.next();
+            this._add(this.layers.lit, q4);
+          }
         }
       }
 

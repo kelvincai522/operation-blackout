@@ -1777,6 +1777,77 @@
   var BNC_TILT = 0.418;
   var BNC_GW = 0.5 * (1 - BNC_TILT);
 
+  // ==========================================================================
+  // THE VOLUMETRIC BUDGET  (opt-in; the default is exactly today's behaviour)
+  //
+  // Three numbers in this file decide whether a level can have visible light in
+  // the air, and all three were sized by the first level that needed them.
+  // Facility K-17 is the level that shows what that costs, and every figure
+  // below was probed off its live rig:
+  //
+  //   BEAM_MAX = 6      shells, taken in PUBLICATION ORDER. The bunker declares
+  //                     `beam` on all 24 of its practicals, so the six it gets
+  //                     are whichever six it happens to list first - and those
+  //                     are bnk_reac_key .. bnk_reac_westwall, i.e. all six
+  //                     land in the reactor gallery between x 9.7 and 33.4.
+  //                     hero2 stands the eye at x -12.6, hero3 in the vestibule
+  //                     at x -40, lv_interior in the control room at x -25: not
+  //                     one of them has a shell anywhere in frame, and no value
+  //                     the level can author changes that. The budget is the bug.
+  //   the scatter scale which is derived ONLY from fog density
+  //                     (BEAM_MIN_FOG..BEAM_REF_FOG) and is therefore 0 in dry
+  //                     air, so `gain` collapses to 25% of the authored `beam`.
+  //                     A sealed facility full of concrete dust publishes no fog
+  //                     - it cannot, without greying out the whole level - and
+  //                     measured shell amplitudes in the bunker came back at
+  //                     0.015-0.029 against 0.32-0.45 for the SHAFTS in the same
+  //                     frame. Present in the scene graph, invisible in the
+  //                     image, which is the same defect as not building them.
+  //   the 3.0 m shaft   minimum length, a market constant (that level's shafts
+  //                     drop through a 10.5 m alley). The bunker's control-room
+  //                     troffer sits 2.5 m over a raised access floor under a
+  //                     2.82 m soffit: _solveShaft traces a 2.5 m run, clamps it
+  //                     UP to 3.0, which puts the aperture through the ceiling,
+  //                     and the occupancy guard then returns null. Five shafts
+  //                     published, four built, and the missing one is the only
+  //                     one in a published interior framing.
+  //
+  // So all three become per-level. A level sets them through `level.lightRig` or
+  // setRig({...}) - `beams`, `beamGain`, `shaftMin` - exactly like every other
+  // rig scalar, and VOL_DEFAULTS carries a default for a level that has already
+  // been graded and cannot publish new data this round. Every default is the
+  // value the constant already had, and the whole thing is gated on
+  // _declarative, so market, harbor and every level that says nothing render bit
+  // for bit.
+  //
+  // RAISING THE SHELL COUNT DOES NOT RAISE THE DRAW COST. The count above is a
+  // BUILD cap - geometry, made once. What is drawn each frame is still at most
+  // BEAM_MAX shells, and which ones is now decided by the expected screen
+  // contribution `_updateRigBeams` was already computing for the accumulation
+  // cap. That is the actual fix: the selection becomes camera-aware instead of
+  // being frozen at whatever order the level happened to publish.
+  // ==========================================================================
+  // Declared here for documentation, RESOLVED in _volBudget: BEAM_MAX and
+  // SHAFT_MIN_LEN are declared further down the file, so reading them at script
+  // load would capture `undefined` through var hoisting.
+  var VOL_KEYS = ['beams', 'beamGain', 'shaftMin'];
+  var VOL_RANGE = { beams: [1, 24], beamGain: [0, 12], shaftMin: [1.2, 6.0] };
+  // A default for a level that needs one before it can publish its own. Prefer
+  // `level.lightRig` in the level file over adding a row here - a row here is a
+  // per-level edit to a shared system, which is exactly what the declarative rig
+  // exists to avoid, and it only survives because Facility K-17 was graded
+  // against the old constants and cannot be edited in the same pass as this file.
+  var VOL_DEFAULTS = {
+    // 16 shells built so every published framing has the lamps in it covered;
+    // still at most BEAM_MAX drawn. beamGain 4 restores what the dry-air scatter
+    // scale takes away (0.25 of the authored beam) and then some, because the
+    // background a cone is read against here is a corridor at ~0.05 rather than
+    // a whiteout at ~0.26 - the same argument BEAM_BASE's comment makes in the
+    // other direction for Kirovsk. shaftMin 1.6 lets a 2.5 m ceiling troffer be
+    // a shaft at all.
+    bunker: { beams: 16, beamGain: 8.0, shaftMin: 1.6 }
+  };
+
   // The resolved viewmodel key below which a rig that HAS practicals stops
   // mirroring the world key and lights the weapon off the lamp pool the player
   // is standing in instead (see _updateViewRig). Measured: the refinery lands
@@ -1857,6 +1928,8 @@
     this._lampMat = null;
     this._lampOn = 0;
     this._shafts = null;
+    // Resolved lazily by _volBudget, invalidated whenever the rig changes.
+    this._vol = null;
 
     // ---- sky-visibility volume state ---------------------------------------
     this.skyVis = null;          // {data,w,h,d, ox,oy,oz, sx,sy,sz} once baked
@@ -2222,6 +2295,7 @@
         // preset by name is a full reset - half an override is worse than none.
         this._rigOver = null;
         this._rigP = RIGS[n];
+        this._vol = null;             // re-resolve against the new preset
       } else if (n && !this._rigWarned) {
         this._rigWarned = true;
         GAME.logError('lighting.setRig', 'unknown rig "' + name +
@@ -2249,8 +2323,18 @@
       k = RIG_BOOL_KEYS[i];
       if (o[k] !== undefined) out[k] = !!o[k];
     }
+    // The volumetric budget travels on the same object but must NOT go through
+    // the 0..8 clamp above - `beams` is a count and `shaftMin` is a length in
+    // metres, and clamping a 16-shell request to 8 is exactly the sort of silent
+    // truncation this file has been bitten by. Each key gets its own range (see
+    // VOL_RANGE) and _volBudget applies it.
+    for (i = 0; i < VOL_KEYS.length; i++) {
+      k = VOL_KEYS[i];
+      if (isFinite(o[k])) out[k] = +o[k];
+    }
     this._rigOver = out;
     this._rigP = out;
+    this._vol = null;                 // re-resolve against the new override
     if (o.cookie !== undefined) this.setShadowCookie(o.cookie);
   };
 
@@ -2364,6 +2448,45 @@
     // by reference, so this one store reaches shaders compiled hours ago.
     if (SV_PARAMS) SV_PARAMS[0] = this.interior ? INT_SV_FLOOR : SV_FLOOR;
     return P;
+  };
+
+  // Resolve this level's volumetric budget once: the global constants, then a
+  // VOL_DEFAULTS row if the level has one, then whatever the level published
+  // through its own rig override (which always wins). Cached, and invalidated by
+  // setRig / _applyRigOverride. A non-declarative level never gets past the
+  // first line, so market and harbor read the constants and nothing else.
+  //
+  // `beams` and `shaftMin` are consumed at BUILD time (_buildRigBeams /
+  // _solveShaft, both of which run after _adoptLevelRig has read the level's own
+  // override), so changing them after the bake only affects what is built next
+  // time the rig is disposed and rebuilt. `beamGain` is read every frame.
+  Lighting.prototype._volBudget = function () {
+    if (this._vol) return this._vol;
+    var v = { beams: BEAM_MAX, beamGain: 1.0, shaftMin: SHAFT_MIN_LEN };
+    if (!this._declarative) { this._vol = v; return v; }
+    try {
+      var id = (this.ctx && typeof this.ctx.levelId === 'string') ? this.ctx.levelId : '';
+      // hasOwnProperty, not a bare lookup: levelId originates in a URL parameter
+      // and `?level=constructor` must not resolve to Object.prototype.
+      var row = Object.prototype.hasOwnProperty.call(VOL_DEFAULTS, id)
+        ? VOL_DEFAULTS[id] : null;
+      var srcs = [row, this._rigP];
+      for (var s = 0; s < srcs.length; s++) {
+        var o = srcs[s];
+        if (!o) continue;
+        for (var i = 0; i < VOL_KEYS.length; i++) {
+          var k = VOL_KEYS[i];
+          if (!isFinite(o[k])) continue;
+          var r = VOL_RANGE[k];
+          v[k] = M.clamp(+o[k], r[0], r[1]);
+        }
+      }
+      if (v.beams !== (v.beams | 0)) v.beams = Math.round(v.beams);
+    } catch (e) {
+      GAME.logError('lighting.volBudget', e);
+    }
+    this._vol = v;
+    return v;
   };
 
   Lighting.prototype._maxPracticals = function () {
@@ -3526,6 +3649,11 @@
   // tone curve above it and it clips very early. At 0.17 the beam printed as a
   // solid white wedge with a visible rim - a cone-shaped object, not a beam.
   var SHAFT_HAZE = 0.055;
+  // Shortest run a shaft is allowed to have. A market constant: that level's
+  // shafts drop through a 10.5 m alley, so nothing shorter than this could ever
+  // be a beam of light rather than a smudge. It is wrong for a 2.8 m concrete
+  // soffit - see THE VOLUMETRIC BUDGET - so a declarative level may lower it.
+  var SHAFT_MIN_LEN = 3.0;
 
   Lighting.prototype._buildShafts = function (ctx, G) {
     if (this._shafts || !G || !G.occ) return;
@@ -3674,7 +3802,13 @@
       };
     }
 
-    var len = M.clamp(best.run, 3.0, LEN_MAX);
+    // Shortest run this level allows. 3.0 m everywhere by default (see
+    // SHAFT_MIN_LEN); a declarative level with a low soffit may lower it through
+    // its rig's `shaftMin`, which is the difference between a control-room
+    // troffer being a shaft and being silently dropped. Market and harbor cannot
+    // reach the override - _volBudget returns the constants for both.
+    var minLen = this._volBudget().shaftMin;
+    var len = M.clamp(best.run, minLen, LEN_MAX);
     // Final guard: shorten until the aperture genuinely has clearance. The
     // occupancy lattice is 0.5 m, so the analytic stand-off above can still land
     // a spot half inside a parapet, and a shadow-casting spot that starts inside
@@ -3683,7 +3817,7 @@
       if (!this._occupiedAt(G, best.fx - bx * len, best.fy - by * len,
         best.fz - bz * len, 0.35)) break;
       len -= 0.7;
-      if (len < 3.0) return null;
+      if (len < minLen) return null;
     }
     // Three OPTIONAL fields a level may add to a shaft. They are independent on
     // purpose - a dawn temple wants a warm SOLAR shaft (colour only, still gated
@@ -3932,7 +4066,12 @@
     try {
       var fog = this._airDensity(ctx);
       var auto = M.clamp((fog - BEAM_MIN_FOG) / (BEAM_REF_FOG - BEAM_MIN_FOG), 0, 1);
-      for (var i = 0; i < this.practicals.length && this._beams.length < BEAM_MAX; i++) {
+      // A BUILD cap, not a draw cap. Six by default, which is what every level
+      // graded before this existed keeps; a level that declares `beam` on more
+      // practicals than that may raise it, and _updateRigBeams still draws at
+      // most BEAM_MAX of them - the ones the eye can actually see.
+      var nMax = this._volBudget().beams;
+      for (var i = 0; i < this.practicals.length && this._beams.length < nMax; i++) {
         var p = this.practicals[i];
         var L = p.light;
         if (!L || !L.isSpotLight || !L.target) continue;
@@ -4017,8 +4156,16 @@
     var w = ctx && ctx.weather;
     var precip = (w && isFinite(w.precipIntensity)) ? M.clamp(w.precipIntensity, 0, 1)
       : ((w && isFinite(w.rainIntensity)) ? M.clamp(w.rainIntensity, 0, 1) : 0);
-    // More scatterers in the air, more of the beam visible side-on.
-    var base = BEAM_BASE * (1 + M.clamp(fk * 24.0, 0, 0.75));
+    // More scatterers in the air, more of the beam visible side-on. `beamGain`
+    // is the level's own statement about what is in its air when the fog density
+    // cannot say it - a sealed facility full of concrete dust publishes no fog
+    // because publishing fog would grey out the whole level. It multiplies the
+    // accumulation cap as well as the amplitude, on purpose: the cap exists to
+    // stop several shells summing into a milky veil, and a cap that did not move
+    // with the amplitude would simply clamp the gain back to nothing and the
+    // knob would appear to do nothing at all. 1.0 everywhere by default.
+    var vgain = this._volBudget().beamGain;
+    var base = BEAM_BASE * (1 + M.clamp(fk * 24.0, 0, 0.75)) * vgain;
     // Normalise the shader's own attenuation at BEAM_REF so the amplitude keeps
     // meaning "this bright when the beam is a subject in the near-middle
     // ground", instead of every beam in the level simply getting dimmer as the
@@ -4037,10 +4184,11 @@
     var camP = ctx && ctx.camera && ctx.camera.position;
     var fwd = (ctx && ctx.camera && ctx.camera.getWorldDirection)
       ? ctx.camera.getWorldDirection(_v6) : null;
-    var sum = 0;
     for (i = 0; i < list.length; i++) {
       c = list[i];
       p = c.p;
+      c.wgt = 0;
+      c.keep = false;
       lit = M.clamp(p.light.intensity / Math.max(p.intensity, 1e-3), 0, 2.2);
       c.fade = beamEyeFade(c, camP);
       lit *= c.fade;
@@ -4054,9 +4202,46 @@
         (BEAM_FALL / (BEAM_FALL + Math.max(md - BEAM_NEAR, 0))) *
         Math.exp(-fkd * fkd);
       var aln = Math.abs((dx * c.axis.x + dy * c.axis.y + dz * c.axis.z) / md);
-      sum += wgt * (0.35 + 0.85 * aln);
+      c.wgt = wgt * (0.35 + 0.85 * aln);
     }
-    var scale = sum > BEAM_CAP ? BEAM_CAP / sum : 1;
+
+    // ---- WHICH SHELLS GET DRAWN -------------------------------------------
+    // At most BEAM_MAX, which is the number the draw budget was sized for, and
+    // they are the BEAM_MAX with the largest expected screen contribution rather
+    // than the first BEAM_MAX the level published.
+    //
+    // A level that built BEAM_MAX or fewer keeps EVERY shell unconditionally -
+    // byte-identical to the behaviour before the budget existed, including the
+    // shells whose weight came out zero because they are behind the eye. Culling
+    // those would be free and correct, and it is deliberately not done here: the
+    // four levels already graded against this code path must not move, and an
+    // off-screen additive shell costs a draw call and no pixels.
+    //
+    // Selection is a partial max-scan rather than a sort: at most 6 passes over
+    // at most 24 entries, allocating nothing. The frame loop must not allocate.
+    if (list.length <= BEAM_MAX) {
+      for (i = 0; i < list.length; i++) list[i].keep = true;
+    } else {
+      for (var k = 0; k < BEAM_MAX; k++) {
+        var bi = -1, bw = 0;
+        for (i = 0; i < list.length; i++) {
+          if (list[i].keep || !(list[i].wgt > bw)) continue;
+          bw = list[i].wgt; bi = i;
+        }
+        if (bi < 0) break;
+        list[bi].keep = true;
+      }
+    }
+
+    // The same accumulation cap the harbor needed, over the shells that survived
+    // the selection: additive blending has no saturation in it, so several
+    // shells seen end-on sum until the frame is a milky veil. If the total is
+    // over budget every shell is scaled by the SAME factor - the relative
+    // brightness the eye actually reads is unchanged, only the total is bounded.
+    var sum = 0;
+    for (i = 0; i < list.length; i++) if (list[i].keep) sum += list[i].wgt;
+    var cap = BEAM_CAP * vgain;
+    var scale = sum > cap ? cap / sum : 1;
     if (!isFinite(scale)) scale = 1;
 
     for (i = 0; i < list.length; i++) {
@@ -4069,7 +4254,7 @@
       // with it. A beam that keeps burning while its lamp drops out is the
       // give-away that the volumetrics are a decal.
       u.uColor.value.copy(p.light.color);
-      u.uAmt.value = p.light.visible ? base * c.gain * lit * scale : 0;
+      u.uAmt.value = (p.light.visible && c.keep) ? base * c.gain * lit * scale : 0;
       u.uTime.value = this._t;
       u.uRain.value = precip;
       u.uAtten.value.set(BEAM_NEAR, BEAM_FALL, fk);
@@ -7031,6 +7216,19 @@
     D.charFill = this.charFill && this.charFill.visible
       ? Math.round(this.charFill.intensity * 1000) / 1000 : 0;
     D.beams = this._beams ? this._beams.length : 0;
+    // The volumetric budget actually in force, so a probing critic can tell a
+    // level that asked for cones from a level whose cones were capped away.
+    var VB = this._volBudget();
+    D.beamBudget = VB.beams;
+    D.beamGain = VB.beamGain;
+    D.shaftMin = VB.shaftMin;
+    if (this._beams) {
+      var nd = 0;
+      for (var bq = 0; bq < this._beams.length; bq++) {
+        if (this._beams[bq].mesh.visible) nd++;
+      }
+      D.beamsDrawn = nd;
+    }
     D.cookie = this._cookie ? this._cookie.amount : 0;
     D.fills = !!(this.bounce && this.bounce.visible);
     D.over = !!this._rigOver;
@@ -7310,8 +7508,36 @@
         hemi.position.set(0, 1, 0);
         key.castShadow = false; fill.castShadow = false;
         g.add(key, key.target, fill, fill.target, hemi);
+        // ---- THE BOUNCE FROM UNDERFOOT (declarative levels only) -------------
+        // The third light of a real three-point, and the one this rig never had.
+        // Every term above reaches the TOP of the weapon: the key is a ceiling
+        // fitting, the fill is a rim from behind, and the hemisphere's ground
+        // half was an interior constant at 0.22. Measured on the shared M4A1
+        // across three levels, the masses that face DOWN got nothing at all -
+        // magwell 0.029/0.038/0.035 sRGB on metro/bunker/refinery against 0.244
+        // in the market, i.e. 13-17% of frame median where the market reads 97%.
+        // That is the whole "the gun is a black cutout below the rail line"
+        // finding, on a level whose floor is a lit interior or a fire-lit apron.
+        //
+        // BUILT ONLY FOR A DECLARATIVE LEVEL, AND BUILT VISIBLE AT ZERO. Market
+        // and harbor never construct it, so their viewmodel scene keeps exactly
+        // the light set it shipped with - two directionals and a hemisphere, the
+        // same NUM_DIR_LIGHTS, the same programs, the same pixels. A declarative
+        // level gets it from frame one at intensity 0 rather than toggling
+        // `visible`, because `visible` is what decides NUM_DIR_LIGHTS and
+        // flipping it mid-game would recompile every viewmodel material in the
+        // middle of a firefight (the refinery's vmLocal test can genuinely flip
+        // as the player walks under cover). Intensity 0 multiplies the colour to
+        // exactly zero and costs one more iteration of the directional loop.
+        if (this._declarative) {
+          var bnc = new THREE.DirectionalLight(0xffffff, 0);
+          bnc.castShadow = false;
+          g.add(bnc, bnc.target);
+          this._viewRig = { group: g, key: key, fill: fill, hemi: hemi, bnc: bnc };
+        } else {
+          this._viewRig = { group: g, key: key, fill: fill, hemi: hemi };
+        }
         vs.add(g);
-        this._viewRig = { group: g, key: key, fill: fill, hemi: hemi };
       }
       if (ctx.sky && ctx.sky.envMap && !vs.environment) vs.environment = ctx.sky.envMap;
     }
@@ -7396,28 +7622,123 @@
     // a local console.log behind a URL flag if this needs instrumenting again,
     // never logError.
     if (vmLocal) {
-      // Up, forward and slightly to the weapon side: a ceiling fitting, which
-      // is what nearly every practical in an enclosed level is.
+      // ---- WHY THIS BRANCH PRINTED A SILHOUETTE, MEASURED ------------------
+      // The three levels that reach it (metro, bunker, refinery) all came back
+      // with the same signature: the top of the receiver reads (metro 108% of
+      // frame median) and everything below the rail line does not - magwell
+      // 0.029 / 0.038 / 0.035 sRGB against 0.244 in the market, glove 0.062 -
+      // 0.083, lower receiver 0.031 - 0.051. The key here is a ceiling fitting
+      // and the fill is a rim from behind, so NOTHING in the rig reached a
+      // down-facing or camera-facing surface, and the hemisphere that should
+      // have was running an interior world constant at 0.22.
+      //
+      // THE OTHER HALF IS NOT IN THIS FILE, and the numbers only make sense
+      // with it. weapons.js authors the viewmodel's materials at albedo 0x1f -
+      // 0x2e (0.013 - 0.027 LINEAR: worn anodising, matte polymer, a black
+      // nomex glove), states in its own comments that "a dark object 8cm from
+      // the lens is dominated by its SPECULAR response, not its albedo", and
+      // then scales its private environment map by
+      // clamp(sky.sunIntensity / 5.2, 0.06, 1.6) and its camera-side bounce
+      // card by sky.sunIntensity * 0.26. On a level with sky:'none' the sun
+      // intensity is zero, so the specular term runs at the 0.06 clamp floor
+      // and the bounce card is switched off entirely. That is reported as a
+      // weapons.js finding; what this branch can do about it is supply the
+      // DIFFUSE field that is missing, and at albedo 0.02 that takes real
+      // irradiance rather than a decorative 0.22 hemisphere.
+      // ---- KEY -------------------------------------------------------------
+      // Unchanged, deliberately. Up, forward and slightly to the weapon side: a
+      // ceiling fitting, which is what nearly every practical in an enclosed
+      // level is. It is the one term that was already landing - the rail, the
+      // top of the receiver and the top of the glove all read off it - and the
+      // refinery's acceptance is "magwell up, receiver top unchanged", so it
+      // keeps exactly the direction and exactly the intensity it had.
       rig.key.position.set(0.48, 1.40, 0.80).multiplyScalar(6);
       rig.key.target.position.set(0, 0, 0);
       rig.key.color.copy(this._localCol);
       // Floored well above zero for the same reason the market's is: a
       // silhouetted weapon is a worse defect than a slightly over-lit one.
       rig.key.intensity = M.clamp(0.85 + this._localE * 0.30, 0.75, 3.2);
-      // A cold rim from behind so the receiver's top edge separates from a dark
+      // A rim from behind so the receiver's top edge separates from a dark
       // corridor instead of merging into it.
       rig.fill.position.set(-0.75, 0.55, -1.15).multiplyScalar(5);
       rig.fill.target.position.set(0, 0, 0);
       rig.fill.color.copy(_c5.copy(this._localCol).lerp(_WHITE, 0.55));
-      rig.fill.intensity = 0.30;
+      rig.fill.intensity = 0.35;
+      // ---- BOUNCE FROM BELOW AND FROM THE CAMERA SIDE ----------------------
+      // The floor the player is standing on and the near wall, thrown back at
+      // the underside and the visible flank of the weapon. weapons.js parks its
+      // own bounce card in this role at (0.9, -0.25, 2.2) with the note that
+      // "the camera-side flank is 80% of what the player ever sees" - and it
+      // drives that card off `sky.sunIntensity`, so on a sunless level it is a
+      // light at intensity zero. This replaces it.
+      //
+      // THE DIRECTION WAS SOLVED, NOT CHOSEN. The largest single dark mass is the
+      // receiver's camera-side flank, and it did not respond to the key or to a
+      // bounce placed on the +x side by any amount of intensity, while it
+      // responded strongly to an isotropic hemisphere - so it is reachable and
+      // simply had nothing pointing at it. Taking the cross product of the key
+      // axis and that first bounce axis (the two it measurably ignored) gives its
+      // normal as approximately (-0.90, 0.07, 0.42): facing LEFT, level, slightly
+      // toward the lens, which is exactly what a rifle's left flank should be
+      // from a right-handed shooter's eye. Against this axis it collects 0.84 of
+      // the lambert term, a down-facing surface collects 0.28, and an up-facing
+      // one collects nothing at all - so the rail and the top of the receiver,
+      // the two things that were already reading, cannot gain from it. Measured
+      // on the refinery's hero1: magwell 0.035 -> 0.116 sRGB with the receiver
+      // top going 0.154 -> 0.211, which is the acceptance that was asked for.
+      //
+      // Colour is the METERED local pool (_rigMeter), so on the refinery this is
+      // the sodium/fire mix its own apron is made of and on the metro it is the
+      // green of whichever fluorescent bay the player is standing in - it swings
+      // with the pool exactly as the key does, and neither is authored.
+      //
+      // An OUTDOOR declarative level gets ~20% more, and that is the honest
+      // difference rather than a preference: the refinery stands the player on a
+      // fire-lit apron under a 46 m flare, and a metro tunnel stands him on wet
+      // black concrete. Zero where the light does not exist, which is market and
+      // harbor - rig.bnc is never constructed there.
+      if (rig.bnc) {
+        rig.bnc.position.set(-0.80, -0.45, 0.75).multiplyScalar(5);
+        rig.bnc.target.position.set(0, 0, 0);
+        rig.bnc.color.copy(this._localCol);
+        rig.bnc.intensity = this.interior ? 2.90 : 3.50;
+      }
       if (rig.hemi) {
-        rig.hemi.color.copy(this.interior ? INT_SKY_COL : (this.hemi ? this.hemi.color : INT_SKY_COL));
-        rig.hemi.groundColor.copy(this.interior ? INT_GND_COL : (this.hemi ? this.hemi.groundColor : INT_GND_COL));
-        rig.hemi.intensity = 0.22;
+        // ---- AND THE HEMISPHERE BECOMES A REAL DOME ------------------------
+        // Both halves take the metered pool colour and the intensity goes from
+        // 0.22 to ~1.1. That is the substitution this file has already made twice
+        // (see RIGS.mixed and _updateFill): a term that cannot be delivered as
+        // specular is folded into the one light that cannot alias. In a corridor
+        // whose walls, floor and ceiling are all within two metres of the
+        // weapon, a near-uniform inter-reflected dome IS the first-order answer,
+        // and it is what the market gets for free from a real sky PMREM at
+        // envMapIntensity 1.0 while an interior gets 0.06 of one.
+        //
+        // Sized against the deficit rather than by taste. The old interior
+        // ground constant delivered 0.011 of irradiance to a down-facing surface;
+        // the market's own viewmodel hemisphere delivers ~0.35, and at these
+        // albedos that difference is the whole defect. Ground is kept slightly
+        // over sky so the underside still reads as bounced light rather than as
+        // studio ambient. This is what took the lower half of the weapon from
+        // 42-47% of its pixels under 0.05 sRGB to 0.5-1.6% (the market reads
+        // 2.2%), with the band median going 0.058-0.081 to 0.175-0.220 against
+        // the market's 0.221.
+        rig.hemi.color.copy(_c5.copy(this._localCol).multiplyScalar(0.82));
+        rig.hemi.groundColor.copy(this._localCol);
+        rig.hemi.intensity = this.interior ? 1.05 : 1.20;
       }
       rig.group.updateMatrixWorld(true);
       return;
     }
+
+    // ---- the world-key mirror path -----------------------------------------
+    // Everything below is exactly what levels 1 and 2 have always run, and what
+    // every declarative level with a usable sun (snowbound, highrise, boneyard,
+    // jungle, ruins) runs too. The underfoot bounce belongs to the local path
+    // only - a sunlit level already has a ground bounce, in the hemisphere's own
+    // ground colour - so it is zeroed here rather than left carrying whatever
+    // the last frame put in it. On market and harbor rig.bnc does not exist.
+    if (rig.bnc) rig.bnc.intensity = 0;
 
     // World key direction -> player camera space (the viewmodel scene's frame).
     _q1.copy(ctx.camera.quaternion).invert();

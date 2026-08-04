@@ -139,11 +139,11 @@
 // Ten levels graded by one look are one level with different props, so the
 // per-level look moved out of code and into a table:
 //
-//   setGradePreset(name)   'warm' (the market) | 'night' (the harbor storm) |
-//                          'cold' | 'green' | 'bleach' | 'alarm' | 'verdant' |
-//                          'sodium' | 'dawn'. Level ids and the legacy
-//                          'market'/'storm' spellings are aliases. An unknown
-//                          name is logged and ignored, never fatal.
+//   setGradePreset(name)   'warm' (the market) | 'sunset' | 'night' (the harbor
+//                          storm) | 'cold' | 'green' | 'bleach' | 'alarm' |
+//                          'verdant' | 'sodium' | 'dawn'. Level ids and the
+//                          legacy 'market'/'storm' spellings are aliases. An
+//                          unknown name is logged and ignored, never fatal.
 //   setExposureBias(n)     a trim in STOPS on the PRINT gain, applied downstream
 //                          of the adaptation loop so the meter cannot be
 //                          destabilised by it.
@@ -211,6 +211,43 @@
 // one least-significant bit on ONE of its 921,600 pixels - shader-recompilation
 // rounding in the sky gradient, reproduced with the new code multiplied by zero,
 // and the only cost of adding any instruction at all to FRAG_COMPOSITE.
+//
+// ----------------------------------------------------------------------------
+// LEVELS 3-10, BATCH 3: THE LENS, THE HEAT LAYER AND THE SHOULDER
+// ----------------------------------------------------------------------------
+// Four findings from the highrise / boneyard / ruins critics. Three of them are
+// PRESET DATA and touch one level each; the fourth needed a gate the preset name
+// could not carry, and the interesting part of this round is why.
+//
+//   * DAWN_GRADE's medium is now a GROUND MIST rather than a height-uniform
+//     haze (volumeHeightFalloff 0.075 -> 0.60, base -1.5 -> 0.0, and
+//     volumeDensityAbs carrying the optical thickness at eye height back to
+//     where it was). Both of the ruins' named features - the mist and the god
+//     rays - were measurably absent, and this was why: a shaft has no brightness
+//     of its own, its entire contrast is the density gradient it passes through.
+//     See DAWN_GRADE and the volumeDensityAbs branch in _render.
+//   * BLEACH_GRADE's highlight shoulder started two stops over mid and
+//     asymptoted at eleven, so it was a plateau, not a roll-off: six published
+//     frames, blown_white 0.00% on every one, in a high-noon desert built out of
+//     34 aluminium airframes. 3.20 / 7.00 still protects the sky gradient the
+//     preset was written to protect and still lets a sunlit crest clip.
+//   * the HEAT SHIMMER gained the half of the effect that the eye actually reads
+//     as heat. The displacement was 3.1 px and confined to four discs on a
+//     204 x 168 m slab; it is now 7.6 px over the whole slab, and it carries an
+//     INFERIOR MIRAGE - uHeatPale / uHeatLift / uHeatSky, which lift the far
+//     ground to sky radiance and take the chroma out of it. Three new settings,
+//     all 0 or inert by default, all read only from inside the uHeat branch that
+//     no level without a published heatShimmer record ever opens.
+//   * the CHROMATIC ABERRATION on Meridian Tower. The two-tap RGB split fringes
+//     hard silhouettes and shatters isolated speculars into single-channel dots;
+//     the spectral sweep already in this file fixes both and four presets already
+//     use it. But highrise's env profile asks for grade:'warm' - the MARKET's own
+//     preset - so the preset name cannot separate "fix the tower" from "move
+//     level 1". The gate is therefore stated on the axis main.js already draws:
+//     env:null (legacy, self-configuring, frozen) versus a declarative env
+//     profile. GRADE_MODERN_LENS redirects a legacy grade to its current-lens
+//     twin for declarative levels only, and market never executes the line at
+//     all because applyEnv returns early on env:null. See SUNSET_GRADE.
 // ============================================================================
 (function (GAME, THREE) {
   'use strict';
@@ -2682,6 +2719,14 @@
     'uniform float uHeatTime;',
     'uniform int uHeatCount;',
     'uniform vec3 uHeatCells[ PF_HEAT_CELLS ];',
+    // The three below are the INFERIOR MIRAGE half of the shimmer, and all
+    // three are 0 / inert unless a preset asked for them. They are read only
+    // from inside the uHeat branch, so on a level with no hot slab they do not
+    // exist as instructions either.
+    'uniform float uHeatCellFloor;',
+    'uniform float uHeatPale;',
+    'uniform float uHeatLift;',
+    'uniform vec3 uHeatSky;',
     'uniform float uCADark;',
     'uniform float uGrainShadowLo;',
     'uniform float uGrainShadowHi;',
@@ -3024,13 +3069,27 @@
     '}',
     '',
     // ------------------------------------------------------------ heat shimmer
-    '// Hot air over a sun-baked slab, as a screen-space refraction.',
+    '// Hot air over a sun-baked slab: a screen-space refraction PLUS an inferior',
+    '// mirage.',
     '//',
-    '// This is a REFRACTION, not an overlay: it displaces the sample position and',
-    '// paints nothing, because that is what a gradient in the refractive index of',
-    '// air actually does. It lives in the composite for one reason - the composite',
-    '// is the only pass that holds the finished scene colour, and a shimmer that',
-    '// cannot resample the scene is a fog card.',
+    '// The refraction displaces the sample position and paints nothing, because',
+    '// that is what a gradient in the refractive index of air actually does. It',
+    '// lives in the composite for one reason - the composite is the only pass that',
+    '// holds the finished scene colour, and a shimmer that cannot resample the',
+    '// scene is a fog card.',
+    '//',
+    '// DISPLACEMENT ALONE IS NOT A HOT DAY, and that was measured: at the round-1',
+    '// amount the boil was 3.1 px at 720p and a t=1.5 / t=2.9 frame difference put',
+    '// almost all of the motion on joint lines, i.e. on TAA jitter. What the eye',
+    '// actually reads on hot hardstanding is the INFERIOR MIRAGE - the layer of',
+    '// low-index air acting as a grazing-angle mirror of the sky, which LIFTS the',
+    '// far ground toward sky radiance, CRUSHES its chroma toward the sky\'s, and',
+    '// dissolves the undercarriage of anything standing on it. That is the second',
+    '// half of the function: pfHeatPaleAmt below carries the same three world-space',
+    '// masks as the displacement, and main() mixes the sampled colour toward the',
+    '// atmosphere\'s own chromaticity at an ABSOLUTE radiance (a multiple of the',
+    '// frame\'s log-average, so it is exposure-invariant and so a dark object in',
+    '// the layer genuinely dissolves instead of merely being tinted).',
     '//',
     '// MASKED IN WORLD SPACE, three ways, because a full-screen warp is a',
     '// distortion filter rather than a heat layer:',
@@ -3059,6 +3118,10 @@
     '  float d = pfHash21( i + vec2( 1.0, 1.0 ) );',
     '  return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y );',
     '}',
+    // Written by pfHeatShimmer, read by main(). Zero unless the mirage half of
+    // the effect is switched on by a preset (uHeatPale), so the pale block in
+    // main() is skipped on every level including the ones that DO shimmer.
+    'float pfHeatPaleAmt = 0.0;',
     'vec2 pfHeatShimmer( vec2 uv ) {',
     '  // The weapon is not behind the hot air.',
     '  if ( uHasViewC > 0.5 && texture2D( tViewDepthC, uv ).x < 0.999999 ) return vec2( 0.0 );',
@@ -3067,7 +3130,13 @@
     '  vec3 wp = pfWorldPos( uv, dep );',
     '  float band = 1.0 - smoothstep( uHeatH0, uHeatH1, wp.y - uHeatY );',
     '  if ( band < 0.004 ) return vec2( 0.0 );',
-    '  float cell = uHeatCount > 0 ? 0.0 : 1.0;',
+    // uHeatCellFloor is the shimmer OUTSIDE the level\'s named hot cells, and 0
+    // (= cells are a hard mask, the shipped behaviour) unless a preset raises
+    // it. Four r=26-40 m discs on a 204x168 m slab leave three quarters of the
+    // tarmac perfectly still, which reads as four puddles rather than as a hot
+    // day; a floor turns the cells back into what they should always have been,
+    // the HOTTEST part of a slab that is hot everywhere.
+    '  float cell = uHeatCount > 0 ? uHeatCellFloor : 1.0;',
     '  for ( int i = 0; i < PF_HEAT_CELLS; i++ ) {',
     '    if ( i >= uHeatCount ) break;',
     '    vec3 hc = uHeatCells[ i ];',
@@ -3076,7 +3145,11 @@
     '  }',
     '  if ( cell < 0.004 ) return vec2( 0.0 );',
     '  float dist = length( wp - uCamPos );',
-    '  float amp = uHeat * band * cell * smoothstep( uHeatD0, uHeatD1, dist );',
+    // One reach term, two effects: the displacement and the mirage share every
+    // mask, because they are the same layer of air.
+    '  float reach = band * cell * smoothstep( uHeatD0, uHeatD1, dist );',
+    '  pfHeatPaleAmt = uHeatPale * reach;',
+    '  float amp = uHeat * reach;',
     '  if ( amp < 1e-6 ) return vec2( 0.0 );',
     '  vec2 q = vec2( uv.x * uAspect, uv.y ) * uHeatScale;',
     '  float t = uHeatTime;',
@@ -3191,6 +3264,26 @@
     '    color = texture2D( tSrc, uv ).rgb;',
     '  }',
     '  color = pfSafe( color );',
+    '',
+    // ---- the inferior mirage ------------------------------------------------
+    // The other half of the heat layer, and the half the eye actually reads as
+    // heat (see pfHeatShimmer). pfHeatPaleAmt is 0 on every level that publishes
+    // no heatShimmer AND on any that does without a preset asking for the
+    // mirage, so this block costs one compare on all of them.
+    //
+    // The target is the ATMOSPHERE's chromaticity (uHeatSky, normalised to unit
+    // luminance in _render from scene.fog, which is the colour every distant
+    // surface in the frame is already converging to) at an ABSOLUTE radiance of
+    // uHeatLift x the frame's own log-average. Absolute is the whole point: a
+    // relative lift preserves contrast ratios, so it tints a shaded undercarriage
+    // and leaves it exactly as readable as it was. max() against the pixel's own
+    // luminance keeps this strictly additive in effect - a mirage is inscattered
+    // light, so it may pale a sunlit slab but must never darken one.
+    '  if ( pfHeatPaleAmt > 1e-5 ) {',
+    '    float hLum = pfLum( color );',
+    '    float hKey = exp( clamp( texture2D( tLum, vec2( 0.5 ) ).x, -20.0, 6.0 ) );',
+    '    color = mix( color, uHeatSky * max( hKey * uHeatLift, hLum ), pfHeatPaleAmt );',
+    '  }',
     '',
     '  float exposure = texture2D( tExposure, vec2( 0.5 ) ).r;',
     '',
@@ -3773,6 +3866,23 @@
       // Unreachable by construction on the market (its inscatter peaks around
       // 0.3), so the clamp is inert there and is a real ceiling on the harbor.
       volumeMaxInscatter: 1e6,
+      // ---- the medium stated ABSOLUTELY, in extinction-per-metre ------------
+      // 0 = off, which is the shipped path and every preset written before this
+      // one: the march density is reconstructed from scene.fog.density with
+      // volumeDensity as a floor under it (see _render), because "how far can
+      // you see" and "how thick is the near-field dust" are usually the same
+      // number and the fog is the one every surface in the frame already agrees
+      // with.
+      //
+      // They are NOT the same number for a GROUND MIST. A mist that is five
+      // times denser at the ankle than at the chest has to be authored as a
+      // steep volumeHeightFalloff over a large volumeDensity, and the moment
+      // the density exceeds the fog-derived path's 0.075 ceiling that authored
+      // number stops being what the march integrates. Above 0 this states the
+      // medium outright and skips the reconstruction, so a preset that has a
+      // height profile to express can express it. Harbor is unaffected: its
+      // branch is tested first and weather.js still owns its medium.
+      volumeDensityAbs: 0.0,
 
       // TAA
       taaFeedbackMin: 0.72,
@@ -4179,10 +4289,15 @@
       // that publishes nothing gets uHeat 0 and the pass is not merely invisible
       // but unexecuted. The numbers here are the physics of the layer, which is
       // the same physics on any level that has one:
-      //   heatAmount     peak screen displacement in UV at strength 1. 0.0060 is
-      //                  ~3.5 px of vertical boil at 1280 - enough to soften a
-      //                  hard horizon edge and make the apron crawl, nowhere
-      //                  near a heat-haze filter over the whole frame.
+      //   heatAmount     peak screen displacement in UV at strength 1. The
+      //                  shader's peak vertical noise weight is 0.57, so the
+      //                  boil at 720p is heatAmount x strength x 0.57 x 720 px:
+      //                  0.0090 is 3.1 px, which MEASURED as photographically
+      //                  invisible (a t=1.5 / t=2.9 difference put nearly all of
+      //                  the motion on TAA jitter along joint lines). A preset
+      //                  that means it states its own - see BLEACH_GRADE, which
+      //                  runs 0.022 for 7.6 px. Kept conservative here because
+      //                  this default is what an unstated level inherits.
       //   heatHeight/Soft  metres of convection layer above the ground plane,
       //                  and how far it fades out over. A tail fin 12 m up is
       //                  still; the tarmac under it boils.
@@ -4191,6 +4306,20 @@
       //                  slab is and saturates at range.
       //   heatScale      convection cells across the frame width.
       //   heatSpeed      how fast the field rises, in cells/second.
+      //   heatCellFloor  0 = the level's cells are a HARD mask (shipped). Above
+      //                  0, they are a boost over a slab that shimmers
+      //                  everywhere, which is what a hot day is.
+      //   heatPale       0 = displacement only (shipped). Above 0 it is the peak
+      //                  weight of the INFERIOR MIRAGE - the lift-and-desaturate
+      //                  term - at full reach. This is the half of the effect the
+      //                  eye reads as heat.
+      //   heatLift       the mirage's radiance, as a multiple of the frame's own
+      //                  metered log-average. Only read where heatPale > 0.
+      //   heatSkyWarm    0 = the mirage takes the atmosphere's chromaticity
+      //                  literally (shipped). Above 0 it is warmed toward the key
+      //                  light's, which is what a dust-laden grazing column over
+      //                  hot hardstanding actually looks like - see the block in
+      //                  _render, where the number came from a measurement.
       heatAmount: 0.0090,
       heatHeight: 3.2,
       heatHeightSoft: 3.0,
@@ -4198,6 +4327,10 @@
       heatFar: 70.0,
       heatScale: 6.5,
       heatSpeed: 0.62,
+      heatCellFloor: 0.0,
+      heatPale: 0.0,
+      heatLift: 2.20,
+      heatSkyWarm: 0.0,
 
       // ---- chromatic aberration: the dark roll-off --------------------------
       // 0 = shipped. Above 0 it is the display-referred local luminance at which
@@ -4284,6 +4417,13 @@
     this._exposureBiasBase = this.settings.exposureBias;
     this._harbor = !!(ctx && (ctx.levelId === 'harbor' ||
       (ctx.levelDef && ctx.levelDef.weather === 'storm')));
+    // Is this level configured from main.js's DECLARATIVE env table, or is it one
+    // of the two frozen levels that configure themselves? Read once, here, from
+    // the same ctx.levelDef the harbor gate above reads and at the same point in
+    // boot (main.js sets it before the build loop). The only thing it gates is
+    // GRADE_MODERN_LENS - see the comment there for why the preset name could
+    // not carry that distinction on its own.
+    this._declarative = !!(ctx && ctx.levelDef && ctx.levelDef.env);
     this._flashAdapt = 0;     // peak-hold envelope on ctx.weather.flash
     this._flashFall = 0;      // how far the flash has fallen below that peak
     this._flashComp = 0;      // RELEASE-ONLY follower: the afterimage, not the flash
@@ -5120,13 +5260,60 @@
     saturation: 0.80,      // bleached: the colour is baked out of everything
     agxSaturation: 1.06,
     scotopic: 0.34,
-    // THE SKY MUST NOT CLIP. uHiKnee comes DOWN (compress early) and uHiRange
-    // goes UP (asymptote late and well below AgX's own +4.03 EV ceiling), which
-    // together turn what would be a flat white plateau into a gradient. The
-    // high white point then keeps the print's own shoulder long.
-    whitePoint: 1.30,
-    highlightKnee: 2.00,
-    highlightRange: 11.00,
+    // ---- THE SHOULDER: THIS PRESET HAD NO WHITE, AND WHY -------------------
+    // The complaint was right and the diagnosis it arrived with was wrong, which
+    // is worth writing down because the wrong one is the plausible one.
+    //
+    // OBSERVED: no clipped pixel anywhere, on any of six published frames, in a
+    // high-noon desert built out of 34 polished aluminium airframes. Every
+    // specular event flat. blown_white 0.00%, every frame.
+    //
+    // DIAGNOSED as the pre-AgX roll-off (highlightKnee 2.00 / highlightRange
+    // 11.00 - "compresses two stops over mid, asymptotes at eleven"). MEASURED:
+    // that roll-off is a 0.07-stop lever at the levels this frame actually
+    // contains. Moving it to the prescribed 3.20 / 7.00 changed the signature
+    // frame's p99 by 0.3 of one code value and its blown_white by nothing at all
+    // (0.0034% both sides, and that 0.0034% is the HUD, not the render). Worse,
+    // shortening the range LOWERS the asymptote from 13.0 to 10.2, so on the
+    // hottest events in the level - which is precisely the alclad crest the
+    // finding wants - the prescription compresses HARDER than what it replaces.
+    //
+    // The actual limiter is this preset's WHITE POINT, and the histogram says so
+    // without ambiguity: the render's luminance falls off smoothly to 241/255
+    // and then stops dead - 0.004% of the frame in 240-243 and exactly zero
+    // above 244, on every frame. That is not a roll-off and not a plateau, it is
+    // a wall, and 241 is where the print shoulder puts a fully exposed pixel
+    // when it has been told white lives at 1.30. pfGrade solves its knee so that
+    // p == uWhite lands on exactly 1.0; declaring a white 30% above anything the
+    // frame can produce therefore reserves the top 14 code values for a value
+    // that does not exist. The comment on that curve in FRAG_COMPOSITE already
+    // names this exact failure - "no frame in the game contained a white, and a
+    // frame with no white has no snap" - which is the bug it was written to fix,
+    // reintroduced here as a number.
+    //
+    // So: 1.08 declares a white the frame can nearly reach, which puts the peak
+    // alclad crest at ~250 instead of 241 and hands the whole top zone above
+    // p = 0.82 more separation rather than less. There is still a real shoulder
+    // under it (the solved knee is 1.71, not 0), so the sky gradient this preset
+    // exists to protect is still rolled and still cannot clip - MEASURED below.
+    //
+    // The knee moves to 3.20 as asked, but with a range of 9.80 rather than
+    // 7.00, which holds the asymptote at the shipped 13.0. That pair dominates
+    // the shipped curve at every input - compression starts a stop later and
+    // ends no lower - so it is strictly more highlight everywhere and still
+    // asymptotes far below AgX's own +4.03 EV (16.3 linear) per-channel clamp,
+    // which is the thing the roll-off is actually there to prevent.
+    //
+    // NOT FIXED HERE, and reported as such: the finding also asks for 0.3-0.8%
+    // of the frame at clip. That is not deliverable from a grade. The brightest
+    // render pixel in the signature frame arrives at the print shoulder at
+    // p = 1.041, and even the shader's hard floor of whitePoint 1.02 would clip
+    // only ~0.03% of it. The remaining gap is highlight ENERGY - specular
+    // response on the alclad, or a stop of exposure - and neither is in this
+    // file.
+    whitePoint: 1.08,
+    highlightKnee: 3.20,
+    highlightRange: 9.80,
     printerBlack: 0.0135,
     toeBlackScale: 1.06,
     toeFloorScale: 1.15,
@@ -5163,7 +5350,32 @@
     volumeHeightFalloff: 0.14,
     volumeBaseHeight: -1.0,
     volumeAnisotropy: 0.70,
-    volumeMaxDist: 130.0
+    volumeMaxDist: 130.0,
+
+    // ---- the heat layer: the only preset in the table that has one ----------
+    // The shimmer itself is the LEVEL's statement - it runs at all only because
+    // boneyard publishes level.heatShimmer - but the PHYSICS of a noon layer
+    // over hardstanding belongs to the look, and this is the only look in the
+    // roster that has one. Three numbers, all measured:
+    //
+    //   heatAmount 0.022   7.6 px of vertical boil at 720p against the shipped
+    //     3.1, which a frame difference could barely separate from TAA jitter.
+    //   heatCellFloor 0.55   the level names four hot discs of r 26-40 m on a
+    //     204 x 168 m slab, so three quarters of the tarmac was perfectly still
+    //     - four puddles, not a hot day. The discs now read as the hottest part
+    //     of a slab that is hot everywhere, which is what they describe.
+    //   heatPale 0.55 / heatLift 2.20   the INFERIOR MIRAGE. Displacement alone
+    //     is not what the eye reads as heat: a real mirage over hot alclad and
+    //     tarmac lifts the far ground toward sky radiance, takes the chroma out
+    //     of it, and dissolves the undercarriage of everything standing on it.
+    //     See the pale block in FRAG_COMPOSITE's main().
+    //   heatSkyWarm 0.55   the mirage warmed off the atmosphere's literal blue
+    //     and toward the key. Measured, twice: see the block in _render.
+    heatAmount: 0.022,
+    heatCellFloor: 0.55,
+    heatPale: 0.55,
+    heatLift: 2.20,
+    heatSkyWarm: 0.55
   };
 
   // ---- 'alarm' - Facility K-17. INTERIOR -----------------------------------
@@ -5519,14 +5731,73 @@
     streakTint: new THREE.Color(1.0, 0.82, 0.66),
     flareIntensity: 0.024,
     flareAspect: 1.0,
-    // Long god rays between the towers: a thick, low, strongly forward
-    // scattering medium marched a long way.
+    // ---- the medium: a GROUND MIST, not a haze ------------------------------
+    // MEASURED, and the reason both of this level's named features were absent
+    // from the frame. At falloff 0.075 over base -1.5 the density at 3 m was
+    // 0.85 of ground level and at the tower cornices (20 m) still 0.20: that is
+    // a height-uniform haze. Two things follow, and both were visible:
+    //
+    //   * there is no ground mist. A mist LIFTS value and CRUSHES chroma at
+    //     ankle height; a vertical scan down hero3's far wall did the exact
+    //     opposite (luminance 0.355 -> 0.223, saturation 0.285 -> 0.397). The
+    //     gradient was inverted because the only thing varying with height was
+    //     the light, and the medium was flat.
+    //   * there are no god rays. A shaft has no brightness of its own - its
+    //     entire contrast is the DENSITY GRADIENT it passes through, so a
+    //     medium with no gradient prints no beam however many lightShafts the
+    //     level publishes. hero1's two inter-tower gaps measured 0.761x and
+    //     1.034x the open sky beside them; one of them was DARKER than plain
+    //     sky.
+    //
+    // 0.60 over base 0.0 puts ~4.5x more medium at 0.5 m than at 3 m and takes
+    // it to e^-12 by the cornices, which is what makes a prasat rise OUT of the
+    // mist instead of standing in a fog box. volumeDensityAbs then carries the
+    // optical thickness at eye height back to where it was (the fog-derived
+    // path would have clipped 0.13 to its 0.075 ceiling and left the mist
+    // THINNER than before the fix - see _render).
     volumeIntensity: 0.34,
-    volumeDensity: 0.052,
-    volumeHeightFalloff: 0.075,
-    volumeBaseHeight: -1.5,
+    volumeDensity: 0.13,
+    volumeDensityAbs: 0.13,
+    volumeHeightFalloff: 0.60,
+    volumeBaseHeight: 0.0,
     volumeAnisotropy: 0.78,
     volumeMaxDist: 95.0
+  };
+
+  // ---- 'sunset' - the golden-hour grade with the CURRENT lens model ---------
+  // NOT a look. Every tonal and chromatic field is absent, so this is the warm
+  // grade, character for character, restored from the authored default by the
+  // same mechanism 'warm' uses. The only difference is the LENS.
+  //
+  // The two-tap RGB split (r sampled at uv+caDir, b at uv-caDir) is a lens model
+  // only where the source is smooth on the scale of the offset. It is kept as the
+  // default for one reason and it is stated as such at the top of STORM_GRADE:
+  // level 1 is frozen. It is not kept because it is right. On content that is
+  // not a street of plaster it does two measurable things:
+  //
+  //   * on a HARD SILHOUETTE it displaces R and B off opposite sides of an edge
+  //     that has no intermediate values, so it prints 2-3 px of red/cyan fringe
+  //     rather than dispersion. Meridian Tower's signature frame is a black
+  //     lattice of edge-protection posts against a bright city - the most
+  //     repeated edge in the image - and hero3's left crop measured a mean
+  //     R-B high-pass of 4.9 on its luminance edges, 8.7 mid-frame.
+  //   * on an ISOLATED SUB-PIXEL SPECULAR in a dark surround it separates one
+  //     sparkle into three single-channel dots. lv_firefight's shaded deck is
+  //     covered in red/green/cyan confetti at 41/255 mean luminance and measured
+  //     16.3 - the same defect, on the same evidence, that caLumFloor was written
+  //     for on the refinery.
+  //
+  // The spectral sweep answers both: every output channel becomes a convex
+  // combination of source samples of that channel (so a hue the source did not
+  // contain is arithmetically impossible), the local-contrast gate takes the
+  // displacement off hard edges and leaves it on soft gradients - which IS the
+  // "roll off with luminance contrast rather than radius alone" this was asked
+  // for, already built and already proven on two levels - and caLumFloor turns
+  // the pass off where there is not enough light for a real fringe to be seen.
+  var SUNSET_GRADE = {
+    chromaticAberration: 0.0016,
+    caSpectral: 1,
+    caLumFloor: 0.10
   };
 
   // The table itself. 'warm' is the empty overlay, i.e. the authored default
@@ -5535,6 +5806,7 @@
   // have to be kept in sync with the settings block above.
   var GRADE_PRESETS = {
     warm: {},
+    sunset: SUNSET_GRADE,
     night: STORM_GRADE,
     cold: COLD_GRADE,
     green: GREEN_GRADE,
@@ -5546,11 +5818,12 @@
   };
 
   // Names the two shipped levels and the level ids already use, mapped onto the
-  // canonical nine. 'market'/'storm' are the strings this module has always
+  // canonical ten. 'market'/'storm' are the strings this module has always
   // taken and must keep taking; the level ids are here so that a level author
   // who writes grade:'metro' gets the metro grade instead of a silent fallback.
   var GRADE_ALIAS = {
-    market: 'warm', 'default': 'warm', golden: 'warm', highrise: 'warm',
+    market: 'warm', 'default': 'warm', golden: 'warm',
+    goldenhour: 'sunset', highrise: 'sunset',
     storm: 'night', harbor: 'night',
     snow: 'cold', blizzard: 'cold', snowbound: 'cold',
     metro: 'green', flooded: 'green',
@@ -5559,6 +5832,32 @@
     jungle: 'verdant',
     refinery: 'sodium',
     ruins: 'dawn', mist: 'dawn'
+  };
+
+  // A LEGACY GRADE REACHED THROUGH THE DECLARATIVE TABLE GETS THE CURRENT LENS.
+  //
+  // This exists because the preset name cannot discriminate on its own. Meridian
+  // Tower's env profile asks for grade:'warm' - the market's own preset, the
+  // authored default, the empty overlay - so "gate the CA fix on the preset" and
+  // "leave level 1 bit-identical" are the same sentence pulling in opposite
+  // directions. The distinction that DOES separate them is the one main.js
+  // already draws: market and harbor carry env:null and configure themselves,
+  // every level from 3 on is configured from the declarative table. So the rule
+  // is stated on that axis instead of on a level id, and it is structural rather
+  // than numeric in exactly the way the rest of this file's gates are:
+  //
+  //   * market never reaches this line at all. applyEnv returns early on
+  //     env:null, so setGradePreset is never called on level 1 and its settings
+  //     are the authored default it has always been.
+  //   * harbor reaches setGradePreset exactly once, from the constructor, with
+  //     'storm' - which resolves to 'night', is not in this table, and in any
+  //     case arrives with _declarative false because its env is null too.
+  //
+  // The redirect target is not a different look. 'sunset' has no tonal or
+  // chromatic field in it; it is the warm grade with the lens model that four
+  // other presets in this table already use. See SUNSET_GRADE.
+  var GRADE_MODERN_LENS = {
+    warm: 'sunset'
   };
 
   // Colours and vectors are cloned rather than shared, so a preset table can
@@ -5591,9 +5890,10 @@
    * Select a colour grade by name. Data, not code: a level declares its look in
    * the LEVELS table in main.js and never touches this file.
    *
-   * @param {string} name  'warm' (the market, the authored default) | 'night'
-   *   (the harbor storm) | 'cold' | 'green' | 'bleach' | 'alarm' | 'verdant' |
-   *   'sodium' | 'dawn'. Level ids and the legacy 'market'/'storm' spellings are
+   * @param {string} name  'warm' (the market, the authored default) | 'sunset'
+   *   (the same look, current lens model) | 'night' (the harbor storm) | 'cold' |
+   *   'green' | 'bleach' | 'alarm' | 'verdant' | 'sodium' | 'dawn'. Level ids and
+   *   the legacy 'market'/'storm' spellings are
    *   accepted as aliases. An unknown name is logged and IGNORED - the grade
    *   already in force stays in force, which for a fresh level is the authored
    *   default, so an unimplemented preset degrades to a look rather than to a
@@ -5603,6 +5903,10 @@
     try {
       var key = (typeof name === 'string' ? name : '').trim().toLowerCase();
       if (GRADE_ALIAS[key]) key = GRADE_ALIAS[key];
+      // ...and a legacy grade asked for by a DECLARATIVE level gets the current
+      // lens model. Unreachable on both frozen levels by construction - see
+      // GRADE_MODERN_LENS, which is where the argument is.
+      if (this._declarative && GRADE_MODERN_LENS[key]) key = GRADE_MODERN_LENS[key];
       var table = Object.prototype.hasOwnProperty.call(GRADE_PRESETS, key)
         ? GRADE_PRESETS[key] : null;
       if (!table) {
@@ -6079,6 +6383,11 @@
       uHeatD0: U(s.heatNear), uHeatD1: U(s.heatFar),
       uHeatScale: U(s.heatScale), uHeatTime: U(0),
       uHeatCount: U(0), uHeatCells: U(makeHeatCellArray()),
+      // The mirage half. uHeatPale 0 closes its own block in main(), and
+      // uHeatCellFloor 0 is the cells-are-a-hard-mask behaviour the shimmer
+      // shipped with.
+      uHeatCellFloor: U(0), uHeatPale: U(0), uHeatLift: U(s.heatLift),
+      uHeatSky: U(new THREE.Vector3(1, 1, 1)),
       uCADark: U(0),
       uGrainShadowLo: U(s.grainShadowLo), uGrainShadowHi: U(s.grainShadowHi),
       uGrainShadowFloor: U(s.grainShadowFloor)
@@ -7014,6 +7323,9 @@
       var fog = ctx.scene.fog;
       var dens = s.volumeDensity;
       if (this._harbor) {
+        // (see below for the volumeDensityAbs branch - the harbor is tested
+        // first and unconditionally, so weather.js keeps ownership of its
+        // medium whatever a preset says.)
         // WEATHER OWNS THE MEDIUM HERE. ctx.weather.fogDensity is published in
         // extinction-per-metre (weather.js states the unit as part of the
         // contract) which is exactly what this march integrates, so it is read
@@ -7030,6 +7342,14 @@
           dens = fog.density / 0.6;
         }
         dens = M.clamp(dens, 0.003, 0.045);
+      } else if (s.volumeDensityAbs > 0) {
+        // The preset states the medium itself. Nothing is derived and nothing
+        // is floored against the distance fog, because the two are describing
+        // different things: a dawn ground mist is thick at the ankle and gone
+        // by the cornice, and averaging it against a thin distance haze is what
+        // turns it back into a height-uniform veil. Clamped only against the
+        // absurd, so a typo cannot march an opaque medium.
+        dens = M.clamp(s.volumeDensityAbs, 0.001, 0.30);
       } else if (fog && typeof fog.density === 'number' && fog.density > 0) {
         dens = M.clamp(Math.max(fog.density * 1.35, s.volumeDensity * 0.75), 0.008, 0.075);
       }
@@ -7449,6 +7769,50 @@
       for (var hi = 0; hi < heat.cells.length && hi < HEAT_CELL_MAX; hi++) {
         cu.uHeatCells.value[hi].set(heat.cells[hi][0], heat.cells[hi][1], heat.cells[hi][2]);
       }
+      // ---- the mirage's colour ---------------------------------------------
+      // scene.fog is the atmosphere sky.js established, and every distant
+      // surface in the frame is already converging to it - so it is the honest
+      // target for light that has been turned over by a hot layer. Normalised to
+      // UNIT LUMINANCE, because the composite runs on HDR radiance: an absolute
+      // fog colour here would darken a noon frame instead of paling it, and the
+      // level term belongs to uHeatLift, which is metered. Degrades to neutral
+      // if the level has no fog, which is still a desaturation and a lift.
+      //
+      // ...WARMED TOWARD THE KEY by heatSkyWarm, and that term was measured into
+      // existence rather than chosen. A mirage is grazing-angle sky, so the raw
+      // atmosphere colour is the physically literal answer and it printed the far
+      // apron at R-B -0.019 against the +0.072 it replaced: a COOL far ground.
+      // That is defensible as physics and wrong as photography here, twice over.
+      // The near-grazing column over 200 m of noon hardstanding is dust-laden and
+      // sun-lit, so what a desert mirage actually reads as is pale warm white,
+      // not zenith blue - and this level's grade is built on a sky-blue shadow
+      // rotation UNDER a yellow midtone, so putting the sky's own blue into the
+      // brightest large area of the frame inverts the split-tone it is made of.
+      // The instrument agreed: grade_split fell from +0.0232 to +0.0024 on the
+      // signature frame, under analyze.py's 0.0040 floor, on that alone.
+      var heatFog = (ctx.scene && ctx.scene.fog && ctx.scene.fog.color) || null;
+      var heatSkyW = M.clamp(s.heatSkyWarm, 0, 1);
+      var heatR = heatFog ? heatFog.r : 1, heatG = heatFog ? heatFog.g : 1,
+          heatB = heatFog ? heatFog.b : 1;
+      if (heatSkyW > 1e-4) {
+        // _c1 holds the key-light tint for this frame; it was written into
+        // uSunTint a few lines above, so it is current and costs nothing here.
+        var keyY = 0.2126 * _c1.r + 0.7152 * _c1.g + 0.0722 * _c1.b;
+        if (keyY > 1e-4) {
+          heatR += (_c1.r / keyY - heatR) * heatSkyW;
+          heatG += (_c1.g / keyY - heatG) * heatSkyW;
+          heatB += (_c1.b / keyY - heatB) * heatSkyW;
+        }
+      }
+      var heatFogY = 0.2126 * heatR + 0.7152 * heatG + 0.0722 * heatB;
+      if (heatFogY > 1e-4) {
+        cu.uHeatSky.value.set(heatR / heatFogY, heatG / heatFogY, heatB / heatFogY);
+      } else {
+        cu.uHeatSky.value.set(1, 1, 1);
+      }
+      cu.uHeatCellFloor.value = M.clamp(s.heatCellFloor, 0, 1);
+      cu.uHeatPale.value = M.clamp(s.heatPale, 0, 1) * heat.strength;
+      cu.uHeatLift.value = Math.max(0.25, s.heatLift);
       cu.tDepth.value = depthTex;
       cu.tViewDepthC.value = (viewOk && this.rtView.depthTexture)
         ? this.rtView.depthTexture : this.whiteTex;
@@ -7458,6 +7822,7 @@
     } else {
       cu.uHeat.value = 0;
       cu.uHeatCount.value = 0;
+      cu.uHeatPale.value = 0;
       cu.uHasViewC.value = 0;
       cu.tDepth.value = depthTex || this.whiteTex;
       cu.tViewDepthC.value = this.whiteTex;

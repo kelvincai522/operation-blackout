@@ -244,6 +244,123 @@
   // the daylight sky, so "night is dark" survives.
   var NIGHT_ZENITH = [0.00210, 0.00290, 0.00550];
   var NIGHT_HORIZON = [0.00670, 0.00560, 0.00460];
+
+  // ==========================================================================
+  // TWILIGHT ZENITH  (opt-in; see setTwilight)
+  //
+  // EVERYTHING IN THIS BLOCK IS INERT UNTIL _twiF IS NON-ZERO, which only
+  // setTwilight() or a level whose declarative profile asks for it can do.
+  // market and harbor carry no env profile and never call it, so their dusk and
+  // night skies execute the identical arithmetic they always have - the
+  // afterglow branch keeps its original literal expression in an else.
+  //
+  // WHY THE MODEL CANNOT PRODUCE A BLUE ZENITH AT A HORIZON SUN, and why this
+  // is a missing layer rather than a tuning error.
+  //
+  //   The dome is SINGLE scattering: radiance = integral of T_view * T_sun *
+  //   beta * density. With the disc on the horizon, T_sun along the SOLAR path
+  //   is a horizon slant column - measured on this model at t = 0.22, the
+  //   Rayleigh optical depth to the sun is 2.6 in the red and 14.9 in the blue
+  //   at sea level. Blue is therefore extinguished exactly where the density
+  //   that would scatter it lives, and the only air still receiving blue light
+  //   is 20-35 km up, where the density is 2-5% of sea level. Integrated end to
+  //   end the zenith comes out at (0.0153, 0.0154, 0.0106) - R = G, B DOWN 30%.
+  //   That is not a bug in the integral, it is what one bounce gives you.
+  //
+  //   A real twilight zenith is blue because of the terms this model does not
+  //   have: second- and third-order scattering (the sky above the terminator is
+  //   lit almost entirely by light that has already bounced, and each bounce
+  //   re-weights toward Rayleigh's 1/lambda^4) and Chappuis ozone absorption,
+  //   which removes 550-650 nm from a long twilight path and is the textbook
+  //   reason the twilight zenith is blue rather than grey. MS_FACTOR is a flat
+  //   0.32 of the single-scattering result, so it inherits the reddening
+  //   instead of correcting it, and RAY_CHROMA makes it WORSE here: it is a
+  //   luminance-preserving expansion about the Rayleigh integral's own mean, so
+  //   on a spectrum where B is BELOW that mean it pushes B further down. It is
+  //   right by day (B is the largest channel then) and inverted at twilight.
+  //
+  // So the blue is AUTHORED - but as a luminance-preserving CHROMATICITY
+  // ROTATION of the finished column rather than as an added layer, and that
+  // distinction is the whole design. THE DOME IS ALSO A LIGHT: 64% of the
+  // cosine-weighted sky irradiance arrives from above 37 degrees. The first
+  // version of this crossfaded the upper dome out and faded an authored blue in,
+  // which is the obvious implementation and measured a third of the level's
+  // skylight gone and the whole frame printing 16% down - a dawn mist lit by a
+  // sky that had been deleted. A rotation moves hue at exactly constant
+  // luminance, so keyRef, the IBL, the hemisphere fill and every fog cap are
+  // untouched, and ONE separate factor owns the gradient.
+  //
+  // Two weights, and the AZIMUTHAL one is what confines the warm band:
+  //
+  //   TWI_LO/HI    elevation. Full rotation above ~37 degrees, so the blue
+  //                "holds above roughly 40 degrees" as the finding asks.
+  //   TWI_AZ_P     azimuth. cos^14 is spent about 25 degrees off the sun, so the
+  //                burning band keeps its FULL authored level in the sun's own
+  //                quadrant and every other bearing rotates to the twilight blue
+  //                at the same luminance it already had. Cutting the afterglow's
+  //                azimuthal floor instead (the other obvious implementation)
+  //                cost the anti-sun horizon 60% of its value, which on the
+  //                quietest level in the roster is its entire atmosphere.
+  //
+  // TWI_ZENITH is therefore a CHROMATICITY, normalised to luminance 1 before use;
+  // only its ratios matter. It is CALIBRATED against the print rather than
+  // authored, because the whole point of the finding is a measured printed
+  // chromaticity. Two captures of Bayon's lv_overview fix the scene-to-print
+  // response of the zenith column at
+  //     print R/G = 1.480 * (scene R/G)^1.123
+  //     print B/G = 1.362 * (scene B/G)^0.275
+  // - i.e. the transfer applies a fixed rotation toward red AND compresses the
+  // blue axis by a factor of nearly four in the exponent, which is why the
+  // shipped dome could sit at scene R = G and still print R 50% over G. Solving
+  // those for print G/R = 1.39 and B/G = 1.45 gives scene (0.53, 1.00, 1.26),
+  // i.e. the triple below. Authoring the physically measured twilight zenith
+  // instead - (0.055, 0.085, 0.145), which the finding quotes - would print at
+  // G/R 1.13 and miss.
+  // ==========================================================================
+  var TWI_ZENITH = [0.235, 0.600, 1.040];
+  // Elevation window, in sin(view elevation): ~3.5 degrees to ~37 degrees.
+  var TWI_LO = 0.06, TWI_HI = 0.60;
+  // How much of the full rotation the LOW sky gets on bearings away from the
+  // sun, and this one is capped by an OBJECTIVE metric rather than by taste.
+  //
+  // At 0.85 the frame-wide B-R went from -0.102 to +0.008: the level stopped
+  // being a dawn at all, and the roster pins Bayon to "grey-gold / moss". Worse,
+  // at 0.62 the brightest sky band - the low anti-sun sky, which is what
+  // analyze.py's highlight tint actually samples on a wide framing - rotated from
+  // (0.233, 0.110, 0.075) to near-neutral and the overview's grade_split INVERTED
+  // (+0.1775 to -0.0213), i.e. the "no meaningful colour grade" red flag, on a
+  // level whose whole palette claim is warm stone against cool air.
+  //
+  // 0.40 is the measured ceiling: the upper dome (twEl = 1, where this factor
+  // does not apply at all) still rotates fully to the twilight blue, so the
+  // zenith inversion the finding is about is fixed either way - what this
+  // protects is the warm band that has to stay the frame's highlight.
+  var TWI_AWAY = 0.40;
+  // Azimuthal tightness of the warm band. See above.
+  var TWI_AZ_P = 14.0;
+  // Zenith luminance CUT at full weight - the gradient the finding asks for
+  // (the shipped dawn dome ran a total swing of 13% across the whole visible
+  // sky, which is a flat card with a hue on it).
+  //
+  // ENERGY-NORMALISED, which is what makes a number this large affordable: the
+  // cosine-weighted mean of the dim factor is divided back out, so the dome
+  // REDISTRIBUTES its irradiance downward instead of losing it. That is also the
+  // physically honest shape - a twilight sky really is brightest near the horizon
+  // and the darkest part of it really is overhead - and it means the zenith can
+  // be cut by more than half without the level's skylight, keyRef, the fog caps
+  // or the exposure moving at all.
+  //
+  // TWI_NORM is how much of that redistribution is actually paid back. At 1.0 the
+  // low sky came out 1.72x its authored level and PRINTED at saturation 0.029,
+  // i.e. the golden band was pushed so far up the AgX shoulder that it went
+  // neutral - the cure eating the patient. 0.65 keeps most of the energy and
+  // leaves the band its colour.
+  //
+  // Measured, the print exponent on the sky column is only 0.32 (it sits high on
+  // the shoulder), so a printed 1.8:1 would need a 4x radiance spread; 0.62 lands
+  // about 1.65:1 in display-linear against the shipped 1.22:1. See the report.
+  var TWI_DIM = 0.62;
+  var TWI_NORM = 0.65;
   // --------------------------------------------------------------------------
   // CITY SKYGLOW (sodium). The airglow above is the sky of an empty desert; a
   // city has a second, WARM, horizon-hugging layer - low-pressure sodium and
@@ -1171,6 +1288,69 @@
   // not the deck - was carrying a low sun's transmittance almost undiluted; see
   // _applyOvercastAmbient for the other half of that fix.
   var OVER_HUE = [0.950, 0.978, 1.000];
+
+  // ---- THE WHITEOUT GATE ---------------------------------------------------
+  //
+  // Three separate corrections below all want the same question answered - "is
+  // the ground under this deck bright enough that the level IS the air?" - so
+  // they share one weight rather than three thresholds that could drift apart.
+  // Snow (luminous albedo 0.887) lands 1.0; a wet jungle floor (0.107) lands
+  // EXACTLY 0.0, so every expression gated on it is skipped outright and the
+  // second level sharing this preset is bit-identical.
+  //
+  // 0.35 is not arbitrary: below it the ground <-> cloud-base resonator
+  // (1/(1 - a*0.58)) is under 1.25, i.e. the deck is still top-lit and the far
+  // field still has a value step to dissolve across. Above it the ground is
+  // returning half the light again and the sky, the ground and the air between
+  // them converge on one value, which is the definition of a whiteout.
+  var OVER_WHITE_LO = 0.35, OVER_WHITE_SPAN = 0.45;
+  // Chroma expansion on the deck's chromaticity, at full whiteout. The same
+  // argument RAY_CHROMA documents, measured on this preset: the deck was
+  // authored at B/R = 1.06 and PRINTED at B-R = +0.005 with a dome saturation of
+  // 0.006-0.012, because AgX over an auto-exposure metering a whiteout is a ~9:1
+  // chroma compressor up at that level. The brief asks for "white / pale blue"
+  // and the level's own snow is blue by authored vertex colour, so a dead
+  // neutral sky reads as blue paint on the floor under a grey lid. Applied
+  // LUMINANCE-PRESERVING about the deck's own luminance, so it cannot move the
+  // deck's level, the numeric solve in _applyOvercastAmbient, the frame mean or
+  // the meter - it is a pure chromaticity rotation, exactly as OVER_SQ_COOL is.
+  var OVER_CHROMA = 3.4;
+  // Aerial-perspective convergence. At full whiteout the inscatter stops being
+  // "a fraction of the ground albedo" and becomes "the value the sky dome
+  // actually resolves to", so geometry at infinite distance converges ON the sky
+  // instead of settling below it.
+  //
+  // MEASURED, and the factor is the honest part. The CPU mirror
+  // (_overcastShape) evaluates the deck with every noise channel at its MEAN and
+  // the solar lobe at its spherical mean 1/(p+1); the shader evaluates the real
+  // lobe, which over the sun's half of the sky runs 3-6x that. So the deck the
+  // player sees is brighter than the deck the mirror integrates, and the
+  // difference is the whole 0.066 luminance ledge the finding measured (far
+  // pines 0.676 against a sky at 0.742). 1.34 x the mirror's displayed mean is
+  // the value that closes it; it is a correction for a known approximation, not
+  // a fudge, and it is only ever reached at full whiteout.
+  var OVER_CONV_K = 1.34;
+  // ...and the other half of "fully veiled". A 0.93 opacity cap leaves 7% of a
+  // near-black conifer showing however thick the air gets, which is a 7% step
+  // that no distance closes. A silhouette cap is right for a street (see
+  // this.fog.maxOpacity) and wrong for a blizzard, where the brief explicitly
+  // asks for distant geometry to dissolve into white.
+  var OVER_FOG_MAX_OPACITY_HI = 0.985;
+  // How far the SUNWARD inscatter lobe is pulled toward the solar region's own
+  // (warm) chromaticity, at full whiteout. gbFogSun and gbFogSky exist so the air
+  // has a warm side and a cool side; under this preset they were being handed the
+  // same triple, so the medium was one hue and the frame had no warm/cool axis at
+  // all - measured on snowbound's hero framing as a shadow tint and a highlight
+  // tint identical to three decimals, i.e. grade_split sitting on zero.
+  // A FRACTION of the way from the deck's chromaticity to the solar region's, not
+  // a replacement: measured, replacing it took the sunward lobe from B/R 1.61 to
+  // 1.03 and cost the frame a third of its saturation, a tenth of its dynamic
+  // range and a fifth of its edge energy, because a neutral haze prints brighter
+  // and flatter through AgX than a blue one of the same radiance. At 0.45 that
+  // lobe lands at B/R 1.42 - still unmistakably the same cold air, warm enough
+  // relative to the anti-sun side to give the grade an axis.
+  var OVER_FOG_SUN_MIX = 0.45;
+
   // Rain/snow fills the whole column rather than hugging the ground, scatters
   // near-isotropically (there is no disc to forward-scatter from) and eats
   // chroma at distance far harder than dry air.
@@ -1237,6 +1417,46 @@
     ruins:     [0.230, 0.215, 0.165],   // grey-gold stone with moss
     metro:     [0.060, 0.062, 0.058],
     bunker:    [0.070, 0.068, 0.062]
+  };
+
+  // ---- per-level defaults for the two OPT-IN blocks above -------------------
+  //
+  // Same contract as GROUND_ALBEDO_BY_LEVEL and for the same reason: these are
+  // DEFAULTS keyed on a level id, resolved once in _resolveEnvProfile and only
+  // for a level that carries a declarative env profile. market and harbor carry
+  // env:null, so not one line of this executes for them and neither table can
+  // reach the frozen path.
+  //
+  // A level's own profile always wins - `env.twilight` and `env.dust` /
+  // `env.dustGain` are read first - so when these move into the LEVELS table in
+  // main.js the entries here simply stop being consulted. They live here rather
+  // than being left unset because the alternative is a shipped correctness fix
+  // that no level is switched on to receive: the descending-ray dust guard was
+  // added for Meridian Tower a round ago, documented as level-facing, and never
+  // enabled by anything.
+  //
+  // twilight: the authored Rayleigh zenith. Only a level whose sun sits within a
+  // few degrees of the horizon has any use for it, and only one asks: at
+  // t = 0.22 Bayon's disc is 0.06 degrees DOWN, i.e. full civil twilight, and
+  // the single-scattering dome is magenta there (see the TWILIGHT ZENITH
+  // header). highrise (t = 0.80, -0.32 deg) and refinery (t = 0.88, -6.8 deg)
+  // are in the same window and are deliberately NOT listed: both currently pass
+  // their critics on a warm sunset dome and neither asked for a cool zenith.
+  var TWILIGHT_BY_LEVEL = {
+    ruins: { amount: 1.0 }
+  };
+  // dust: the mote field. See setDustGain for what each field does and why the
+  // two guards are opt-in rather than default.
+  // Where the near-shell ramp completes, in metres, for a level with an env
+  // profile. A little under half the 14 m wrap cell.
+  var DUST_ENV_NEAR = 5.5;
+  var DUST_BY_LEVEL = {
+    // Meridian Tower: the whole frame is 25 degrees BELOW the eye against bright
+    // depth haze 176 m down, so every ray descends, the shipped rising-ray guard
+    // is 1.0 for all of them, and the field printed 765-1441 hard specks against
+    // the brightest thing in the picture. downFade is the mirror-image guard;
+    // gain 0.60 is the ~40% peak-alpha cut the finding asks for.
+    highrise: { gain: 0.60, downFade: 0.85 }
   };
 
   // --------------------------------------------------------------------------
@@ -2054,6 +2274,20 @@
     // market, the harbor and every level that does not ask, which makes the
     // expression below an exact multiply by 1.0. See setDustGain().
     'uniform float uDownFade;',
+    // ---- the two opt-in shell guards, both 0 for market and harbor ----------
+    // uNearFade  distance (m) by which the near ramp completes. 0 = the shipped
+    //            0.30..1.4 ramp alone, i.e. a mote 2 m from the lens draws at
+    //            FULL alpha - which is what made the field pop in at the same
+    //            value at every depth inside the 14 m wrap shell.
+    // uSubPx     energy conservation for a mote whose true footprint is under
+    //            one pixel. gl_PointSize is clamped UP to 1.0 (it has to be -
+    //            zero-size points do not rasterise), so a mote that should cover
+    //            0.3 px is drawn over 1 px at full alpha, i.e. eleven times its
+    //            own energy, as a hard-edged single-pixel square. That is
+    //            literally the definition of sensor noise and it is why the far
+    //            field measured the same peak value as the near field.
+    'uniform float uNearFade;',
+    'uniform float uSubPx;',
     'uniform mat4 uShadowMat;',
     'varying float vAlpha;',
     'varying float vScatter;',
@@ -2111,7 +2345,29 @@
     // the shaft reads best. uDownFade is 0 unless a level sets it, and
     // 1.0 - 0.0 * x is exactly 1.0, so market and harbor are bit-identical.
     '  float downFade = 1.0 - uDownFade * ( 1.0 - smoothstep( -0.30, -0.055, vray.y ) );',
-    '  vAlpha = aSeed.w * edge * rng * lift * upFade * downFade;',
+    // ---- the two opt-in shell guards ---------------------------------------
+    // Both are written as a factor that ends the product chain and both resolve
+    // to EXACTLY 1.0 when their uniform is 0, so the market and harbor
+    // expression is the identical sequence of multiplies it always was.
+    //
+    // NEAR RAMP. The shipped 0.30..1.4 ramp is a lens-flare guard, not a depth
+    // cue: it is spent by a metre and a half, so inside a 14 m wrap shell a mote
+    // 2 m out and a mote 12 m out draw at the same value against wildly
+    // different backdrops. Pushing the completion of the ramp out to uNearFade
+    // fades the field IN with depth as well as out, which is what a scattering
+    // medium does - the near shell is where the eye cannot focus anyway.
+    //
+    // SUB-PIXEL ENERGY. See the uniform declaration. The correction is the
+    // square of the true footprint because a point's energy scales with its
+    // AREA; below one pixel it is the only thing keeping the field from being a
+    // constant-value speckle mask laid over the whole frame.
+    '  float shell = 1.0;',
+    '  if ( uNearFade > 0.0 ) shell = smoothstep( 0.8, uNearFade, dist );',
+    '  if ( uSubPx > 0.0 ) {',
+    '    float want = min( aSeed.z * uT.y / dist, 1.0 );',
+    '    shell *= mix( 1.0, want * want, uSubPx );',
+    '  }',
+    '  vAlpha = aSeed.w * edge * rng * lift * upFade * downFade * shell;',
     // Forward scattering: a mote seen against the sun is far brighter than one
     // seen with the sun behind you. This is what makes the air read as thick.
     '  float c = dot( vray, uSunDir );',
@@ -2398,6 +2654,9 @@
     // several steps into build().
     this._dustGain = 1.0;
     this._dustDown = 0.0;
+    // The two shell guards. 0 = the shipped field exactly (see DUST_VERT).
+    this._dustNear = 0.0;
+    this._dustSubPx = 0.0;
     // ---- solar arc (see setSolarArc) ---------------------------------------
     // Peak elevation of the day arc, in radians. MAX_ELEV (30 deg) is the
     // art-directed default every shipped capture was framed against; a level
@@ -2405,6 +2664,16 @@
     // profile. Per-instance, so nothing a level does can move the module
     // constant out from under market or harbor.
     this._maxElev = MAX_ELEV;
+    // ---- twilight zenith (see setTwilight and the TWILIGHT ZENITH header) ---
+    // _twiF is the single gate every added branch tests, and it is 0 here, so
+    // market, harbor and every level that does not opt in run the identical
+    // afterglow arithmetic. The tunables are per-instance for the same reason
+    // _maxElev is: nothing a level does can move the module constants.
+    this._twiF = 0;
+    this._twiZenith = [TWI_ZENITH[0], TWI_ZENITH[1], TWI_ZENITH[2]];
+    this._twiDim = TWI_DIM;
+    this._twiAway = TWI_AWAY;
+    this._twiAzP = TWI_AZ_P;
 
     // ---- fog parameters (world units are metres) ---------------------------
     //
@@ -3165,6 +3434,21 @@
     return Math.max(k, (this.fillRadiance || 0) * 0.55, 0.0016);
   };
 
+  // Rotate an RGB triple's CHROMATICITY toward `chroma` (whose own luminance is
+  // 1) by w, then scale the whole thing by `dim`. Luminance-preserving at
+  // dim = 1 by construction, which is the contract the twilight layer depends on:
+  // the dome is a light source as well as a picture, and a hue change must not
+  // move the irradiance it delivers. Hoisted to module scope and allocation-free
+  // because it runs 16,384 times per LUT generation.
+  var _twiChroma = [1, 1, 1];
+  function twiRotate(x, chroma, w, dim) {
+    var xl = 0.2126 * x[0] + 0.7152 * x[1] + 0.0722 * x[2];
+    if (!(xl > 0.0)) { x[0] *= dim; x[1] *= dim; x[2] *= dim; return; }
+    x[0] = (x[0] + (xl * chroma[0] - x[0]) * w) * dim;
+    x[1] = (x[1] + (xl * chroma[1] - x[1]) * w) * dim;
+    x[2] = (x[2] + (xl * chroma[2] - x[2]) * w) * dim;
+  }
+
   // ==========================================================================
   // Sky-view LUT
   // ==========================================================================
@@ -3205,6 +3489,45 @@
     // the fog colours of a sealed bunker is the one thing that would give the
     // whole illusion away. Exactly _stormF for level 2, exactly 0 for level 1.
     var stormK = 1.0 - 0.90 * M.saturate(Math.max(this._stormF, this._overcastF));
+
+    // ---- twilight zenith gate, hoisted out of the 8192-texel loop -----------
+    // Zero for market, harbor and every level that has not opted in, and a deck
+    // is opaque to a Rayleigh belt exactly as it is to the airglow above, so a
+    // storm or an overcast switches it off too. See the TWILIGHT ZENITH header.
+    var twiF = M.saturate(this._twiF) * (1.0 - M.saturate(Math.max(this._stormF, this._overcastF)));
+    var twC = _twiChroma;
+    var twiDim = M.saturate(this._twiDim) * twiF * afterglow;
+    var twiAway = M.saturate(this._twiAway);
+    var twiAzP = M.clamp(this._twiAzP, 1.0, 40.0);
+    var twiNorm = 1.0;
+    if (twiF > 0.001) {
+      // The authored triple is a CHROMATICITY: normalised to luminance 1 so the
+      // rotation below cannot move the dome's level by construction, whatever a
+      // caller hands setTwilight().
+      var tzl = 0.2126 * this._twiZenith[0] + 0.7152 * this._twiZenith[1] +
+                0.0722 * this._twiZenith[2];
+      if (!(tzl > 1e-6)) tzl = 1;
+      twC[0] = this._twiZenith[0] / tzl;
+      twC[1] = this._twiZenith[1] / tzl;
+      twC[2] = this._twiZenith[2] / tzl;
+      // ENERGY NORMALISER for the gradient factor: the cosine-weighted mean of
+      // (1 - dim*twEl) over the upper hemisphere, divided back out, so the dome
+      // redistributes its irradiance toward the horizon instead of losing it.
+      // Without this the gradient is a light cut, and 64% of the sky's
+      // irradiance lives above the elevation window - the first version of this
+      // measured a third of the level's skylight gone. Closed form would stop
+      // being true the moment the window moved, so it is 32 steps of the actual
+      // expression: the weight for cos(el)sin(el) del is s ds.
+      var twAcc = 0, twW8 = 0, q;
+      for (q = 0; q < 32; q++) {
+        var sq = (q + 0.5) / 32;
+        twAcc += (1.0 - twiDim * M.smoothstep(TWI_LO, TWI_HI, sq)) * sq;
+        twW8 += sq;
+      }
+      if (twAcc > 1e-6) {
+        twiNorm = 1.0 + (twW8 / twAcc - 1.0) * M.saturate(TWI_NORM);
+      }
+    }
 
     // Shoulder target for the physical daylight terms, in the same HDR units as
     // everything else. keyRef is the radiance of a mid-grey horizontal surface
@@ -3399,6 +3722,55 @@
             iso0 += sw * NIGHT_SODIUM[0];
             iso1 += sw * NIGHT_SODIUM[1];
             iso2 += sw * NIGHT_SODIUM[2];
+          }
+        }
+
+        // --- TWILIGHT ZENITH (opt-in) -----------------------------------------
+        // LAST, and applied to the finished column - the single-scattering
+        // integral, its multiple-scattering top-up AND the authored afterglow -
+        // because all three carry the same defect: at a horizon sun every one of
+        // them is a warm spectrum, so any of them left un-rotated puts warm back
+        // over the blue and the sum is grey. See the TWILIGHT ZENITH header.
+        //
+        // A luminance-preserving CHROMATICITY ROTATION, not an added layer, and
+        // that is the whole design. The dome is also a LIGHT: 64% of the
+        // cosine-weighted sky irradiance arrives from above 37 degrees, so
+        // crossfading the upper dome out (which is what the first version of this
+        // did) took a third of the level's skylight with it and printed the frame
+        // 16% down. A rotation moves hue at exactly constant luminance, so the
+        // IBL, the hemisphere fill, keyRef and every fog cap are untouched, and
+        // ONE separate factor (twiDim) owns the zenith-to-horizon gradient the
+        // finding also asks for.
+        //
+        // The weight has an AZIMUTHAL half, and it is what confines the warm band
+        // rather than dimming it: cos^twiAzP is spent ~25 degrees off the sun, so
+        // the burning band keeps its full authored level in the sun's own quadrant
+        // and the rest of the horizon - which is where the fog's anti-sun lobe is
+        // sampled from - rotates to the twilight blue at the SAME luminance it had.
+        // That is a hue change with no energy cost, where cutting the afterglow's
+        // azimuthal floor cost the anti-sun horizon 60% of its value.
+        if (twiF > 0.001 && afterglow > 0.001) {
+          var twUp = M.smoothstep(-0.02, 0.03, l);
+          if (twUp > 0.0) {
+            var twEl = M.smoothstep(TWI_LO, TWI_HI, l > 0.0 ? l : 0.0);
+            var twAz = 1.0 - Math.pow(Math.max(0.0, Math.cos(az)), twiAzP);
+            var twS = twiF * afterglow * twUp *
+                      (twEl + (1.0 - twEl) * twAz * twiAway);
+            // Energy-normalised gradient. Lerped from 1.0 by twUp so the
+            // below-horizon texels - where the warm ground bounce lives, and
+            // which are not part of the normalised integral - are untouched.
+            var twD = 1.0 + twUp *
+                      (twiNorm * (1.0 - twiDim * twEl) - 1.0);
+            twiRotate(Rr, twC, twS, twD);
+            twiRotate(Mm, twC, twS, twD);
+            var twL = 0.2126 * iso0 + 0.7152 * iso1 + 0.0722 * iso2;
+            if (twL > 0.0) {
+              iso0 = (iso0 + (twL * twC[0] - iso0) * twS) * twD;
+              iso1 = (iso1 + (twL * twC[1] - iso1) * twS) * twD;
+              iso2 = (iso2 + (twL * twC[2] - iso2) * twS) * twD;
+            } else {
+              iso0 *= twD; iso1 *= twD; iso2 *= twD;
+            }
           }
         }
 
@@ -3851,6 +4223,54 @@
     return (isFinite(e) && e > 0) ? e : OVER_MIN_E * 0.4;
   };
 
+  // --------------------------------------------------------------------------
+  // "Is the ground under this deck bright enough that the level IS the air?"
+  //
+  // ONE weight shared by the three whiteout corrections (the deck's chroma
+  // expansion, the aerial-perspective convergence and the opacity cap), so they
+  // cannot drift apart into three different thresholds. Exactly 0 for the
+  // enclosed profile and for a jungle floor, exactly 1 for snow. See
+  // OVER_WHITE_LO.
+  // --------------------------------------------------------------------------
+  Sky.prototype._whiteoutF = function () {
+    if (this._voidF > 0 || !(this._overcastF > 0)) return 0;
+    var ga = this.groundAlbedo;
+    var gl = 0.2126 * ga[0] + 0.7152 * ga[1] + 0.0722 * ga[2];
+    return M.saturate((gl - OVER_WHITE_LO) / OVER_WHITE_SPAN);
+  };
+
+  // --------------------------------------------------------------------------
+  // The deck's DISPLAYED luminance at one elevation: the mirror's absolute
+  // radiance with the picture shoulder _pushOvercast publishes applied to it.
+  //
+  // This is what "converge on the sky" has to be measured against, and it is a
+  // different number from the deck's physical radiance: _regenerateEnvironment
+  // switches the shoulder off for the probe, so the LIGHT never sees it, but the
+  // player does - and so does the value step the far field has to close.
+  // Mirrors uOverPic exactly, from the same constants, for the same reason
+  // _overcastShape mirrors the deck.
+  // --------------------------------------------------------------------------
+  Sky.prototype._overcastPictureLum = function (elevSin) {
+    this._overcastShape(elevSin, _ovRad);
+    var sc = this._overScale;
+    if (!isFinite(sc) || sc < 0) sc = 0;
+    var L = (0.2126 * _ovRad[0] + 0.7152 * _ovRad[1] + 0.0722 * _ovRad[2]) * sc;
+    if (!(L > 0)) return 0;
+    if (this._voidF > 0) return L;                 // void gets the identity
+    var l0 = Math.max(this._overE, 0) / PI;
+    var at = M.saturate((this._overGLum - OVER_ALBEDO_LO) / OVER_ALBEDO_SPAN);
+    var gn = M.lerp(OVER_PIC_GAIN_LO, 1.0, at);
+    var asym = M.lerp(OVER_PIC_SHOULDER_LO, OVER_PIC_SHOULDER_HI, at) * l0 * gn;
+    L *= gn;
+    if (!(asym > 1e-6)) return L;
+    var knee = OVER_PIC_KNEE * asym;
+    var span = asym - knee;
+    if (L > knee && span > 1e-6) {
+      L = knee + span * (1.0 - Math.exp(-(L - knee) / span));
+    }
+    return L;
+  };
+
   // Relative per-channel radiance of the overcast deck at sin(elevation), with
   // every noise channel replaced by its mean. Multiply by this._overScale for
   // absolute HDR radiance.
@@ -3893,6 +4313,10 @@
 
   var _ovRad = [0, 0, 0];
   var _ovTmp = [0, 0, 0];
+  // The deck chromaticity BEFORE the whiteout chroma expansion. The solar region
+  // is derived from this rather than from the expanded hue - see
+  // _applyOvercastAmbient.
+  var _ovHue0 = [1, 1, 1];
   Sky.prototype._applyOvercastAmbient = function () {
     var of = M.saturate(this._overcastF);
     if (!(of > 0.001)) return;
@@ -3905,7 +4329,14 @@
     var gMax = Math.max(ga[0], Math.max(ga[1], ga[2])) || 1;
     for (c = 0; c < 3; c++) this._overGndHue[c] = ga[c] / gMax;
     if (vo) {
-      for (c = 0; c < 3; c++) { this._overHue[c] = VOID_HUE[c]; this._overSunHue[c] = VOID_HUE[c]; }
+      for (c = 0; c < 3; c++) {
+        this._overHue[c] = VOID_HUE[c];
+        this._overSunHue[c] = VOID_HUE[c];
+        // The enclosed profile has no whiteout and no chroma expansion, so the
+        // "unexpanded" hue is simply the hue. Written here as well as in the
+        // branch below so nothing downstream can ever read a stale one.
+        _ovHue0[c] = VOID_HUE[c];
+      }
     } else {
       // The deck is a very slightly cool neutral pulled a sixth of the way
       // toward the hue of whatever it is sitting over. That single blend is
@@ -3920,6 +4351,58 @@
       }
       if (!(hmx > 1e-5)) hmx = 1;
       for (c = 0; c < 3; c++) this._overHue[c] = _ovTmp[c] / hmx;
+      // ---- WHITEOUT CHROMA ---------------------------------------------------
+      // Two corrections, both skipped outright (not lerped by zero - skipped)
+      // when the ground is dark, so jungle is bit-identical.
+      //
+      // 1. THE RESONATOR IS CHROMATIC. _overcastEnergy already models the
+      //    ground <-> cloud-base multiple bounce, 1/(1 - a*R), but it does it on
+      //    LUMINANCE, as one scalar. Per channel over snow it is 1.995 / 2.067 /
+      //    2.176 - the bounce compounds the ground's own spectral tilt every time
+      //    round the loop, which is why a real snowfield under a real deck is
+      //    blue rather than merely bright. Taken as a pure chromaticity (divided
+      //    by its own max, and the luminance restored afterwards), so it cannot
+      //    double-count the energy the scalar boost already carries.
+      //
+      // 2. CHROMA EXPANSION, same argument as RAY_CHROMA and measured on this
+      //    preset: the deck was authored at B/R = 1.06 and PRINTED at B-R =
+      //    +0.005 with a dome saturation of 0.006-0.012, because AgX over an
+      //    auto-exposure metering a whiteout is a ~9:1 chroma compressor up
+      //    there. Luminance-preserving about the hue's own luminance, so the
+      //    deck's level, the numeric solve below, the frame mean and the meter
+      //    are all untouched - it is a chromaticity rotation and nothing else.
+      // Kept for the solar region, which is deliberately NOT expanded - see
+      // below. Copied before the block so the two cannot get out of step.
+      _ovHue0[0] = this._overHue[0];
+      _ovHue0[1] = this._overHue[1];
+      _ovHue0[2] = this._overHue[2];
+      var wof = this._whiteoutF();
+      if (wof > 0) {
+        var hL0 = 0.2126 * this._overHue[0] + 0.7152 * this._overHue[1] +
+                  0.0722 * this._overHue[2];
+        var rmx = 0;
+        for (c = 0; c < 3; c++) {
+          _ovTmp[c] = 1.0 / (1.0 - M.clamp(ga[c] * OVER_CLOUD_R, 0.0, OVER_BOUNCE_MAX));
+          if (_ovTmp[c] > rmx) rmx = _ovTmp[c];
+        }
+        if (!(rmx > 1e-5)) rmx = 1;
+        for (c = 0; c < 3; c++) {
+          this._overHue[c] *= 1.0 + (_ovTmp[c] / rmx - 1.0) * wof;
+        }
+        // Restore the luminance the max-normalised hue had, so the balance
+        // between the deck term and the bounce / solar terms in _overcastShape
+        // is exactly what it was.
+        var hL1 = 0.2126 * this._overHue[0] + 0.7152 * this._overHue[1] +
+                  0.0722 * this._overHue[2];
+        if (hL1 > 1e-5) {
+          var hK = hL0 / hL1;
+          for (c = 0; c < 3; c++) this._overHue[c] *= hK;
+        }
+        var cx = 1.0 + (OVER_CHROMA - 1.0) * wof;
+        for (c = 0; c < 3; c++) {
+          this._overHue[c] = Math.max(0.0, hL0 + (this._overHue[c] - hL0) * cx);
+        }
+      }
       // The solar region keeps some of the sun's own colour but a deck is a
       // very effective diffuser, so it arrives most of the way to the DECK'S
       // OWN hue - not to white, and not 55% of the way but 72%.
@@ -3935,10 +4418,24 @@
       // setting the white balance. Converging on the deck's chromaticity instead
       // of on white is also the physically honest version: what leaves the
       // underside of a stratus deck near the sun is deck light, faintly warmed.
+      //
+      // It converges on the UNEXPANDED deck hue (_ovHue0), i.e. on exactly the
+      // triple the last round measured and tuned, and that exemption is doing
+      // real work rather than being conservatism. A whiteout that is uniformly
+      // blue has no warm end at all, and analyze.py measures precisely that:
+      // grade_split (warm highlights over cool shadows) fell to +0.0070 on the
+      // overview with the solar region cooled along with the deck, i.e. one
+      // hundredth of the way from passing to the "no meaningful colour grade" red
+      // flag. Leaving the one genuinely warm region in the sky warm - the part of
+      // the deck the sun is actually behind, which is also the part that lands on
+      // the snow's lit faces - is what gives the grade something to split
+      // against, and it is the physically right answer too: transmitted sunlight
+      // is warmer than multiply-scattered deck light whatever the deck's own
+      // chromaticity is.
       var T = transmittanceRaw(0.0, Math.max(this.sunWorldDirection.y, 0.02), _ovTmp);
       var tmx = Math.max(T[0], Math.max(T[1], T[2])) || 1;
       for (c = 0; c < 3; c++) {
-        this._overSunHue[c] = M.lerp(T[c] / tmx, this._overHue[c], 0.72);
+        this._overSunHue[c] = M.lerp(T[c] / tmx, _ovHue0[c], 0.72);
       }
     }
     // Shape coefficients the mirror and the shader both consume.
@@ -4048,10 +4545,73 @@
     var sunLum = vo ? VOID_FOG_K * l0 : OVER_FOG_SUN_K * aEff * l0;
     var gndLum = vo ? VOID_FOG_K * 0.80 * l0 : OVER_FOG_GND_K * gLum * l0;
     var mix = vo ? 0.0 : OVER_FOG_GND_MIX;
+
+    // ---- AERIAL-PERSPECTIVE CONVERGENCE (whiteout only) ---------------------
+    // "A fraction of the ground albedo" is the right reference for mist between
+    // trunks and the wrong one for a blizzard, and the finding measured exactly
+    // how wrong: fully-veiled geometry (far pines at 100-140 m, over 96% fog)
+    // landed at L 0.676 against a sky at 0.742 - a 0.066 luminance ledge that no
+    // distance closes, so the treeline read as a flat grey cut-out pasted onto a
+    // brighter sky instead of dissolving into it.
+    //
+    // At full whiteout the inscatter is therefore driven from the value the DOME
+    // RESOLVES TO instead: _overcastPictureLum is the deck's own displayed
+    // luminance, shoulder included, so the sky, the horizon band (which blends
+    // toward this very colour) and geometry at infinite distance all land on one
+    // number by construction rather than by three expressions agreeing.
+    //
+    // Sampled at the zenith because that is the deck's own reference level - the
+    // horizon ramp and the turbidity band are both expressed as fractions of it,
+    // and picking a low elevation would chase the band that is itself chasing
+    // this. OVER_CONV_K then absorbs the one known approximation in the mirror
+    // (the solar lobe at its spherical mean rather than its real angular shape);
+    // see the constant.
+    //
+    // Skipped outright when the ground is dark, so jungle's "2.3x the foliage"
+    // is bit-identical.
+    if (!vo) {
+      var wof2 = this._whiteoutF();
+      if (wof2 > 0) {
+        var skyL = this._overcastPictureLum(1.0) * OVER_CONV_K;
+        if (skyL > 0) {
+          mistLum = M.lerp(mistLum, skyL, wof2);
+          sunLum = M.lerp(sunLum, skyL * (OVER_FOG_SUN_K / OVER_FOG_K), wof2);
+        }
+      }
+    }
     for (c = 0; c < 3; c++) {
       _ovTmp[c] = this._overHue[c] + (this._overGndHue[c] - this._overHue[c]) * mix;
     }
     this._overFogColor(this._fogSky, _ovTmp, mistLum, of);
+    // ---- the SUNWARD lobe is not the same colour as the anti-sun one ---------
+    // gbFogSun and gbFogSky exist precisely so the air has a warm side and a cool
+    // side, and under this preset they were being handed the same triple - so the
+    // whole medium was one hue and there was nothing for the grade to split.
+    // Measured on snowbound's hero framing: the shadow tint and the highlight
+    // tint came back identical to three decimal places ([-0.017,-0.003,0.019]
+    // against [-0.018,-0.002,0.020]) and grade_split sat on zero.
+    //
+    // The sunward lobe is inscatter from light that came through the deck NEAR
+    // THE SUN, so its chromaticity is the solar region's, not the deck's: warmer,
+    // by exactly the amount the transmittance says. The anti-sun lobe keeps the
+    // expanded blue. That is one authored fix producing both halves of the axis
+    // the brief asks for - "white / pale blue" air with a warm sun side - across
+    // the 60% of pixels the medium covers.
+    //
+    // _ovHue0 and _overSunHue are identical to _overHue when there is no
+    // whiteout, so jungle and the enclosed profile take the same triple they
+    // always did.
+    // The blend starts from the deck's own (expanded) chromaticity and moves a
+    // fraction of the way toward the solar region's, so the sunward lobe stays
+    // recognisably the same air as the anti-sun one - just warmer. Basing it on
+    // the UNEXPANDED hue instead, which was the first attempt, throws the whole
+    // expansion away on that lobe the moment the fraction leaves zero, and
+    // measured a third of the frame's saturation for it.
+    var sunMix = OVER_FOG_SUN_MIX * this._whiteoutF();
+    for (c = 0; c < 3; c++) {
+      _ovTmp[c] = this._overHue[c] + (this._overSunHue[c] - this._overHue[c]) * sunMix;
+      _ovTmp[c] += (this._overGndHue[c] - _ovTmp[c]) * mix;
+    }
     this._overFogColor(this._fogSun, _ovTmp, sunLum, of);
     this._overFogColor(this._fogGnd, this._overGndHue, gndLum, of);
   };
@@ -4289,6 +4849,8 @@
       // default to the values the field has always had (1.0 / 0.0).
       uGain: { value: this._dustGain },
       uDownFade: { value: this._dustDown },
+      uNearFade: { value: this._dustNear },
+      uSubPx: { value: this._dustSubPx },
       uShadowMap: { value: null },
       uShadowMat: { value: new THREE.Matrix4() },
       uShadowP: { value: new THREE.Vector2(0.0, 0.0016) }
@@ -4514,6 +5076,19 @@
     this._fogA[3] = isFinite(this.fogStartEffective)
       ? this.fogStartEffective : Math.max(0.0, f.startDistance);
     this._fogB[0] = M.saturate(this._fogParam('maxOpacity'));
+    // ---- the opacity cap, under a whiteout ----------------------------------
+    // A cap exists so a distant building still reads as a SILHOUETTE (see
+    // this.fog.maxOpacity), which is right for a street and wrong for a
+    // blizzard: at 0.93 seven per cent of a near-black conifer survives however
+    // thick the air gets, i.e. a permanent value step that no distance closes,
+    // in the one preset whose brief explicitly asks distant geometry to dissolve
+    // into white. Gated on the shared whiteout weight, so it is exactly the
+    // authored cap for market, harbor, the enclosed profile and jungle.
+    var woF = this._whiteoutF();
+    if (woF > 0) {
+      this._fogB[0] = M.saturate(M.lerp(this._fogB[0], OVER_FOG_MAX_OPACITY_HI,
+        woF * M.saturate(this._overcastF)));
+    }
     this._fogB[1] = M.clamp(this._fogParam('mieG'), 0.0, 0.92);
     this._fogB[2] = Math.max(0.0, this._fogParam('glowGain'));
     this._fogB[3] = M.saturate(this._fogParam('desaturate'));
@@ -5143,6 +5718,21 @@
         this.setGroundAlbedo(GROUND_ALBEDO_BY_LEVEL[ctx.levelId]);
       }
 
+      // Twilight zenith: an explicit profile value wins, otherwise the per-level
+      // default table. Lands before the first _buildLut for the same reason the
+      // albedo does - it is a LUT layer, so everything derived from the LUT
+      // (ambient, hemisphere hues, fog colours, the probe) is solved against it
+      // once instead of being generated and thrown away. Absent for every level
+      // whose sun is not on the horizon, and unreachable for market and harbor.
+      if (env.twilight != null) this.setTwilight(env.twilight);
+      else if (ctx.levelId && TWILIGHT_BY_LEVEL[ctx.levelId]) {
+        this.setTwilight(TWILIGHT_BY_LEVEL[ctx.levelId]);
+      }
+      // ?twilight=1 on the capture URL, same QA-hook contract as ?weather=.
+      if (GAME.params && GAME.params.twilight != null) {
+        this.setTwilight(parseFloat(GAME.params.twilight));
+      }
+
       // Peak solar elevation, in DEGREES. Must land BEFORE the time of day: the
       // arc is what turns t into an elevation, so setting it afterwards would
       // leave one generation of everything downstream built against the default
@@ -5166,6 +5756,21 @@
 
       // Dust field. Landed before _makeDust runs (build() resolves the profile
       // first), so the uniforms are seeded rather than written and rewritten.
+      //
+      // The two SHELL guards default ON for every level that carries an env
+      // profile - i.e. for levels 3-10 and, by construction, never for the two
+      // frozen ones. They are not taste: gl_PointSize is clamped UP to 1 px, so
+      // a mote whose true footprint is a third of a pixel is drawn over eleven
+      // times its own area at full alpha, which is why the field measured the
+      // same peak value at 2 m and at 14 m and printed as hard-edged white
+      // squares at every depth including over a city 400 m away. Correcting the
+      // energy and fading the near shell in are what make it a depth cue.
+      // DUST_ENV_NEAR is a little under half the 14 m wrap cell, so the ramp is
+      // spread across the shell instead of being spent in its first metre.
+      this.setDustGain({ nearFade: DUST_ENV_NEAR, subPixel: 1.0 });
+      if (ctx.levelId && DUST_BY_LEVEL[ctx.levelId]) {
+        this.setDustGain(DUST_BY_LEVEL[ctx.levelId]);
+      }
       if (isFinite(env.dustGain)) this.setDustGain(env.dustGain);
       else if (env.dust) this.setDustGain(env.dust);
       // ?dustGain=0.2&dustDown=0.85 - the same QA hook, same contract.
@@ -5175,6 +5780,12 @@
         }
         if (GAME.params.dustDown != null) {
           this.setDustGain({ downFade: parseFloat(GAME.params.dustDown) });
+        }
+        if (GAME.params.dustNear != null) {
+          this.setDustGain({ nearFade: parseFloat(GAME.params.dustNear) });
+        }
+        if (GAME.params.dustSubPx != null) {
+          this.setDustGain({ subPixel: parseFloat(GAME.params.dustSubPx) });
         }
       }
 
@@ -5576,6 +6187,86 @@
   };
 
   /**
+   * Switch on the authored TWILIGHT ZENITH for a level whose sun sits within a
+   * few degrees of the horizon.
+   *
+   *   sky.setTwilight(1.0)
+   *   sky.setTwilight({ amount: 1.0 })
+   *   sky.setTwilight({ amount: 1.0, zenith: [0.20, 0.50, 1.00], dim: 0.28 })
+   *   sky.setTwilight(0)                       // back to the shipped dome
+   *
+   * WHAT IT FIXES, and why it cannot be reached from a level's env profile with
+   * the knobs that already exist. The dome is single scattering; with the disc on
+   * the horizon the solar path extinguishes blue (Rayleigh optical depth 2.6 in
+   * the red against 14.9 in the blue) exactly where the density that would
+   * scatter it lives, so the integral comes out R = G with B DOWN 30% - measured
+   * at t = 0.22 on Bayon: zenith (0.398, 0.330, 0.380) in the final image, i.e.
+   * MAGENTA, with a total luminance swing across the whole visible sky of 13%.
+   * Turbidity cannot help (it is already at the clear end and adds haze, not
+   * blue), a later timeOfDay only raises the disc, and RAY_CHROMA is actively
+   * inverted here because B sits BELOW the Rayleigh mean it expands about.
+   *
+   * The real sky is blue up there because of second-order scattering and
+   * Chappuis ozone absorption, neither of which this model has - so this is a
+   * missing authored term, and it lives in the LUT so the IBL, the hemisphere
+   * fill and every fog colour inherit it rather than only the picture.
+   *
+   * It is a luminance-preserving CHROMATICITY ROTATION, not an added layer: the
+   * dome is a light source as well as an image and 64% of the sky's irradiance
+   * arrives from above 37 degrees, so anything that removes radiance up there
+   * removes the level's skylight with it.
+   *
+   *   amount     0..1 master gate. 0 (default) makes every added branch fall
+   *              through to the exact arithmetic the file shipped with.
+   *   zenith     [r,g,b] target CHROMATICITY (only the ratios matter - it is
+   *              normalised to luminance 1). Default TWI_ZENITH, B > G > R.
+   *   dim        0..1, zenith luminance CUT at full weight, i.e. how much
+   *              zenith-to-horizon gradient the sky carries. Default TWI_DIM.
+   *   away       0..1, how much of the rotation the LOW sky gets on bearings
+   *              away from the sun.
+   *   azTight    azimuthal exponent confining the WARM band to the sun's own
+   *              quadrant. Higher = tighter.
+   *
+   * A level's env profile can carry `twilight: 1.0` or
+   * `twilight: {amount: 1.0, ...}` instead of calling this.
+   *
+   * Idempotent, legal before build(), and never throws.
+   *
+   * @param {Object|number} opts {amount, zenith, dim, away, azTight}
+   */
+  Sky.prototype.setTwilight = function (opts) {
+    try {
+      var a = NaN, dirty = false;
+      if (typeof opts === 'number') a = opts;
+      else if (typeof opts === 'boolean') a = opts ? 1 : 0;
+      else if (opts) {
+        if (isFinite(opts.amount)) a = opts.amount;
+        else if (isFinite(opts.value)) a = opts.value;
+        if (readRGB(opts.zenith, _tintTmp)) {
+          this._twiZenith[0] = _tintTmp[0];
+          this._twiZenith[1] = _tintTmp[1];
+          this._twiZenith[2] = _tintTmp[2];
+          dirty = true;
+        }
+        if (isFinite(opts.dim)) { this._twiDim = M.saturate(opts.dim); dirty = true; }
+        if (isFinite(opts.away)) { this._twiAway = M.saturate(opts.away); dirty = true; }
+        if (isFinite(opts.azTight)) { this._twiAzP = M.clamp(opts.azTight, 1.0, 40.0); dirty = true; }
+      } else return;
+      if (isFinite(a)) {
+        var v = M.saturate(a);
+        if (v !== this._twiF) { this._twiF = v; dirty = true; }
+      }
+      if (!dirty || !this._built) return;
+      // The layer lives in the LUT, so everything derived from it - the ambient
+      // set, the hemisphere hues, every fog colour and the PMREM probe - has to
+      // be re-solved. Same sequence setTurbidity uses, and for the same reason.
+      this._buildLut();
+      this._pushUniforms();
+      this._regenerateEnvironment();
+    } catch (e) { GAME.logError('sky.setTwilight', e); }
+  };
+
+  /**
    * Turn the floating dust-mote field down, off, or make it background-aware.
    *
    *   sky.setDustGain(0.20)
@@ -5601,29 +6292,56 @@
    *             mirror image of the existing rising-ray guard and it is opt-in
    *             because it is exactly wrong for a street, where the ground two
    *             metres ahead is the darkest thing in frame.
+   *   nearFade  metres by which the NEAR ramp completes, 0 = off (default). The
+   *             shipped 0.30..1.4 m ramp is a lens-flare guard; it is spent
+   *             before the wrap shell has begun, so a mote 2 m from the lens and
+   *             a mote 12 m away draw at the same value against completely
+   *             different backdrops. 5-6 m fades the field in with depth as well
+   *             as out, which is what stops it reading as a speckle mask.
+   *   subPixel  0..1, energy conservation for motes whose true footprint is
+   *             under one pixel, 0 = off (default). gl_PointSize is clamped up
+   *             to 1.0, so such a mote is drawn over ~11x its own area at full
+   *             alpha - a hard-edged single-pixel square with no distance
+   *             falloff, which is exactly what "reads as sensor noise, not as
+   *             dust" means. 1.0 is the physically correct amount.
+   *
+   * The last two are what make the field a DEPTH cue instead of an overlay, and
+   * they are opt-in for the same reason everything else here is: market and
+   * harbor are byte-exact regression canaries, and 0 makes both an exact
+   * multiply by 1.0 in the vertex shader.
    *
    * A level's env profile can carry `dustGain: 0.20` or
-   * `dust: {gain: 0.20, downFade: 0.85}` instead of calling this.
+   * `dust: {gain: 0.20, downFade: 0.85, nearFade: 5.5, subPixel: 1}` instead of
+   * calling this.
    *
    * Legal before build(), idempotent, and never throws.
    *
-   * @param {Object|number} opts {gain, downFade} or the gain itself.
+   * @param {Object|number} opts {gain, downFade, nearFade, subPixel} or the gain.
    */
   Sky.prototype.setDustGain = function (opts) {
     try {
-      var g = NaN, dn = NaN;
+      var g = NaN, dn = NaN, nf = NaN, sp = NaN;
       if (typeof opts === 'number') g = opts;
       else if (opts) {
         if (isFinite(opts.gain)) g = opts.gain;
         else if (isFinite(opts.value)) g = opts.value;
         if (isFinite(opts.downFade)) dn = opts.downFade;
+        if (isFinite(opts.nearFade)) nf = opts.nearFade;
+        if (isFinite(opts.subPixel)) sp = opts.subPixel;
+        else if (isFinite(opts.subPx)) sp = opts.subPx;
       }
       if (isFinite(g)) this._dustGain = M.clamp(g, 0.0, 4.0);
       if (isFinite(dn)) this._dustDown = M.saturate(dn);
+      // Clamped above the near ramp's own start so the smoothstep can never be
+      // handed edge0 >= edge1, which is undefined in GLSL.
+      if (isFinite(nf)) this._dustNear = (nf > 0) ? M.clamp(nf, 1.2, 13.0) : 0.0;
+      if (isFinite(sp)) this._dustSubPx = M.saturate(sp);
       var du = this._dustUniforms;
       if (du) {
         if (du.uGain) du.uGain.value = this._dustGain;
         if (du.uDownFade) du.uDownFade.value = this._dustDown;
+        if (du.uNearFade) du.uNearFade.value = this._dustNear;
+        if (du.uSubPx) du.uSubPx.value = this._dustSubPx;
       }
     } catch (e) { GAME.logError('sky.setDustGain', e); }
   };
