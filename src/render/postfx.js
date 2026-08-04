@@ -248,6 +248,65 @@
 //     profile. GRADE_MODERN_LENS redirects a legacy grade to its current-lens
 //     twin for declarative levels only, and market never executes the line at
 //     all because applyEnv returns early on env:null. See SUNSET_GRADE.
+//
+// ----------------------------------------------------------------------------
+// LEVELS 3-10, BATCH 4: WHAT THE HEAT LAYER BANDS ON, AND TWO MISSING PATHS
+// ----------------------------------------------------------------------------
+// Four findings from eight level owners. Two are defects in code this file
+// already owned; two are capabilities that did not exist here at all.
+//
+//   1. THE TWO HALVES OF THE HEAT EFFECT ARE NOW SEPARATELY SCALED. uHeat (the
+//      boil) and uHeatPale (the inferior mirage) were both written as
+//      (setting x heat.strength), so a level asking for a readable displacement
+//      was forced to accept a proportional paint-over of its own far field. The
+//      record's new `mirage` field defaults to `strength`, so nothing published
+//      before this moves. See normaliseHeat.
+//
+//   2. THE MIRAGE BANDED ON THE WRONG QUANTITY, and this was the expensive one.
+//      Its mask was the LIT SURFACE's height above the layer times the
+//      straight-line distance to it - two properties of the far end of the ray -
+//      when an inferior mirage is an integral ALONG the ray. The boneyard's
+//      establishing pose stands on a catwalk 19.6 m up and was therefore taking
+//      the mirage at full strength over ground it was looking at through ~24 m of
+//      a 3.2 m layer, while a framing at eye height looks through 100 m of it and
+//      got exactly the same amount. pfHeatPath now clips the segment to the layer
+//      analytically and integrates the layer's own density over it, and
+//      uHeatD0/D1 are metres of hot air rather than metres to the surface.
+//      MEASURED, boneyard, same code otherwise, byte-deterministic captures:
+//        lv_overview  dynamic_range 0.6666 -> 0.7463, edge_energy 0.10834 ->
+//                     0.13094 (+20.9%), flat_area 40.24% -> 37.18%. The level's
+//                     own A/B for "mirage off entirely" reported edge_energy
+//                     0.1311, so this recovers essentially all of it.
+//        lv_hero1     mean 0.3729 -> 0.3733, range 0.8094 -> 0.8092, edges
+//                     0.13038 -> 0.13015. A ground-level eye looking at ground
+//                     has path == distance, so the near-field framings do not
+//                     move: 6.7% of that frame's pixels changed and all of them
+//                     are in the one horizon band where the ray really does cross
+//                     70 m of hot air.
+//
+//   3. A DEPTH-AWARE SOFT-PARTICLE PATH (sceneDepthUniforms, softParticleFade,
+//      FRAG_SOFTDEPTH). postfx owns the depth buffer and could not hand it over -
+//      the attachment is bound to the framebuffer the scene pass is drawing into,
+//      so sampling it there is a feedback loop. It now publishes a linearised
+//      half-res COLOUR copy plus the GLSL to fade against it, allocated and
+//      dispatched only if a level asks. ruins had given up on this and was
+//      maintaining a hand-written keep-out list of every wall and tower instead.
+//      MEASURED, metro, two identical cards cutting through an opaque box at 45
+//      degrees: the unpatched card's intersection is an 11-13 px cut, the patched
+//      one fades over 52-61 px, monotone.
+//
+//   4. BLOOM CANNOT ROUND OFF A CLIPPED EMISSIVE QUAD, and no post pass can -
+//      there is no gradient inside a constant, and every candidate fix is
+//      arithmetically dead (see makeGlowProfile for the three of them and why).
+//      What was missing was the card, so glowTexture/glowCardMaterial provide the
+//      radial profile calibrated against this file's own threshold, clamp and
+//      white point. MEASURED, metro, two 1.8 m quads at identical peak radiance:
+//      the flat one prints a 10-90% edge of 4 px and fills 0.924 of its bounding
+//      box (a rectangle with intact corners); the profiled one prints a 19-31 px
+//      edge and fills 0.656 (a disc).
+//
+// Gated exactly as every block above: street.png and quay.png are md5-identical
+// to their pre-round captures at 422/4,201,372 and 270/2,047,292 draws/tris.
 // ============================================================================
 (function (GAME, THREE) {
   'use strict';
@@ -267,6 +326,14 @@
     return a;
   }
 
+  // A number if it is one and it is finite, clamped; otherwise the fallback,
+  // UNCLAMPED. Used for optional record fields where "absent" and "0" must stay
+  // distinguishable, so the fallback may legitimately be null.
+  function heatNum(v, lo, hi, fallback) {
+    if (typeof v !== 'number' || !isFinite(v)) return fallback;
+    return M.clamp(v, lo, hi);
+  }
+
   /**
    * Validate a heat-shimmer record into the shape _render writes to the GPU, or
    * null if it does not describe anything. Defensive by construction: this is
@@ -274,15 +341,39 @@
    * optional, every number is clamped, and anything malformed degrades to "no
    * shimmer" rather than to a NaN in the composite's UV.
    *
-   * @param {{y:Number, strength:Number, cells:Array}} cfg
-   * @returns {{y:Number, strength:Number, cells:Array<Array<Number>>}|null}
+   * THE TWO HALVES OF THE EFFECT ARE SEPARATELY SCALED. `strength` used to scale
+   * BOTH uHeat (the displacement) and uHeatPale (the inferior mirage), which is
+   * not a coupling anything physical justifies - the boil is the variance of the
+   * refractive-index field and the mirage is its mean gradient, and a level can
+   * legitimately want a lot of one and none of the other. It cost the boneyard
+   * its establishing frame for a round (see level_boneyard.js:4684, which
+   * measured flat_area 55.63 against a 45.0 limit and traced it here): asking
+   * for a readable boil at strength 1.70 forced BLEACH_GRADE's heatPale 0.55 to
+   * run at 0.935, i.e. a 94% paint-over of the far field. `mirage` is now its own
+   * scalar and DEFAULTS TO `strength`, so a record written before this existed
+   * behaves exactly as it did.
+   *
+   * @param {{y:Number, strength:Number, mirage:Number, cells:Array,
+   *          pathNear:Number, pathFar:Number}} cfg
+   * @returns {{y:Number, strength:Number, mirage:Number, pathNear:Number|null,
+   *           pathFar:Number|null, cells:Array<Array<Number>>}|null}
    */
   function normaliseHeat(cfg) {
     if (!cfg) return null;
     var strength = (typeof cfg.strength === 'number' && isFinite(cfg.strength))
       ? M.clamp(cfg.strength, 0, 2) : 1;
-    if (strength <= 1e-4) return null;
+    // The mirage scalar. Independent of `strength`, but defaulting to it, so the
+    // published records that predate the split are bit-identical.
+    var mirage = heatNum(cfg.mirage, 0, 2, strength);
+    // strength 0 with a mirage still asked for is a legitimate request (mirage
+    // only, no boil), so the early-out has to consider both.
+    if (strength <= 1e-4 && mirage <= 1e-4) return null;
     var y = (typeof cfg.y === 'number' && isFinite(cfg.y)) ? cfg.y : 0;
+    // Optional per-level overrides of the two path-length thresholds, in metres
+    // of hot air traversed. null = take the grade preset's (settings.heatNear /
+    // settings.heatFar), which is what every existing record does.
+    var pathNear = heatNum(cfg.pathNear, 0.5, 2000, null);
+    var pathFar = heatNum(cfg.pathFar, 1.5, 4000, null);
     var out = [];
     var src = cfg.cells;
     if (src && src.length) {
@@ -297,7 +388,10 @@
       // not a request for a level-wide shimmer, so it is off rather than global.
       if (!out.length) return null;
     }
-    return { y: y, strength: strength, cells: out };
+    return {
+      y: y, strength: strength, mirage: mirage,
+      pathNear: pathNear, pathFar: pathFar, cells: out
+    };
   }
 
   // ==========================================================================
@@ -3091,15 +3185,14 @@
     '// frame\'s log-average, so it is exposure-invariant and so a dark object in',
     '// the layer genuinely dissolves instead of merely being tinted).',
     '//',
-    '// MASKED IN WORLD SPACE, three ways, because a full-screen warp is a',
+    '// MASKED IN WORLD SPACE, two ways, because a full-screen warp is a',
     '// distortion filter rather than a heat layer:',
-    '//   1. HEIGHT. The convection layer is a few metres deep and sits on the',
-    '//      ground, so the mask is a band above a caller-supplied ground Y. The',
-    '//      tail fin thirty metres up is still, the tarmac under it boils.',
+    '//   1. PATH LENGTH THROUGH THE LAYER. Both halves of the effect are an',
+    '//      integral along the line of sight, so what has to drive them is how',
+    '//      much hot air the RAY crossed - not how high the lit surface is and',
+    '//      not how far away it is. See pfHeatPath.',
     '//   2. CELLS. The level says WHERE its slab is widest and most exposed; a',
     '//      shaded hardstanding does not shimmer and neither does a hangar floor.',
-    '//   3. PATH LENGTH. The effect integrates along the line of sight, so it is',
-    '//      zero at arm\'s reach whatever the air is doing and saturates at range.',
     '// ...and the VIEWMODEL is excluded outright. The weapon is 30 cm from the',
     '// eye, it is not seen through anything, and the world depth buffer behind it',
     '// holds the tarmac - so without this test the gun would boil hardest of all.',
@@ -3118,6 +3211,54 @@
     '  float d = pfHash21( i + vec2( 1.0, 1.0 ) );',
     '  return mix( mix( a, b, f.x ), mix( c, d, f.x ), f.y );',
     '}',
+    // ---- how much hot air this ray actually crossed, in METRES ---------------
+    //
+    // THE QUANTITY THIS EFFECT BANDS ON IS THE ONE THING ABOUT IT THAT WAS
+    // WRONG. Until this round the mask was (1 - smoothstep(H0, H1, wp.y - heatY))
+    // - the LIT SURFACE's height above the layer - multiplied by a smoothstep on
+    // the straight-line distance to it. Both terms are properties of the far end
+    // of the ray, and an inferior mirage is a property of the WHOLE ray: it is
+    // the accumulated bending of light through a graded medium. The two are not
+    // even correlated. The failure case is exactly the boneyard's establishing
+    // pose, which stands on a water-tower catwalk 19.6 m up: every ground pixel
+    // in that frame is at wp.y ~ 0 and 60-200 m away, so it scored band 1.0 and
+    // distance 1.0 and took the mirage at FULL strength - while the ray from a
+    // 19.6 m eye to ground at 100 m spends only its last ~24 m inside a 3.2 m
+    // layer. The same frame from eye height traverses 100 m of it. The old form
+    // gave both eyes an identical mirage; the correct answer differs by 4x.
+    //
+    // So: analytically clip the segment [camera -> surface] to the half-space
+    // below the top of the layer, then integrate the layer's own density profile
+    // over the clipped part with a 6-tap midpoint rule. Clipping first is what
+    // makes 6 taps enough - uniform sampling of the full segment would land 0 or
+    // 1 taps inside the layer on exactly the elevated case this is here to fix,
+    // and would alias violently as the camera moved. The density profile is the
+    // SAME curve the old height band used, so a ground-level eye looking at
+    // ground reproduces the old distance term almost exactly (a ray from 1.66 m
+    // to 0 m never leaves the layer, so path == distance) and nothing else does.
+    // No texture fetches, no loop over cells, ~40 ALU, inside a branch that only
+    // a level publishing heatShimmer ever opens.
+    'float pfHeatPath( vec3 wp ) {',
+    '  float yTop = uHeatY + uHeatH1;',
+    '  float ya = uCamPos.y, yb = wp.y;',
+    '  if ( ya > yTop && yb > yTop ) return 0.0;',
+    '  float t0 = 0.0, t1 = 1.0;',
+    '  float dy = yb - ya;',
+    '  if ( abs( dy ) > 1e-4 ) {',
+    '    float tc = clamp( ( yTop - ya ) / dy, 0.0, 1.0 );',
+    '    if ( ya > yTop ) t0 = tc;',       // eye above the layer: enters at tc
+    '    else if ( yb > yTop ) t1 = tc;',  // surface above it: leaves at tc
+    '  }',
+    '  float span = max( t1 - t0, 0.0 );',
+    '  if ( span < 1e-5 ) return 0.0;',
+    '  float acc = 0.0;',
+    '  for ( int i = 0; i < 6; i++ ) {',
+    '    float t = t0 + span * ( ( float( i ) + 0.5 ) / 6.0 );',
+    '    float y = mix( ya, yb, t ) - uHeatY;',
+    '    acc += 1.0 - smoothstep( uHeatH0, uHeatH1, y );',
+    '  }',
+    '  return span * length( wp - uCamPos ) * acc * ( 1.0 / 6.0 );',
+    '}',
     // Written by pfHeatShimmer, read by main(). Zero unless the mirage half of
     // the effect is switched on by a preset (uHeatPale), so the pale block in
     // main() is skipped on every level including the ones that DO shimmer.
@@ -3128,8 +3269,11 @@
     '  float dep = texture2D( tDepth, uv ).x;',
     '  if ( dep >= 0.999999 ) return vec2( 0.0 );',   // sky: nothing to refract
     '  vec3 wp = pfWorldPos( uv, dep );',
-    '  float band = 1.0 - smoothstep( uHeatH0, uHeatH1, wp.y - uHeatY );',
-    '  if ( band < 0.004 ) return vec2( 0.0 );',
+    // Path length first, so it also serves as the early-out the old height band
+    // used to be: a pixel the ray reached without crossing hot air costs one
+    // smoothstep instead of the cell loop.
+    '  float reachP = smoothstep( uHeatD0, uHeatD1, pfHeatPath( wp ) );',
+    '  if ( reachP < 0.004 ) return vec2( 0.0 );',
     // uHeatCellFloor is the shimmer OUTSIDE the level\'s named hot cells, and 0
     // (= cells are a hard mask, the shipped behaviour) unless a preset raises
     // it. Four r=26-40 m discs on a 204x168 m slab leave three quarters of the
@@ -3144,11 +3288,18 @@
     '    cell = max( cell, 1.0 - smoothstep( 0.62, 1.0, dd ) );',
     '  }',
     '  if ( cell < 0.004 ) return vec2( 0.0 );',
-    '  float dist = length( wp - uCamPos );',
     // One reach term, two effects: the displacement and the mirage share every
-    // mask, because they are the same layer of air.
-    '  float reach = band * cell * smoothstep( uHeatD0, uHeatD1, dist );',
-    '  pfHeatPaleAmt = uHeatPale * reach;',
+    // MASK, because they are the same layer of air - but they no longer share
+    // their AMPLITUDE (uHeat and uHeatPale are independently scaled; see
+    // normaliseHeat). uHeatD0/D1 are now METRES OF HOT AIR TRAVERSED rather than
+    // metres to the surface; on a ground-level eye looking at ground the two are
+    // the same number, which is why the near-field framings do not move.
+    '  float reach = cell * reachP;',
+    // Clamped: mix() with t > 1 EXTRAPOLATES past the target, and heatPale x a
+    // 0..2 mirage scalar can reach 2.0. Nothing has ever asked for that (the
+    // shipped pairing peaks at 0.935) and what it produces is a negative
+    // radiance wherever the target is darker than half the source.
+    '  pfHeatPaleAmt = clamp( uHeatPale * reach, 0.0, 1.0 );',
     '  float amp = uHeat * reach;',
     '  if ( amp < 1e-6 ) return vec2( 0.0 );',
     '  vec2 q = vec2( uv.x * uAspect, uv.y ) * uHeatScale;',
@@ -3568,6 +3719,65 @@
     'void main() { gl_FragColor = vec4( pfSafe( texture2D( tSrc, vUv ).rgb ), 1.0 ); }'
   );
 
+  // ---- scene depth, linearised, for SOFT PARTICLES -------------------------
+  // The depth ATTACHMENT cannot be handed to a level: it is bound to the
+  // framebuffer the scene pass is drawing into, so a material that samples it
+  // while that pass is running forms a feedback loop, which ANGLE resolves by
+  // silently dropping the draw call. (vfx.js hit this and documents it at
+  // DepthLinearizer; this is the same conclusion reached independently.)
+  //
+  // So postfx publishes a COLOUR copy instead: R = positive distance along the
+  // view axis, in world metres, at half resolution. Written once per frame right
+  // after the scene pass, which means a material sampling it during the scene
+  // pass reads the PREVIOUS frame - see PostFX.prototype.softParticleFade for
+  // why that is the correct trade and what it costs.
+  var FRAG_SOFTDEPTH = glsl(
+    COMMON, DEPTH,
+    'uniform sampler2D tDepth;',
+    'void main() {',
+    '  float d = texture2D( tDepth, vUv ).x;',
+    // The far plane linearises to uFar, which is the honest answer for the sky:
+    // "nothing in front of you for 600 m", so a card against the sky is not
+    // faded. A cleared (never-written) target reads 0 and the consumer treats
+    // that as "no data", which is the first frame after an allocation.
+    '  gl_FragColor = vec4( pfLinearDepth( d ), 0.0, 0.0, 1.0 );',
+    '}'
+  );
+
+  // The GLSL a level's own material runs to fade against that copy. Kept here,
+  // as a string, for two reasons: it is the only place the encoding of
+  // tPfDepth is known, and a level writing its own copy of the linearisation
+  // would silently diverge the day this module changed the format.
+  //
+  // Everything is prefixed pf/uPf so it cannot collide with three's own chunk
+  // library, and the whole block is inside a uniform-controlled branch so a
+  // patched material can be switched back to hard-edged at runtime.
+  var SOFT_DECL = [
+    'uniform sampler2D tPfDepth;',
+    'uniform vec2 uPfInvRes;',
+    'uniform vec2 uPfNF;',
+    // x = 1 / fade metres, y = near-fade metres (0 = off), z = enable
+    'uniform vec3 uPfSoft;',
+    'float pfsLinear( float d ) {',
+    '  float z = d * 2.0 - 1.0;',
+    '  return ( 2.0 * uPfNF.x * uPfNF.y ) /',
+    '         ( uPfNF.y + uPfNF.x - z * ( uPfNF.y - uPfNF.x ) );',
+    '}',
+    'float pfsSoftFade() {',
+    '  if ( uPfSoft.z < 0.5 ) return 1.0;',
+    '  float sceneZ = texture2D( tPfDepth, gl_FragCoord.xy * uPfInvRes ).x;',
+    '  float myZ = pfsLinear( gl_FragCoord.z );',
+    // No data yet (a freshly allocated copy) must not blank the effect: an
+    // unwritten texel reads 0, which is in front of the near plane and cannot
+    // occur for real geometry.
+    '  float f = ( sceneZ <= 0.0 ) ? 1.0 : clamp( ( sceneZ - myZ ) * uPfSoft.x, 0.0, 1.0 );',
+    // ...and optionally fade the first few metres in front of the eye, which is
+    // what stops a card the player walks into from filling the frame.
+    '  if ( uPfSoft.y > 0.0 ) f *= clamp( myZ / uPfSoft.y, 0.0, 1.0 );',
+    '  return f;',
+    '}'
+  ].join('\n');
+
   // ==========================================================================
   // Procedural textures (no external assets exist in this build)
   // ==========================================================================
@@ -3719,6 +3929,72 @@
     t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
     t.magFilter = t.minFilter = THREE.NearestFilter;
     t.colorSpace = THREE.NoColorSpace;
+    t.generateMipmaps = false;
+    t.needsUpdate = true;
+    return t;
+  }
+
+  // ---- the glow-card profile ------------------------------------------------
+  // WHY THIS LIVES IN postfx AND NOT IN materials.js.
+  //
+  // The finding it answers is "bloom does not round off a clipped emissive
+  // quad": a card whose radiance is a CONSTANT above the print's white point
+  // keeps its rectangular silhouette however much bloom is applied. That is not
+  // a bug in the bloom, it is arithmetic, and it is worth stating precisely
+  // because the obvious fixes all fail:
+  //
+  //   * the composite adds bloom (color += bloom x uBloom x postGain). With the
+  //     shipped pyramid uBloom lands near 0.068, and the bright pass caps a
+  //     single emitter at bloomClamp (7.0 exposed), so the most bloom can add
+  //     anywhere is ~0.48 exposed - on top of a card that is already 6-30. Every
+  //     pixel inside it was over white before the bloom and is over white after
+  //     it, so the ADDED energy cannot shape the silhouette.
+  //   * making the composite energy-conserving (color = mix(color, bloom, k))
+  //     would round it, but only at a k large enough to pull the core BELOW
+  //     white: for a 30x card that is k > 0.96, i.e. replacing the image with
+  //     its own blur. That is not a bloom.
+  //   * the highlight roll-off and AgX cannot help either. They are monotone
+  //     scalar curves, and a monotone curve of a constant is a constant.
+  //
+  // The information the blur needs simply is not in the source: there is no
+  // gradient inside a constant. So the fix is to give the card one, and the
+  // profile has to be calibrated against the tone chain (threshold, clamp, white
+  // point, mip falloff) - all of which live in THIS file. refinery reached the
+  // same answer locally with radial alpha plus additive blending; this is that,
+  // shared, with the exponent chosen so the profile crosses the print's white
+  // point well inside the quad at the intensities levels actually use.
+  //
+  // Authored in the ENCODED domain and tagged SRGBColorSpace, per the project's
+  // colour rule, so the texture is a colour map and three's decode returns the
+  // intended linear profile.
+  function makeGlowProfile(size, falloff, core) {
+    var n = size * size;
+    var data = new Uint8Array(n * 4);
+    var inv = 1 / Math.max(size - 1, 1);
+    var denom = Math.max(1 - core, 1e-3);
+    for (var y = 0; y < size; y++) {
+      for (var x = 0; x < size; x++) {
+        // Unit radius at the quad's edge, so the profile reaches exactly zero
+        // there: a gaussian would not, and its truncation IS a hard edge, which
+        // is the failure this texture exists to remove.
+        var dx = (x * inv) * 2 - 1;
+        var dy = (y * inv) * 2 - 1;
+        var r = Math.sqrt(dx * dx + dy * dy);
+        var a = (1 - r) / denom;
+        a = a < 0 ? 0 : (a > 1 ? 1 : a);
+        a = Math.pow(a, falloff);
+        var v = Math.round(255 * Math.pow(a, 1 / 2.2));
+        var o = (y * size + x) * 4;
+        // The profile rides in RGB *and* alpha: additive blending reads RGB and
+        // ignores alpha, normal blending reads alpha. One texture, both modes.
+        data[o] = data[o + 1] = data[o + 2] = data[o + 3] = v;
+      }
+    }
+    var t = new THREE.DataTexture(data, size, size, THREE.RGBAFormat,
+      THREE.UnsignedByteType);
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    t.magFilter = t.minFilter = THREE.LinearFilter;
+    t.colorSpace = THREE.SRGBColorSpace;
     t.generateMipmaps = false;
     t.needsUpdate = true;
     return t;
@@ -4301,9 +4577,13 @@
       //   heatHeight/Soft  metres of convection layer above the ground plane,
       //                  and how far it fades out over. A tail fin 12 m up is
       //                  still; the tarmac under it boils.
-      //   heatNear/Far   metres of line of sight. The effect integrates along the
-      //                  ray, so it is zero in the foreground however hot the
-      //                  slab is and saturates at range.
+      //   heatNear/Far   METRES OF HOT AIR the view ray crossed - the onset and
+      //                  the saturation of the path integral in pfHeatPath, not a
+      //                  distance to the surface. Zero in the foreground however
+      //                  hot the slab is, zero from above the layer looking down,
+      //                  and saturating along a grazing sightline. A level whose
+      //                  slab is a different size may override the pair from its
+      //                  own heatShimmer record (pathNear / pathFar).
       //   heatScale      convection cells across the frame width.
       //   heatSpeed      how fast the field rises, in cells/second.
       //   heatCellFloor  0 = the level's cells are a HARD mask (shipped). Above
@@ -4384,6 +4664,14 @@
     this._heat = null;
     this._heatExplicit = false;
     this._heatScanned = false;
+    // ---- soft particles / glow cards ---------------------------------------
+    // _softWanted is set by the first caller of sceneDepthUniforms() or
+    // softParticleFade(), and it is the ONLY thing that allocates the depth copy
+    // or dispatches its pass. A level that asks for neither pays nothing: no
+    // target, no draw call, no program.
+    this._softWanted = false;
+    this._softU = null;
+    this._glowTex = null;
     // Set once per pose by _poseFocus during a capture; see update().
     this._poseFocusVal = 0;
     this._ads = false;
@@ -6069,6 +6357,13 @@
 
     m.copy = makeMat(FRAG_COPY, { tSrc: U(null) });
 
+    // Only ever dispatched when a level has asked for the depth copy, so on
+    // every level that has shipped this program is created but never compiled -
+    // three compiles on first use, not on construction.
+    m.softDepth = makeMat(FRAG_SOFTDEPTH, {
+      tDepth: U(null), uNear: U(0.05), uFar: U(600)
+    });
+
     m.velocity = makeMat(FRAG_VELOCITY, {
       tDepth: U(null),
       uInvViewProj: U(new THREE.Matrix4()),
@@ -6502,6 +6797,12 @@
     this.rtDofA = makeRT(vwh, vhh);
     this.rtDofB = makeRT(vwh, vhh);
 
+    // ---- soft-particle depth copy (half res, opt-in only) -------------------
+    // Not allocated unless a level has asked for it, exactly like the SSR target
+    // above: one more surface plus one more fullscreen draw per frame is a real
+    // tax, and seven of the ten levels will never want it.
+    this.rtSoftDepth = this._softWanted ? makeRT(vwh, vhh, { nearest: true }) : null;
+
     // ---- screen-space reflections (half res, harbor only) -------------------
     // Not allocated at all on the market: one more full-size HalfFloat surface
     // for a pass that would never run is a straight VRAM tax on level 1.
@@ -6564,6 +6865,7 @@
       this.rtLum0, this.rtLum1, this.rtLum2, this.rtExp[0], this.rtExp[1]
     ].concat(this.rtBloom);
     if (this.rtSSR) this._targets.push(this.rtSSR);
+    if (this.rtSoftDepth) this._targets.push(this.rtSoftDepth);
 
     this._clearAll();
   };
@@ -6614,6 +6916,13 @@
     if (this.blueNoise) this.blueNoise.dispose();
     if (this.lensDirt) this.lensDirt.dispose();
     if (this.whiteTex) this.whiteTex.dispose();
+    if (this._softNoData) { this._softNoData.dispose(); this._softNoData = null; }
+    if (this._glowTex) {
+      for (var gk in this._glowTex) {
+        if (this._glowTex[gk]) this._glowTex[gk].dispose();
+      }
+      this._glowTex = null;
+    }
     this.enabled = false;
   };
 
@@ -6696,9 +7005,20 @@
    * either by publishing `level.heatShimmer` (which update() picks up on its
    * own, so no level file has to know this API exists) or by calling this.
    *
-   * @param {{y:Number, strength:Number, cells:Array<{x:Number,z:Number,r:Number}>}|null} cfg
+   * @param {{y:Number, strength:Number, mirage:Number, pathNear:Number,
+   *          pathFar:Number, cells:Array<{x:Number,z:Number,r:Number}>}|null} cfg
    *   y        the ground plane the convection layer sits on, in world metres.
-   *   strength 0..2, scaling settings.heatAmount.
+   *   strength 0..2, scaling settings.heatAmount. THE DISPLACEMENT ONLY - the
+   *            boil. Peak vertical displacement is
+   *            settings.heatAmount x strength x 0.57 x frameHeight px.
+   *   mirage   0..2, scaling settings.heatPale (the inferior mirage - the
+   *            lift-and-desaturate half). Defaults to `strength`, which is what
+   *            the single coupled scalar used to do; state it to break the
+   *            coupling. The peak fraction of a pixel the mirage may replace is
+   *            settings.heatPale x mirage, clamped to 1.
+   *   pathNear/pathFar  optional, metres of hot air traversed at which the effect
+   *            starts and saturates. Defaults to the grade preset's
+   *            heatNear/heatFar (12 / 70 unless a preset moves them).
    *   cells    where the slab is hot, as world-space discs (x, z, radius). Up to
    *            HEAT_CELL_MAX of them; omit the field entirely for "everywhere".
    *   null     turns it off and keeps it off - the level scan will not undo it.
@@ -6728,6 +7048,349 @@
       this._heat = null;
     }
   };
+
+  // ==========================================================================
+  // SOFT PARTICLES AND GLOW CARDS
+  //
+  // Two capabilities a level file could not express, both OFF until something
+  // asks. Neither allocates anything, compiles anything or dispatches anything
+  // on a level that does not call in, which is why the two frozen levels are
+  // byte-identical with all of this present.
+  // ==========================================================================
+
+  function softNum(v, fallback) {
+    return (typeof v === 'number' && isFinite(v)) ? v : fallback;
+  }
+
+  // 1x1 R=0. "No depth data here", which is what the consumer must see before
+  // the first copy has been written (and if the copy is unavailable entirely).
+  // R=0 is unreachable for real geometry, so it is an unambiguous sentinel.
+  function makeSoftNoData() {
+    var t = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1,
+      THREE.RGBAFormat, THREE.UnsignedByteType);
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    t.magFilter = t.minFilter = THREE.NearestFilter;
+    t.colorSpace = THREE.NoColorSpace;
+    t.generateMipmaps = false;
+    t.needsUpdate = true;
+    return t;
+  }
+
+  PostFX.prototype._initSoft = function () {
+    if (this._softU) return this._softU;
+    this._softNoData = makeSoftNoData();
+    // ONE set of uniform objects, shared by reference with every patched
+    // material and with anything a level builds by hand. That is what makes this
+    // survive a resize: _allocate throws the render target away and makes a new
+    // one, and the consumers never see it happen because they are holding the
+    // uniform, not the texture.
+    this._softU = {
+      tPfDepth: U(this._softNoData),
+      uPfInvRes: U(new THREE.Vector2(1 / 1280, 1 / 720)),
+      uPfNF: U(new THREE.Vector2(0.05, 600))
+    };
+    this._softWanted = true;
+    return this._softU;
+  };
+
+  /**
+   * The scene's depth, linearised, as something a level's own material can
+   * sample - which the raw depth attachment is not (see FRAG_SOFTDEPTH).
+   *
+   * Returns the three uniform objects postfx keeps current, to be spliced
+   * straight into a hand-written ShaderMaterial's `uniforms`:
+   *
+   *     var d = ctx.postfx.sceneDepthUniforms();
+   *     var mat = new THREE.ShaderMaterial({ uniforms: {
+   *       tPfDepth: d.tPfDepth, uPfInvRes: d.uPfInvRes, uPfNF: d.uPfNF,
+   *       ...my own uniforms
+   *     }, ... });
+   *
+   * tPfDepth   sampler2D, HALF RESOLUTION. R = positive distance along the view
+   *            axis in world metres. 0 means "not written yet" - treat it as
+   *            "no occluder", never as "occluder at the eye".
+   * uPfInvRes  vec2, 1 / (full-res drawing buffer), so the correct fetch is
+   *            texture2D(tPfDepth, gl_FragCoord.xy * uPfInvRes).
+   * uPfNF      vec2(near, far) of the world camera, for linearising the
+   *            fragment's own gl_FragCoord.z.
+   *
+   * ONE FRAME OF LATENCY, AND WHY IT IS THE RIGHT TRADE. The copy is written
+   * immediately after the scene pass, so a material rendering IN that pass reads
+   * the previous frame's copy. The alternative - splitting the scene into two
+   * renderer.render() calls with the copy between them - costs a second scene
+   * traversal, a second shadow-map decision, forces scene.background off for the
+   * second pass, and reorders your cards against every other transparent in the
+   * level. The error the latency actually produces is a fade edge lagging the
+   * camera by one frame, i.e. sub-pixel at any sane turn rate and EXACTLY ZERO
+   * on the capture path, where main.js renders a static pose several times.
+   * vfx.js reached the same conclusion independently for its particles.
+   *
+   * Returns null if postfx is disabled, in which case fade against nothing.
+   */
+  PostFX.prototype.sceneDepthUniforms = function () {
+    if (!this.enabled) return null;
+    try {
+      return this._initSoft();
+    } catch (e) {
+      GAME.logError('postfx.sceneDepthUniforms', e);
+      return null;
+    }
+  };
+
+  /**
+   * The GLSL that goes with the uniforms above, so a hand-written material does
+   * not have to re-derive the encoding. Declares tPfDepth / uPfInvRes / uPfNF /
+   * uPfSoft and defines `float pfsSoftFade()`; paste it above your main() and
+   * multiply by pfsSoftFade() at the end of it. If you use softParticleFade()
+   * instead you never need this.
+   */
+  PostFX.prototype.softParticleGLSL = function () { return SOFT_DECL; };
+
+  /**
+   * Make an existing material fade its own contribution out as it approaches
+   * whatever the scene has already drawn behind it - the soft-particle path.
+   *
+   * WHY IT IS HERE. ruins' own source records giving up on exactly this ("There
+   * is no depth-fade available here (postfx owns the depth buffer), so the answer
+   * is geometric") and maintaining a hand-written keep-out list of every wall,
+   * tower and rubble heap instead, which is why its mist kept getting sliced. A
+   * keep-out list cannot work: the intersection is a screen-space event and it
+   * moves with the camera.
+   *
+   * The material keeps everything else about itself - its own map, its own
+   * blending, its own fog, three's own lighting if it has any. This only
+   * multiplies the finished fragment.
+   *
+   *     ctx.postfx.softParticleFade(mistMat, { fade: 2.5, nearFade: 1.5 });
+   *
+   * @param {THREE.Material} material  patched in place and returned.
+   * @param {Object} opts
+   *   fade      metres over which the card fades to nothing as the scene surface
+   *             behind it approaches. 0.05..60, default 1.5. Set it to roughly
+   *             the card's own thickness in the world; a 6 m mist slab wants
+   *             2-3 m, a 0.4 m dust puff wants 0.3.
+   *   nearFade  metres in front of the EYE over which the card also fades in.
+   *             0..40, default 0 (off). This is what stops a card the player
+   *             walks into from filling the frame; 1-2 m is usual.
+   *   mode      'auto' (default) | 'rgb' | 'alpha' | 'both'. 'auto' picks 'rgb'
+   *             for an additive/custom-blended material and 'alpha' otherwise,
+   *             which is the right answer in every case seen so far. 'rgb' on a
+   *             normally-blended material darkens instead of fading; 'alpha' on
+   *             an additive one does nothing at all, because additive ignores it.
+   *   enabled   false to patch but start switched off (default true).
+   *
+   * RULES. The card must not write depth (`depthWrite: false`) or it occludes
+   * itself; it must not cast shadows (`mesh.castShadow = false`) or the shadow
+   * pass draws a solid rectangle; and it must live in ctx.scene, not in
+   * ctx.viewScene - the viewmodel is rendered into a supersampled target with a
+   * different gl_FragCoord scale, so the fetch would be wrong there.
+   *
+   * `transparent` is forced true, because a fade that the sorter has put in the
+   * opaque bucket is not a fade.
+   *
+   * Runtime retune: material.userData.pfSoftParams is the vec3
+   * (1/fade, nearFade, enabled); write to it whenever you like.
+   */
+  PostFX.prototype.softParticleFade = function (material, opts) {
+    if (!material || !material.isMaterial) return material;
+    try {
+      var u = this._initSoft();
+      if (!u) return material;
+      var o = opts || {};
+      var fade = M.clamp(softNum(o.fade, 1.5), 0.05, 60);
+      var near = M.clamp(softNum(o.nearFade, 0), 0, 40);
+      var mode = o.mode || 'auto';
+      if (mode === 'auto') {
+        mode = (material.blending === THREE.AdditiveBlending ||
+                material.blending === THREE.CustomBlending) ? 'rgb' : 'alpha';
+      }
+      var apply = (mode === 'rgb') ? 'gl_FragColor.rgb *= pfsF;'
+        : (mode === 'both') ? 'gl_FragColor *= pfsF;'
+        : 'gl_FragColor.a *= pfsF;';
+
+      var params = new THREE.Vector3(1 / fade, near, o.enabled === false ? 0 : 1);
+      material.userData = material.userData || {};
+      material.userData.pfSoftParams = params;
+      material.transparent = true;
+
+      var pu = U(params);
+      material.onBeforeCompile = function (shader) {
+        // The shared objects go in BY REFERENCE - three copies the uniforms
+        // object it is handed into the program's own map by reference for
+        // non-array uniforms, so postfx updating .value here is seen there.
+        shader.uniforms.tPfDepth = u.tPfDepth;
+        shader.uniforms.uPfInvRes = u.uPfInvRes;
+        shader.uniforms.uPfNF = u.uPfNF;
+        shader.uniforms.uPfSoft = pu;
+        var f = shader.fragmentShader;
+        // Anchors, in the order three's own chunk list puts them, so the first
+        // one found is always the LAST statement of main(). Checked against the
+        // r180 chunk table in vendor/three.global.js: mesh materials carry
+        // dithering, points carries premultiplied_alpha, sprite carries neither
+        // but does carry fog - so all three families patch. The fourth case is a
+        // structural fallback: main() is the final function in every three
+        // fragment shader, so its closing brace is the last one in the string.
+        //
+        // All four sites are DOWNSTREAM of <colorspace_fragment>, which is exact
+        // here because every target in this chain is NoColorSpace - the encode is
+        // the identity, so a scalar multiply after it is the same scalar multiply
+        // before it. A material used to draw straight to the default framebuffer
+        // would fade in the encoded domain instead, which is a slightly different
+        // curve and never a wrong one.
+        var anchors = ['#include <dithering_fragment>',
+                       '#include <premultiplied_alpha_fragment>',
+                       '#include <fog_fragment>'];
+        var tail = '\n  { float pfsF = pfsSoftFade();\n    ' + apply + ' }\n';
+        var done = false, i, at;
+        for (i = 0; i < anchors.length; i++) {
+          at = f.indexOf(anchors[i]);
+          if (at < 0) continue;
+          f = f.slice(0, at + anchors[i].length) + tail +
+              f.slice(at + anchors[i].length);
+          done = true;
+          break;
+        }
+        if (!done) {
+          at = f.lastIndexOf('}');
+          if (at < 0) return;                 // not a shader we can patch
+          f = f.slice(0, at) + tail + f.slice(at);
+        }
+        shader.fragmentShader = SOFT_DECL + '\n' + f;
+      };
+      // Without this two materials that differ ONLY in their onBeforeCompile
+      // share a compiled program, and whichever compiled first wins.
+      material.customProgramCacheKey = function () { return 'pfSoft:' + mode; };
+      material.needsUpdate = true;
+    } catch (e) {
+      GAME.logError('postfx.softParticleFade', e);
+    }
+    return material;
+  };
+
+  /**
+   * The radial glow profile a card needs in order to bloom into a round source
+   * instead of printing as a rectangle. See makeGlowProfile for the measurement
+   * and for why no amount of bloom can do this from the post side.
+   *
+   * Cached by shape, so a hundred lamp cards cost one texture.
+   *
+   * @param {Object} opts
+   *   size     texture edge in px. 32..512, default 128.
+   *   falloff  profile exponent. The linear profile is
+   *            ((1 - r) / (1 - core)) ^ falloff with r = 1 at the quad's edge, so
+   *            it reaches exactly zero there and the quad boundary can never be
+   *            seen. 0.5..8, default 2.6.
+   *   core     radius of the flat hot centre, as a fraction of the half-width.
+   *            0..0.6, default 0.06. Raise it for a source with a visible disc
+   *            (a floodlight lens); leave it low for an unresolved point.
+   * @returns {THREE.DataTexture}
+   */
+  PostFX.prototype.glowTexture = function (opts) {
+    var o = opts || {};
+    var size = Math.round(M.clamp(softNum(o.size, 128), 32, 512));
+    var falloff = M.clamp(softNum(o.falloff, 2.6), 0.5, 8);
+    var core = M.clamp(softNum(o.core, 0.06), 0, 0.6);
+    var key = size + '|' + falloff.toFixed(3) + '|' + core.toFixed(3);
+    if (!this._glowTex) this._glowTex = {};
+    if (this._glowTex[key]) return this._glowTex[key];
+    var t = null;
+    try {
+      t = makeGlowProfile(size, falloff, core);
+      this._glowTex[key] = t;
+    } catch (e) {
+      GAME.logError('postfx.glowTexture', e);
+    }
+    return t;
+  };
+
+  /**
+   * A ready-made emissive light card: the glow profile above, on additive
+   * blending, at an HDR radiance that clears the bloom threshold.
+   *
+   * Put it on a plane facing the camera (a quad, or a THREE.Sprite's material)
+   * for a distant lamp, a flare-stack glow, a window at night, a beacon.
+   *
+   *     var m = ctx.postfx.glowCardMaterial({ color: 0xffb060, intensity: 9 });
+   *     var card = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 2.4), m);
+   *     card.castShadow = false;
+   *
+   * @param {Object} opts
+   *   color      hex or THREE.Color, interpreted as sRGB. Default 0xffffff.
+   *   intensity  LINEAR multiplier on that colour, i.e. the card's peak radiance
+   *              in the same units the rest of the scene is lit in. 0..400,
+   *              default 6.0. The bloom's own threshold is 0.85-1.35 exposed
+   *              depending on the grade preset, so 3 is a source that just
+   *              blooms, 6-12 is a lamp, 30+ is a flare. Above ~2 the CORE
+   *              clips and the printed disc's radius is set by where the profile
+   *              crosses the white point - which is the entire point: that
+   *              radius is a smooth function of intensity, so the same card
+   *              reads as a brighter light rather than as a bigger rectangle.
+   *   blending   'additive' (default) or 'alpha'. Additive is CustomBlending
+   *              (One, One) rather than THREE.AdditiveBlending deliberately:
+   *              AdditiveBlending multiplies by source alpha, which would square
+   *              the profile and silently double the exponent you asked for.
+   *   size / falloff / core   forwarded to glowTexture().
+   *   fog        default true - a distant light card that ignores aerial
+   *              perspective sits in front of the haze instead of in it.
+   *   depthTest  default true.
+   *   side       default THREE.DoubleSide (ignored when sprite is true).
+   *   sprite     true returns a THREE.SpriteMaterial instead, for
+   *              `new THREE.Sprite(mat)`: always faces the camera and attenuates
+   *              with distance, which is what an unresolved distant lamp is. Use
+   *              it for a point source; use the mesh form when the glow has an
+   *              orientation (a window, a strip, a flare plume).
+   *   softFade   metres; if > 0 the card is also depth-faded via
+   *              softParticleFade(), which is what a glow inside a volume wants.
+   *   nearFade   metres, passed to softParticleFade.
+   * @returns {THREE.MeshBasicMaterial|THREE.SpriteMaterial}
+   */
+  PostFX.prototype.glowCardMaterial = function (opts) {
+    var o = opts || {};
+    var mat = null;
+    try {
+      var tex = this.glowTexture(o);
+      var col = (o.color && o.color.isColor) ? o.color.clone()
+        : new THREE.Color(o.color === undefined ? 0xffffff : o.color);
+      col.multiplyScalar(M.clamp(softNum(o.intensity, 6), 0, 400));
+      var additive = o.blending !== 'alpha';
+      mat = o.sprite ? new THREE.SpriteMaterial({
+        map: tex || null,
+        color: col,
+        transparent: true,
+        depthWrite: false,
+        depthTest: o.depthTest === false ? false : true,
+        sizeAttenuation: true,
+        fog: o.fog === false ? false : true
+      }) : new THREE.MeshBasicMaterial({
+        map: tex || null,
+        color: col,
+        transparent: true,
+        depthWrite: false,
+        depthTest: o.depthTest === false ? false : true,
+        side: o.side === undefined ? THREE.DoubleSide : o.side,
+        fog: o.fog === false ? false : true
+      });
+      // postfx owns the tone curve; nothing may be mapped on the way in.
+      mat.toneMapped = false;
+      if (additive) {
+        mat.blending = THREE.CustomBlending;
+        mat.blendSrc = THREE.OneFactor;
+        mat.blendDst = THREE.OneFactor;
+        mat.blendEquation = THREE.AddEquation;
+      }
+      var sf = softNum(o.softFade, 0);
+      if (sf > 0) {
+        this.softParticleFade(mat, {
+          fade: sf, nearFade: o.nearFade,
+          mode: additive ? 'rgb' : 'alpha'
+        });
+      }
+    } catch (e) {
+      GAME.logError('postfx.glowCardMaterial', e);
+    }
+    return mat;
+  };
+
 
   /**
    * The focus distance the framing being captured asks for, or 0.
@@ -7070,6 +7733,11 @@
     r.getDrawingBufferSize(_v2a);
     var w = Math.max(2, _v2a.x | 0), h = Math.max(2, _v2a.y | 0);
     if (w !== (this._size.x | 0) || h !== (this._size.y | 0)) this._allocate(w, h);
+    // A level asked for the soft-particle depth copy after the targets were
+    // built (levels are built four systems after this one, so this is the normal
+    // case). Reallocating here rather than in the accessor keeps every target
+    // allocation on one path, and it happens once.
+    else if (this._softWanted && !this.rtSoftDepth) this._allocate(w, h);
 
     var cam = ctx.camera;
     if (!cam || !ctx.scene) { this._fallbackRender(ctx); return; }
@@ -7183,6 +7851,30 @@
 
     var depthTex = this.rtScene.depthTexture;
     this.hasDepth = !!depthTex;
+
+    // ============================================== 1c. soft-particle depth ==
+    // The scene's depth, linearised into a colour texture a level's own material
+    // can legally sample. Written here, immediately after the pass that produced
+    // it, so it is at most one frame old when the next scene pass reads it - and
+    // exactly current on the capture path, where the pose does not move between
+    // renders. See sceneDepthUniforms(). Skipped entirely (target not even
+    // allocated) unless a level asked.
+    if (this.rtSoftDepth && this._softU) {
+      if (this.hasDepth) {
+        var sdu = m.softDepth.uniforms;
+        sdu.tDepth.value = depthTex;
+        sdu.uNear.value = near;
+        sdu.uFar.value = far;
+        this._pass(m.softDepth, this.rtSoftDepth);
+        this._softU.tPfDepth.value = this.rtSoftDepth.texture;
+      } else {
+        this._softU.tPfDepth.value = this._softNoData;
+      }
+      // Full-res, because the consumer indexes with gl_FragCoord of the SCENE
+      // target; the copy being half-res is invisible to it (normalised UVs).
+      this._softU.uPfInvRes.value.set(1 / w, 1 / h);
+      this._softU.uPfNF.value.set(near, far);
+    }
 
     // ---- environment -------------------------------------------------------
     var sunDir = _v3b;
@@ -7761,8 +8453,16 @@
       cu.uHeatY.value = heat.y;
       cu.uHeatH0.value = Math.max(0.1, s.heatHeight);
       cu.uHeatH1.value = Math.max(0.2, s.heatHeight + Math.max(0.1, s.heatHeightSoft));
-      cu.uHeatD0.value = Math.max(0.5, s.heatNear);
-      cu.uHeatD1.value = Math.max(s.heatNear + 1, s.heatFar);
+      // METRES OF HOT AIR the ray crossed, not metres to the surface - see
+      // pfHeatPath. The level may state its own pair, because the right numbers
+      // are a property of the slab's size rather than of the look: a 200 m apron
+      // and a 40 m courtyard saturate at very different path lengths, and only
+      // the level knows which it is. Absent (every record written so far), the
+      // grade preset's heatNear/heatFar carry it exactly as before.
+      var hpN = (heat.pathNear === null) ? s.heatNear : heat.pathNear;
+      var hpF = (heat.pathFar === null) ? s.heatFar : heat.pathFar;
+      cu.uHeatD0.value = Math.max(0.5, hpN);
+      cu.uHeatD1.value = Math.max(hpN + 1, hpF);
       cu.uHeatScale.value = Math.max(0.5, s.heatScale);
       cu.uHeatTime.value = time * Math.max(0, s.heatSpeed);
       cu.uHeatCount.value = heat.cells.length;
@@ -7811,7 +8511,12 @@
         cu.uHeatSky.value.set(1, 1, 1);
       }
       cu.uHeatCellFloor.value = M.clamp(s.heatCellFloor, 0, 1);
-      cu.uHeatPale.value = M.clamp(s.heatPale, 0, 1) * heat.strength;
+      // THE MIRAGE HAS ITS OWN SCALAR. It used to be `heat.strength`, the same
+      // number that scales the displacement, which is what forced a level asking
+      // for a readable boil to accept a proportional paint-over of its far field
+      // (see normaliseHeat). `mirage` defaults to `strength`, so a record that
+      // does not mention it is unchanged to the bit.
+      cu.uHeatPale.value = M.clamp(s.heatPale, 0, 1) * heat.mirage;
       cu.uHeatLift.value = Math.max(0.25, s.heatLift);
       cu.tDepth.value = depthTex;
       cu.tViewDepthC.value = (viewOk && this.rtView.depthTexture)

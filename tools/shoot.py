@@ -9,6 +9,10 @@ plus the page's diagnostic report (draw calls, triangles, JS errors).
 
 Exit code is non-zero if any capture failed or the page reported JS errors,
 so an agent can tell "it rendered" from "it silently broke".
+
+Always pass --tag: it keeps the PNGs, the Chrome profile lock and the JSON
+report (shots/report_<level>[_<tag>].json) from colliding with another agent
+capturing at the same time.
 """
 import argparse
 import json
@@ -197,8 +201,22 @@ def main():
             if not r["ok"] or errs:
                 failed += 1
 
-    (outdir / "report.json").write_text(json.dumps(results, indent=1), encoding="utf-8")
+    # The report used to be a single shots/report.json, so two agents capturing
+    # at the same time overwrote each other and one round had to scrape draw and
+    # triangle counts out of this stdout instead. Key it on level+tag, the same
+    # way the Chrome profile lock already is.
+    stem = "report_%s%s" % (args.level, ("_" + args.tag) if args.tag else "")
+    report_path = outdir / (stem + ".json")
+    blob = json.dumps(results, indent=1)
+    report_path.write_text(blob, encoding="utf-8")
+    # Legacy alias, kept so anything still pointed at shots/report.json keeps
+    # working. It is the copy that races; read the tagged file above.
+    try:
+        (outdir / "report.json").write_text(blob, encoding="utf-8")
+    except OSError:
+        pass
     print("\n%d/%d clean  ->  %s" % (len(names) - failed, len(names), outdir))
+    print("report       ->  %s" % report_path)
     return 1 if failed else 0
 
 

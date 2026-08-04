@@ -158,25 +158,31 @@
     return false;
   }
 
-  // A ground point `d` metres in front of the posed camera, `side` metres to
-  // its right. Absolute marks belong to the level they were measured in, so a
-  // scenario shared by two levels has to place its subjects relative to its own
-  // framing or it is just guessing in the second level's coordinate system.
-  var _fwd = new V();
-  function aheadOfCamera(ctx, d, side) {
-    var cam = ctx.camera;
-    _fwd.set(0, 0, -1).applyQuaternion(cam.quaternion);
-    _fwd.y = 0;
-    if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, -1);
-    _fwd.normalize();
-    var x = cam.position.x + _fwd.x * d - _fwd.z * (side || 0);
-    var z = cam.position.z + _fwd.z * d + _fwd.x * (side || 0);
-    var y = 0;
-    var lv = ctx.level;
-    if (lv && typeof lv.sampleGround === 'function') {
-      try { var g = lv.sampleGround(x, z); if (isFinite(g)) y = g; } catch (e) { /* flat */ }
-    }
-    return new V(x, y, z);
+  // A point `d` metres from the posed camera, on the camera's own bearing or
+  // `dyaw` radians off it, for spawning combatants into frame without every
+  // level having to hand-author a firefight position. Absolute marks belong to
+  // the level they were measured in, so a scenario shared by ten levels has to
+  // place its subjects relative to its own framing or it is just guessing in
+  // nine other coordinate systems.
+  //
+  // THERE USED TO BE TWO OF THESE, forty lines apart in this one IIFE. Function
+  // declarations hoist, so the LATER one won at every call site and the earlier
+  // one - which took a lateral `side` offset and sampled level.sampleGround into
+  // y - was unreachable dead code that read as live: a maintainer could add a
+  // `side` argument at a call site, watch it be silently ignored, and find a
+  // function body in the file that says it is honoured. Merged into one.
+  //
+  // y stays 0 rather than sampling the ground, because that is what every
+  // capture in the tree was taken against, and the ONE consumer that cares
+  // (spawnEnemies with `ground`) re-samples the terrain under each man's own
+  // feet, which is strictly better than one shared base height anyway.
+  function aheadOfCamera(ctx, d, dyaw) {
+    var y = ctx.camera.rotation.y + (dyaw || 0);
+    return new V(
+      ctx.camera.position.x - Math.sin(y) * d,
+      0,
+      ctx.camera.position.z - Math.cos(y) * d
+    );
   }
 
   // Generic framing for levels 3-10. The level is the single source of truth
@@ -199,17 +205,6 @@
     }
     if (fov) setFov(ctx, fov);
     if (cleanPlate) { hideHud(ctx); hideViewmodel(ctx); }
-  }
-
-  // A point in front of the camera, for spawning combatants into frame without
-  // each level having to hand-author a firefight position.
-  function aheadOfCamera(ctx, dist) {
-    var y = ctx.camera.rotation.y;
-    return new V(
-      ctx.camera.position.x - Math.sin(y) * dist,
-      0,
-      ctx.camera.position.z - Math.cos(y) * dist
-    );
   }
 
   var S = {
@@ -449,7 +444,14 @@
       // to the waist. Search outward for a standoff where all four are on
       // walkable ground, then re-sample each man onto the terrain under his own
       // feet. Same call the harbor firefight already makes.
-      spawnEnemies(ctx, 4, combatMark(ctx, 4, 3.0, 3.4, 9, 26), 3.0, 3.4, true);
+      //
+      // The basis rotates the four-man footprint into the camera bearing (see
+      // squadBasis) so the line spreads across the FRAME rather than across world
+      // X. It is passed to both calls because the check and the spawn have to be
+      // describing the same squad. The harbor's call deliberately does not pass
+      // one - its captures are frozen against the world-axis layout.
+      var B = squadBasis(ctx);
+      spawnEnemies(ctx, 4, combatMark(ctx, 4, 3.0, 3.4, 9, 26, B), 3.0, 3.4, true, B);
       ctx._fireAt = 1.2;
     },
     lv_muzzleflash: function (ctx) {
@@ -826,10 +828,58 @@
     }
   }
 
-  // Where the i'th of n enemies stands, given the squad's centre. Shared with
-  // the footprint test below so the two can never disagree about the layout.
-  function squadX(base, i, n, sx) { return base.x + (i - (n - 1) / 2) * sx; }
-  function squadZ(base, i, sz) { return base.z - i * sz; }
+  // ==========================================================================
+  // THE SQUAD FOOTPRINT
+  //
+  // Where the i'th of n enemies stands, given the squad's centre. ONE helper,
+  // shared by the walkability test in combatMark() and by the spawn in
+  // spawnEnemies(), so the two can never disagree about the layout - validating
+  // one footprint and then spawning a different one is how a mark that passed
+  // every check still puts a man off the plate.
+  //
+  // `basis` ROTATES THE FOOTPRINT INTO THE CAMERA BEARING, and that is the fix.
+  // The two offsets are authored as LATERAL (across the frame) and DEPTH (away
+  // from the lens), which is what the composition asks for: four men spread
+  // across the picture, staggered in depth so they overlap into a group instead
+  // of lining up like a firing squad. They used to be written straight into world
+  // +X and world -Z, which only means "across the frame" when the camera happens
+  // to look down -Z. Highrise's hero1 bearing is 0.911 rad, so 52 degrees of the
+  // intended lateral spread was actually depth and 52 degrees of the intended
+  // depth was lateral - the squad read as a conga line receding to frame left -
+  // and on any pose that faces an open edge the same rotation walks the whole
+  // footprint off the plate, which on a level whose premise is a 176 m drop makes
+  // an edge-facing hero1 impossible to photograph with anyone standing in it.
+  //
+  // basis = null keeps the historic world-axis layout to the bit, and the two
+  // FROZEN levels' call sites pass nothing on purpose: the market's firefight
+  // mark is measured and shipped, and the harbor's captures were taken against
+  // this layout. Levels 3-10 pass a basis. Never change the default path.
+  // ==========================================================================
+  function squadBasis(ctx) {
+    var y = (ctx && ctx.camera) ? ctx.camera.rotation.y : 0;
+    var s = Math.sin(y), c = Math.cos(y);
+    // camera right = (cos y, 0, -sin y); camera forward = (-sin y, 0, -cos y).
+    // At yaw 0 this reduces to right = +X, forward = -Z, i.e. exactly the
+    // world-axis layout below, which is why the two agree on the market.
+    return { rx: c, rz: -s, fx: -s, fz: -c };
+  }
+
+  // Returns a shared scratch record - read x/z before calling again. Both callers
+  // consume it immediately; a per-cell Vector3 here would allocate a few hundred
+  // times per scenario setup for nothing.
+  var _sqCell = { x: 0, z: 0 };
+  function squadCell(base, i, n, lateral, depth, basis) {
+    var l = (i - (n - 1) / 2) * lateral;
+    var d = i * depth;
+    if (!basis) {
+      _sqCell.x = base.x + l;
+      _sqCell.z = base.z - d;
+    } else {
+      _sqCell.x = base.x + l * basis.rx + d * basis.fx;
+      _sqCell.z = base.z + l * basis.rz + d * basis.fz;
+    }
+    return _sqCell;
+  }
 
   function groundAt(ctx, x, z, fallback) {
     var lv = ctx.level;
@@ -843,7 +893,10 @@
   // market is flat and passes y = 0, so it does not ask; the harbor must,
   // because one shared base height across a 3 m spread is how the first harbor
   // firefight left a militiaman standing on thin air (see combatMark).
-  function spawnEnemies(ctx, n, at, spreadX, spreadZ, ground) {
+  //
+  // `basis` must be the SAME basis combatMark() validated the footprint with, or
+  // the check and the spawn are describing two different squads.
+  function spawnEnemies(ctx, n, at, spreadX, spreadZ, ground, basis) {
     if (!ctx.ai || !ctx.ai.spawn) return null;
     var out = [];
     var base = at || new V(2, 0, -12);
@@ -851,7 +904,8 @@
     var sz = spreadZ == null ? 2.1 : spreadZ;
     for (var i = 0; i < n; i++) {
       try {
-        var px = squadX(base, i, n, sx), pz = squadZ(base, i, sz);
+        var cell = squadCell(base, i, n, sx, sz, basis);
+        var px = cell.x, pz = cell.z;
         var p = new V(px, ground ? groundAt(ctx, px, pz, base.y) : base.y, pz);
         var e = ctx.ai.spawn(p);
         if (e) out.push(e);
@@ -860,25 +914,97 @@
     return out;
   }
 
+  // Bearing offsets for the widened search below, in radians, narrowest first.
+  // Capped at +-1.05 rad because a 75 deg vertical FOV at 16:9 is 54 deg of
+  // horizontal half-angle: past about a radian off-axis the squad is out of frame
+  // whatever it is standing on, and a partial line still inside the picture is a
+  // better photograph than a whole one behind the lens.
+  var COMBAT_FAN = [
+    0.15, -0.15, 0.30, -0.30, 0.45, -0.45, 0.60, -0.60,
+    0.75, -0.75, 0.90, -0.90, 1.05, -1.05
+  ];
+
   // A standable firing line for a squad of n, searched outward along the view
   // axis. Taking a fixed distance on trust does not survive a second level: 16 m
   // straight ahead of the harbor's `containers` pose is inside a container
   // stack, sampleGround there returns the TOP of the stack, and the first
   // harbor firefight duly printed a man hanging ten metres up in the air with
-  // his feet in nothing. Every candidate now has to put the whole squad on
-  // walkable ground before it is accepted.
-  function combatMark(ctx, n, spreadX, spreadZ, dMin, dMax) {
-    var best = null;
-    for (var d = dMin; d <= dMax; d += 1.0) {
-      var c = aheadOfCamera(ctx, d);
-      var ok = 0;
-      for (var i = 0; i < n; i++) {
-        if (walkable(ctx, squadX(c, i, n, spreadX), squadZ(c, i, spreadZ))) ok++;
+  // his feet in nothing. Every candidate has to put the whole squad on walkable
+  // ground before it is accepted.
+  //
+  // Three passes, and pass 1 is deliberately byte-for-byte what this function
+  // always did, so every framing that already resolves returns the identical mark
+  // and passes 2 and 3 can only ever touch a frame that was already broken.
+  function combatMark(ctx, n, lateral, depth, dMin, dMax, basis) {
+    var best = null, bestOk = 0, bestPt = null;
+    var c, ok, d;
+
+    // How many of the n men stand on walkable ground with the squad centred at
+    // `pt`. Its loop variable is deliberately local: the outer passes below are
+    // nested loops, and sharing a counter with a closure is a trap.
+    function count(pt) {
+      var k = 0, i, cell;
+      for (i = 0; i < n; i++) {
+        cell = squadCell(pt, i, n, lateral, depth, basis);
+        if (walkable(ctx, cell.x, cell.z)) k++;
       }
+      return k;
+    }
+
+    // ---- pass 1: dead ahead ------------------------------------------------
+    for (d = dMin; d <= dMax; d += 1.0) {
+      c = aheadOfCamera(ctx, d);
+      ok = count(c);
       if (ok === n) return c;
       if (!best && ok > n / 2) best = c;
+      // Remember the best partial too. Pass 1 used to throw away everything at
+      // or below half the squad, which is how a 2-of-4 standoff dead ahead lost
+      // to an unchecked guess.
+      if (ok > bestOk) { bestOk = ok; bestPt = c; }
     }
-    return best || aheadOfCamera(ctx, dMin);
+    if (best) return best;
+
+    // ---- pass 2: fan the standoff off the view axis ------------------------
+    // The footprint basis does NOT rotate with the fan - the composition is
+    // fixed by the lens, so the men stay spread across the frame - only the
+    // standoff moves. This is the pass highrise needs: from an eye near an open
+    // edge there is no standable four-man line dead ahead at any distance in
+    // [9, 26], and there are several a few degrees to one side.
+    for (var f = 0; f < COMBAT_FAN.length; f++) {
+      for (d = dMin; d <= dMax; d += 1.0) {
+        var p = aheadOfCamera(ctx, d, COMBAT_FAN[f]);
+        ok = count(p);
+        if (ok === n) return p;
+        // Strictly greater, so an on-axis partial from pass 1 keeps priority over
+        // an equally good off-axis one.
+        if (ok > bestOk) { bestOk = ok; bestPt = p; }
+      }
+    }
+    if (bestPt) return bestPt;
+
+    // ---- pass 3: a CHECKED last resort ------------------------------------
+    // This used to be `return aheadOfCamera(ctx, dMin)` with no test of any kind:
+    // the one branch in the function written to stop men standing on thin air
+    // that could put four of them there. It is also the branch that fires on a
+    // level with open edges, because that is precisely when nothing ahead is
+    // walkable - and off the highrise plate sampleGround returns the street
+    // 176 m down.
+    //
+    // Nothing in the fan had a single standable cell, so stop guessing at a
+    // standoff and stand on ground the LEVEL guarantees: its own first spawn
+    // point, re-tested here rather than taken on trust. The squad may be out of
+    // frame, which is a bad photograph; men falling out of the building is a
+    // broken one.
+    var sp = ctx.level && ctx.level.spawnPoints && ctx.level.spawnPoints[0];
+    if (sp && sp.position && walkable(ctx, sp.position.x, sp.position.z)) {
+      return new V(sp.position.x, 0, sp.position.z);
+    }
+    // Every check has failed, which means the level publishes no usable nav data
+    // at all - note walkable() returns TRUE with no navGrid, so reaching here
+    // needs a grid that says no everywhere. A scenario must still produce a
+    // picture, so fall back to the historic mark, but only now that there is
+    // provably nothing better.
+    return aheadOfCamera(ctx, dMin);
   }
 
   // Pin a portrait subject to its mark. Captures simulate for 1.5-3 s and a
