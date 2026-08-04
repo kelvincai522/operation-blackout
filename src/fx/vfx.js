@@ -3627,11 +3627,6 @@
         if (placed >= 2) break;
       }
     }
-    if (GAME.params && GAME.params.vfxdbg) {
-      GAME.logError('vfx.dbg', 'amb=' + placed + ' n=' + this.emitters.length +
-        (this.emitters[0] ? (' @' + this.emitters[0].pos.x.toFixed(1) + ',' +
-          this.emitters[0].pos.y.toFixed(1) + ',' + this.emitters[0].pos.z.toFixed(1)) : ''));
-    }
   };
 
   VFX.prototype._updateEmitters = function (dt) {
