@@ -13,8 +13,14 @@ _scratch*/
 
 # Scratch pages written and deleted by tools/check.py and tools/playtest.py.
 # They are removed on a clean exit; these rules cover crashes and Ctrl-C.
+#
+# playtest.py's page used to be the single fixed name ._playtest.html. It is now
+# namespaced per level/tag/pid so concurrent agents stop deleting it out from
+# under each other, so the glob has to cover the suffixed form too - one of these
+# was committed by accident before this rule existed.
 ._check_*.html
-._playtest.html
+._playtest*.html
+._audio.html
 
 # Python
 __pycache__/
