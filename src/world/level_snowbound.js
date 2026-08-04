@@ -208,6 +208,7 @@
 
   // ------------------------------------------------------- geometry helpers --
   var _e1 = new THREE.Euler();
+  var _loafDown = new THREE.Matrix4();
 
   function makeM(x, y, z, rx, ry, rz) {
     var m = new THREE.Matrix4();
@@ -234,6 +235,135 @@
       g = src.toNonIndexed(); src.dispose();
       _boxCache.set(k, g);
     }
+    return g;
+  }
+
+  // ------------------------------------------------------------- SNOW MASS --
+  // THE ATOM THIS LEVEL WAS MISSING, and the measurement that produced it is
+  // worth recording because it reversed a guess.
+  //
+  // The verifier called the drift field "a scatter of hard-edged rectangular
+  // white slabs and cuboids with razor 90-degree corners ... broken polystyrene
+  // sheet, not snow". Two probes were run before anything was changed:
+  // ?propshide=snow (hide every snow mesh props_snowbound owns) left the heap
+  // BYTE-FOR-BYTE unchanged, and ?lvlhide=snowbound_snow removed all of it and
+  // revealed a smooth, correctly sastrugi'd berm underneath. So the defect is
+  // entirely THIS file's `snow` bucket, and it is not the ground, not the props
+  // and not the decals. What it is is `box()`: a bevelBox at a 12 mm chamfer has
+  // six dead-flat faces and twelve straight arrises, and 500 of them lying on a
+  // white surface is exactly what the verifier described.
+  //
+  // A mass of snow has no flat face and no straight edge anywhere on it. This
+  // builds the shape a snow mass actually is:
+  //
+  //   * a ROUNDED-RECTANGULAR footprint (a superellipse at exponent 3.1, so a
+  //     0.6 x 0.2 m ledge load still reads as a ledge load and not as a pill,
+  //     but its plan corners have a 12 cm radius instead of a point),
+  //   * a DOMED top that is tangent to nothing - the crest sits downwind of
+  //     centre because deposition does, and it carries two low azimuthal
+  //     harmonics so the crest line wanders,
+  //   * a SASTRUGI ripple along the wind axis at ~15 cm, the wavelength the
+  //     0.50 m ground lattice cannot resolve and the one that gives a bank its
+  //     tooth,
+  //   * a RIM THAT GOES BELOW ZERO, so the piece beds into whatever it lies on
+  //     instead of presenting a visible bottom arris, and
+  //   * SMOOTH NORMALS, because the grid wraps in the azimuth and is welded:
+  //     the old collar used flat per-triangle normals, and 60 flat facets at
+  //     three metres is most of why the near field read as faceted plate.
+  //
+  // 90 triangles at the default tessellation against 12 for the box it replaces.
+  // Cached on the rounded dimensions plus seed, so the 84 quoin loads on the
+  // bell tower are four geometries, not 84.
+  var _loafCache = new Map();
+  function lfrac(v) { return v - Math.floor(v); }
+  function snowLoaf(w, h, d, seed, fine) {
+    w = Math.max(w, 0.02); d = Math.max(d, 0.02); h = Math.max(h, 0.012);
+    seed = (seed | 0);
+    var seg = fine ? 12 : 9, rings = fine ? 3 : 2;
+    var k = w.toFixed(2) + ',' + h.toFixed(3) + ',' + d.toFixed(2) + ',' +
+      (seed & 15) + ',' + seg;
+    var g = _loafCache.get(k);
+    if (g) return g;
+    var hw = w * 0.5, hd = d * 0.5;
+    var ph = lfrac(seed * 0.61803) * 6.2832;
+    // the wind, in the loaf's own frame. Every caller places these with the
+    // level's own yaw, so treating it as world-aligned is a deliberate
+    // approximation: a 30 cm load does not need its drift bias resolved.
+    var wx = WIND_X, wz = WIND_Z;
+    var EXP = 3.1;
+    // THE SKIRT IS A SHALLOW FLARE, NOT A WALL, and that is a correction made
+    // off the first capture of this atom. The first version put the rim ring and
+    // the sunk ring at the SAME radius, so the piece finished on a vertical band
+    // a few centimetres tall - and _paint drives snow by its own normal
+    // (facing = ny*0.5+0.5, so a down-facing vertex loses 23% of its red), which
+    // turned every one of those bands into a dark crescent lying on the snow.
+    // Measured on hero1: dozens of them, and they read as curved slivers of
+    // litter. Flaring the skirt out to 1.30x the footprint over the same small
+    // drop makes it a 15-degree ramp whose normal still points up, so it shades
+    // as snow and is buried by whatever the piece is lying on.
+    var FLARE = 1.30;
+    var sink = Math.min(0.045, h * 0.34 + 0.008);
+    var pos = [], idx = [];
+    var i, j;
+    function footR(a) {
+      var ca = Math.abs(Math.cos(a)), sa = Math.abs(Math.sin(a));
+      var t = Math.pow(Math.pow(ca / hw, EXP) + Math.pow(sa / hd, EXP), -1 / EXP);
+      // smooth, periodic azimuthal jitter - never a per-vertex hash, which makes
+      // a ten-segment ring into a star rather than a drift
+      return t * (0.94 + 0.09 * Math.sin(a * 2 + ph) + 0.055 * Math.sin(a * 3 - ph * 1.7));
+    }
+    // rows: j = 0 is the crown (a small inner ring, not a pole), j = rings is
+    // the rim, j = rings + 1 is the sunk skirt
+    for (j = 0; j <= rings + 1; j++) {
+      var q = j <= rings ? (0.10 + 0.90 * (j / rings)) : 1.0;
+      for (i = 0; i < seg; i++) {
+        var a = i / seg * Math.PI * 2;
+        var ca2 = Math.cos(a), sa2 = Math.sin(a);
+        var rr = footR(a) * q;
+        var lx = ca2 * rr, lz = sa2 * rr;
+        // downwind bias on the crest: the whole dome leans with the storm
+        var lee = lx * wx + lz * wz;
+        var y;
+        if (j > rings) {
+          y = -sink;
+        } else {
+          y = h * Math.pow(Math.max(0, 1 - q * q), 0.58);
+          y *= 0.90 + 0.24 * M.saturate(lee / Math.max(0.12, footR(a)) * 0.5 + 0.5);
+          y *= 1 + 0.13 * Math.sin(a * 3 + ph * 1.3) + 0.08 * Math.sin(a * 5 - ph);
+          // sastrugi, along the wind
+          y += h * 0.085 * Math.sin((lx * wx + lz * wz) * 7.4 + ph) * (1 - q * 0.6);
+          if (j === rings) y = Math.min(y, h * 0.10) - sink * 0.35;
+        }
+        pos.push(lx, y, lz);
+      }
+    }
+    // the crown cap: a single vertex at the top of the dome, offset downwind
+    var crownY = h * (1.0 + 0.03 * Math.sin(ph));
+    pos.push(wx * hw * 0.10, crownY, wz * hd * 0.10);
+    var crown = (rings + 2) * seg;
+    for (i = 0; i < seg; i++) {
+      idx.push(crown, i, (i + 1) % seg);
+    }
+    for (j = 0; j <= rings; j++) {
+      for (i = 0; i < seg; i++) {
+        var a0 = j * seg + i, b0 = j * seg + (i + 1) % seg;
+        var c0 = (j + 1) * seg + i, d0 = (j + 1) * seg + (i + 1) % seg;
+        idx.push(a0, c0, b0, b0, c0, d0);
+      }
+    }
+    // and a flat floor so the piece is watertight from below
+    var floorV = crown + 1;
+    pos.push(wx * hw * 0.05, -sink, wz * hd * 0.05);
+    var base = (rings + 1) * seg;
+    for (i = 0; i < seg; i++) {
+      idx.push(floorV, base + (i + 1) % seg, base + i);
+    }
+    var src = new THREE.BufferGeometry();
+    src.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    src.setIndex(idx);
+    src.computeVertexNormals();
+    g = src.toNonIndexed(); src.dispose();
+    _loafCache.set(k, g);
     return g;
   }
 
@@ -463,6 +593,20 @@
   };
   Builder.prototype.boxR = function (key, w, h, d, x, y, z, rx, ry, rz, bevel) {
     return this.add(key, box(w, h, d, bevel), makeM(x, y, z, rx, ry, rz));
+  };
+  // Same call signature as box()/boxR() - the piece still occupies w x h x d
+  // centred on (x, y, z) - but the geometry is a wind-formed snow mass instead of
+  // a chamfered prism. Every snow load in the level goes through one of these
+  // two; nothing in a blizzard has a flat face.
+  Builder.prototype.loaf = function (key, w, h, d, x, y, z, seed, fine) {
+    var s = (seed === undefined) ? ((x * 137 + y * 71 + z * 29) | 0) : seed;
+    return this.add(key, snowLoaf(w, h, d, s, fine), makeM(x, y - h * 0.5, z));
+  };
+  Builder.prototype.loafR = function (key, w, h, d, x, y, z, rx, ry, rz, seed, fine) {
+    var s = (seed === undefined) ? ((x * 137 + y * 71 + z * 29) | 0) : seed;
+    var m = makeM(x, y, z, rx, ry, rz);
+    m.multiply(_loafDown.makeTranslation(0, -h * 0.5, 0));
+    return this.add(key, snowLoaf(w, h, d, s, fine), m);
   };
   Builder.prototype.cyl = function (key, r0, r1, len, x, y, z, rx, ry, rz, seg) {
     return this.add(key, cyl(r0, r1, len, seg), makeM(x, y, z, rx, ry, rz));
@@ -1248,6 +1392,27 @@
     return g;
   }
 
+  // As uvToCell, but the source uv is TILED ku x kv times inside the cell before
+  // being remapped. A 12 m trunk sampling one 512 px cell over its whole length
+  // is 41 texels/m, which mips to a flat value and - because the bark cell puts
+  // its rime in a solid band over the left third of u - the flat value it mips to
+  // is pale. Tiling v puts the bark grain back. The wrap is fract() so the seam
+  // lands inside the cell rather than across it.
+  function uvToCellTiled(geo, rect, ku, kv) {
+    var g = geo.clone();
+    var uv = g.attributes.uv;
+    if (!uv) return g;
+    var out = new Float32Array(uv.count * 2);
+    for (var i = 0; i < uv.count; i++) {
+      var u = M.saturate(uv.getX(i)) * (ku || 1), v = M.saturate(uv.getY(i)) * (kv || 1);
+      u -= Math.floor(u); v -= Math.floor(v);
+      out[i * 2] = rect[0] + u * (rect[2] - rect[0]);
+      out[i * 2 + 1] = rect[1] + v * (rect[3] - rect[1]);
+    }
+    g.setAttribute('uv', new THREE.BufferAttribute(out, 2));
+    return g;
+  }
+
   function needleMaps(seed) {
     var doc = (typeof document !== 'undefined') ? document : null;
     if (!doc) return null;
@@ -1344,11 +1509,22 @@
       g.fillStyle = rgba(56 * v2, 46 * v2, 38 * v2, rng.range(0.35, 0.95));
       g.fillRect(bx, rng.range(-20, S), bw, rng.range(S * 0.18, S * 0.9));
     }
-    // rime clinging to the windward side of every trunk
-    for (i = 0; i < 90; i++) {
-      var rx = rng.range(0, S * 0.34);
-      g.fillStyle = rgba(190, 202, 218, rng.range(0.10, 0.42));
-      g.fillRect(rx, rng.range(0, S), rng.range(1.5, 6), rng.range(8, S * 0.5));
+    // Deep fissures. A spruce bole is scaly-plated with black cracks between the
+    // plates, and without them the cell mips to one mid value - which on a trunk
+    // is the difference between bark and a painted dowel.
+    for (i = 0; i < 120; i++) {
+      var fx2 = rng.range(0, S);
+      g.fillStyle = rgba(16, 13, 11, rng.range(0.35, 0.85));
+      g.fillRect(fx2, rng.range(-10, S), rng.range(1, 3.2), rng.range(S * 0.10, S * 0.55));
+    }
+    // Rime clinging to the windward side of every trunk. NARROWED AND LIGHTENED:
+    // at a 34% band and 0.42 alpha it was a third of every trunk's circumference
+    // at a pale value, and stretched over a 12 m trunk it mipped to a flat pale
+    // wash - which is most of why the treeline read as pale spires.
+    for (i = 0; i < 70; i++) {
+      var rx = rng.range(0, S * 0.20);
+      g.fillStyle = rgba(178, 190, 206, rng.range(0.06, 0.24));
+      g.fillRect(rx, rng.range(0, S), rng.range(1.2, 4), rng.range(8, S * 0.4));
     }
     g.restore();
 
@@ -1810,22 +1986,28 @@
   // deliberately not a circle: banked and proud on the lee (+WIND_X, +WIND_Z),
   // scoured to nothing on the windward side, which is the same asymmetry
   // leeDrift() puts into the height field around every building.
+  // SMOOTH-SHADED, and that is a correction rather than a nicety. The first
+  // version emitted per-triangle face normals, so a ten-segment three-ring
+  // annulus at the foot of a post is sixty flat facets - which at three metres
+  // is a cluster of hard little plates, i.e. the same defect the berm blocks
+  // had. The ring now wraps in the azimuth (index modulo seg, so the seam is
+  // welded rather than duplicated) and gets computeVertexNormals, and it runs at
+  // fourteen segments because hundreds of these sit inside 15 m of a standpoint.
   function snowCollar(B, x, y, z, r, h, seed) {
-    var seg = 10, rings = 3;
+    var seg = 14, rings = 3;
     var inR = Math.max(0.035, r * 0.55);
-    var grid = [], ri, si;
+    var pos = [], idx = [], ri, si;
+    var ph = (seed | 0) * 0.618;
     for (ri = 0; ri <= rings; ri++) {
       var t = ri / rings;
-      var row = [];
-      for (si = 0; si <= seg; si++) {
-        var a = (si % seg) / seg * Math.PI * 2;
+      for (si = 0; si < seg; si++) {
+        var a = si / seg * Math.PI * 2;
         var c = Math.cos(a), s = Math.sin(a);
         var lee = M.saturate((c * WIND_X + s * WIND_Z) * 0.5 + 0.5);
         // The jitter has to be SMOOTH and PERIODIC in the azimuth. A per-vertex
         // hash makes adjacent segments differ by half their radius, and a ten
         // segment ring with that on it is a star, not a drift - which is
         // exactly what the first capture put at the foot of every prop.
-        var ph = (seed | 0) * 0.618;
         var jit = 0.88 + 0.13 * Math.sin(a * 2 + ph) + 0.08 * Math.sin(a * 3 - ph * 1.7);
         var rOut = r * (0.92 + 0.78 * lee * lee) * jit;
         var rr = inR + (rOut - inR) * t;
@@ -1834,30 +2016,21 @@
         // washer sitting on top of the ground
         var prof = (1 - t) * 0.50 + Math.max(0, 1 - Math.abs((t - 0.32) / 0.64)) * 0.78;
         var yy = h * (0.28 + 1.15 * lee) * jit * prof - 0.045 * t * t;
-        row.push([c * rr, yy, s * rr]);
+        pos.push(c * rr, yy, s * rr);
       }
-      grid.push(row);
-    }
-    var pos = [], nor = [];
-    function tri(A, Bv, C) {
-      var ux = Bv[0] - A[0], uy = Bv[1] - A[1], uz = Bv[2] - A[2];
-      var vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
-      var nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-      var l = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-      nx /= l; ny /= l; nz /= l;
-      pos.push(A[0], A[1], A[2], Bv[0], Bv[1], Bv[2], C[0], C[1], C[2]);
-      nor.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
     }
     for (ri = 0; ri < rings; ri++) {
       for (si = 0; si < seg; si++) {
-        var A = grid[ri][si], Bv = grid[ri][si + 1];
-        var C = grid[ri + 1][si + 1], D = grid[ri + 1][si];
-        tri(A, Bv, C); tri(A, C, D);
+        var a0 = ri * seg + si, b0 = ri * seg + (si + 1) % seg;
+        var c0 = (ri + 1) * seg + si, d0 = (ri + 1) * seg + (si + 1) % seg;
+        idx.push(a0, b0, d0, a0, d0, c0);
       }
     }
-    var g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
+    var src = new THREE.BufferGeometry();
+    src.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    src.setIndex(idx);
+    src.computeVertexNormals();
+    var g = src.toNonIndexed(); src.dispose();
     var old = B.tint;
     B.tint = grey(1.02);
     B.add('snow', g, makeM(x, y, z));
@@ -2672,9 +2845,9 @@
       B.tint = null;
       B.tint = grey(1.02);
       for (i = 0; i < 5; i++) {
-        B.boxR('snow', rng.range(1.2, 2.6), rng.range(0.30, 0.62), rng.range(1.0, 2.2),
+        B.loafR('snow', rng.range(1.2, 2.6), rng.range(0.30, 0.62), rng.range(1.0, 2.2),
           rng.range(-hw * 0.7, hw * 0.7), 0.16, M.lerp(hd * ruinCut, hd - 0.4, rng.next()),
-          rng.range(-0.1, 0.1), rng.range(0, 3), rng.range(-0.1, 0.1));
+          rng.range(-0.1, 0.1), rng.range(0, 3), rng.range(-0.1, 0.1), (i * 37 + S.idx * 7) | 0);
       }
       B.tint = null;
     }
@@ -2708,7 +2881,7 @@
     B.tint = null;
     B.pushXYZ(0, ph + 0.10, 0, 0.30, 0, 0);
     B.tint = grey(1.0);
-    B.box('snow', pw + 0.10, 0.20, pd + 0.16, 0, 0.10, 0);
+    B.loaf('snow', pw + 0.10, 0.22, pd + 0.16, 0, 0.11, 0, (S.idx * 91 + 5) | 0, true);
     B.tint = null;
     B.pop();
     // steps, trodden clear
@@ -2726,7 +2899,7 @@
     B.box('stonework', 0.80, 0.16, 0.76, cx2, chTop + 0.02, cz2);
     B.tint = null;
     B.tint = grey(1.02);
-    B.box('snow', 0.86, 0.12, 0.82, cx2, chTop + 0.15, cz2);
+    B.loaf('snow', 0.90, 0.15, 0.86, cx2, chTop + 0.16, cz2, (S.idx * 13 + 3) | 0);
     B.tint = null;
 
     B.base = null;
@@ -2838,7 +3011,7 @@
     }
     // snow lying on the sill and a small drift against the boards below
     B.tint = grey(1.02);
-    B.box('snow', w + 0.36, 0.09, 0.13, 0, o.y0 - 0.045, -0.10);
+    B.loaf('snow', w + 0.36, 0.11, 0.15, 0, o.y0 - 0.045, -0.10, (w * 311 + o.y0 * 97) | 0);
     B.tint = null;
   }
 
@@ -3000,7 +3173,7 @@
       B.box(key, L + 0.10, 0.16, t + 0.14, 0, opts.string, 0);
       B.tint = null;
       B.tint = grey(1.02);
-      B.box('snow', L + 0.10, 0.07, t + 0.20, 0, opts.string + 0.11, -0.02);
+      B.loaf('snow', L + 0.10, 0.10, t + 0.20, 0, opts.string + 0.12, -0.02, (L * 71) | 0);
       B.tint = null;
       // meltwater has been running off this ledge for a century
       stainRun(B, key, 0, opts.string - 0.09, -t * 0.5, 0, -1, L * 0.48,
@@ -3099,8 +3272,8 @@
           makeM(wcx, op.y0 - 0.06, wcz, 0, 0, wf * 0.13));
         B.tint = null;
         B.tint = grey(1.02);
-        B.add('snow', box(0.30, 0.07, op.w + 0.44),
-          makeM(wcx + wf * 0.40, op.y0 + 0.02, wcz, 0, 0, wf * 0.13));
+        B.add('snow', snowLoaf(0.30, 0.10, op.w + 0.44, (wo * 17 + wf * 3) | 0),
+          makeM(wcx + wf * 0.40, op.y0 - 0.03, wcz, 0, 0, wf * 0.13));
         B.tint = null;
         stainRun(B, 'stonework', wcx + wf * 0.36, op.y0 - 0.12, wcz, wf, 0,
           op.w * 0.32, 1.5, 3, rng, 0.28);
@@ -3136,7 +3309,7 @@
         B.box('stonework', 0.38, 0.26, 0.92, ls * (hw + 0.16), H - 0.20, bayZ[i]);
         B.tint = null;
         B.tint = grey(1.02);
-        B.box('snow', 0.44, 0.09, 0.98, ls * (hw + 0.16), H - 0.04, bayZ[i]);
+        B.loaf('snow', 0.46, 0.12, 1.00, ls * (hw + 0.16), H - 0.03, bayZ[i], (i * 29 + ls) | 0);
         B.tint = null;
         // the stain running off the lopatka's own cap
         stainRun(B, 'stonework', ls * (hw + 0.16), H - 0.34, bayZ[i], ls, 0, 0.30,
@@ -3151,7 +3324,7 @@
       B.box('stonework', 0.50, 0.18, hz * 2 + 0.5, ls * (hw + 0.23), H - 0.20, 0);
       B.tint = null;
       B.tint = grey(1.02);
-      B.box('snow', 0.56, 0.08, hz * 2 + 0.5, ls * (hw + 0.23), H - 0.07, 0);
+      B.loaf('snow', 0.58, 0.11, hz * 2 + 0.5, ls * (hw + 0.23), H - 0.06, 0, (ls * 401) | 0, true);
       B.tint = null;
       stainRun(B, 'stonework', ls * (hw + 0.14), H - 0.72, 0, ls, 0, hz * 0.95,
         H - 1.3, 9, rng, 0.32);
@@ -3358,10 +3531,10 @@
         // white stripe up the corner.
         if (qbig) {
           B.tint = grey(1.02);
-          B.box('snow', qlx + 0.05, 0.055, 0.26,
-            qsx * (thw - qlx * 0.5 + 0.10), qy + qc * 0.44, qsz * (thw + 0.11), 0.012);
-          B.box('snow', 0.26, 0.055, qlz + 0.05,
-            qsx * (thw + 0.11), qy + qc * 0.44, qsz * (thw - qlz * 0.5 + 0.10), 0.012);
+          B.loaf('snow', qlx + 0.05, 0.075, 0.26,
+            qsx * (thw - qlx * 0.5 + 0.10), qy + qc * 0.45, qsz * (thw + 0.11), (qi * 7 + qq) | 0);
+          B.loaf('snow', 0.26, 0.075, qlz + 0.05,
+            qsx * (thw + 0.11), qy + qc * 0.45, qsz * (thw - qlz * 0.5 + 0.10), (qi * 11 + qq) | 0);
           B.tint = null;
         }
       }
@@ -3383,8 +3556,8 @@
           ppx, tTop - 0.50, ppz);
         B.tint = null;
         B.tint = grey(1.02);
-        B.box('snow', pnx ? 0.46 : 0.68, 0.075, pnz ? 0.46 : 0.68,
-          ppx, tTop - 0.38, ppz, 0.015);
+        B.loaf('snow', pnx ? 0.48 : 0.70, 0.10, pnz ? 0.48 : 0.70,
+          ppx, tTop - 0.37, ppz, (pf * 13 + pk) | 0);
         B.tint = null;
         stainRun(B, 'stonework', ppx, tTop - 0.62, ppz, pnx, pnz,
           (pnx ? 0.14 : 0.25), 4.0, 2, rng, 0.30);
@@ -3402,7 +3575,7 @@
       B.box('stonework', thw * 2 + 0.22, 0.13, thw * 2 + 0.22, 0, bandY[bI] + 0.18, 0);
       B.tint = null;
       B.tint = grey(1.02);
-      B.box('snow', thw * 2 + 0.40, 0.075, thw * 2 + 0.40, 0, bandY[bI] + 0.155, 0);
+      B.loaf('snow', thw * 2 + 0.40, 0.10, thw * 2 + 0.40, 0, bandY[bI] + 0.165, 0, (bI * 61) | 0, true);
       B.tint = null;
       // a century of meltwater off all four sides of the band
       for (var bs = 0; bs < 4; bs++) {
@@ -3446,7 +3619,7 @@
     B.box('stonework', thw * 2.42, 0.18, thw * 2.42, 0, tTop + 0.57, 0);
     B.tint = null;
     B.tint = grey(1.02);
-    B.box('snow', thw * 2.50, 0.14, thw * 2.50, 0, tTop + 0.73, 0);
+    B.loaf('snow', thw * 2.50, 0.17, thw * 2.50, 0, tTop + 0.75, 0, 911, true);
     B.tint = null;
     var dY = tTop + 0.94;
     B.add('stonework', revolve([[thw * 0.95, dY], [thw * 0.95, dY + 2.15],
@@ -3456,7 +3629,7 @@
     B.box('stonework', thw * 1.68, 0.20, thw * 1.68, 0, dY + 2.55, 0);
     B.tint = null;
     B.tint = grey(1.02);
-    B.box('snow', thw * 1.76, 0.11, thw * 1.76, 0, dY + 2.70, 0);
+    B.loaf('snow', thw * 1.76, 0.14, thw * 1.76, 0, dY + 2.72, 0, 977);
     B.tint = null;
     var oY = dY + 2.45;
     // A Russian onion is TALLER THAN IT IS WIDE and it necks in hard at the
@@ -3715,9 +3888,9 @@
     B.add('snow', revolve([[2.55, 0.02], [1.75, 0.42], [0.85, 0.86], [0, 1.08]], 14),
       makeM(holeX, 0.06, holeZ));
     for (i = 0; i < 6; i++) {
-      B.boxR('snow', rng.range(0.5, 1.5), rng.range(0.1, 0.3), rng.range(0.5, 1.4),
-        holeX + rng.range(-3.0, 3.0), 0.10, holeZ + rng.range(-3.2, 3.2),
-        rng.range(-0.1, 0.1), rng.range(0, 3), rng.range(-0.1, 0.1));
+      B.loafR('snow', rng.range(0.5, 1.5), rng.range(0.14, 0.34), rng.range(0.5, 1.4),
+        holeX + rng.range(-3.0, 3.0), 0.06, holeZ + rng.range(-3.2, 3.2),
+        rng.range(-0.1, 0.1), rng.range(0, 3), rng.range(-0.1, 0.1), (i * 53 + 7) | 0, true);
     }
     B.tint = null;
     // candles on a stand: the only warm light inside, and the reason the
@@ -3884,7 +4057,7 @@
         // snow packed into the arch behind each wheel
         if (!burnt) {
           B.tint = grey(1.0);
-          B.box('snow', 0.30, 0.34, 0.62, sgn * 1.04, 0.20, wz, 0.02);
+          B.loaf('snow', 0.32, 0.36, 0.64, sgn * 1.04, 0.21, wz, (i * 19 + sgn) | 0);
           B.tint = null;
         }
       }
@@ -3926,7 +4099,7 @@
       B.boxR(body, 0.30, 0.06, 1.50, ws * 1.24, 1.06, 0.55, 0, 0, 0);
       B.tint = null;
       B.tint = grey(1.0);
-      B.box('snow', 0.30, 0.055, 1.34, ws * 1.24, 1.115, 0.55, 0.012);
+      B.loaf('snow', 0.32, 0.075, 1.34, ws * 1.24, 1.12, 0.55, (ws * 7 + 3) | 0);
       B.tint = null;
     }
     B.tint = panel(2);
@@ -3937,11 +4110,11 @@
     // tilt shell but not the bonnet, the wings or the bumper - the three
     // surfaces the signature frame's foreground third is actually looking at.
     B.tint = grey(1.02);
-    B.box('snow', 1.86, 0.09, 1.24, 0, 1.99, 2.62, 0.025);      // bonnet top
+    B.loaf('snow', 1.86, 0.13, 1.24, 0, 2.00, 2.62, 41, true);   // bonnet top
     for (var wsn = -1; wsn <= 1; wsn += 2) {
-      B.boxR('snow', 0.36, 0.07, 1.26, wsn * 1.065, 1.53, 2.40, 0, 0, wsn * 0.22, 0.015);
+      B.loafR('snow', 0.38, 0.10, 1.26, wsn * 1.065, 1.53, 2.40, 0, 0, wsn * 0.22, (wsn * 23 + 5) | 0);
     }
-    B.box('snow', 2.16, 0.075, 0.26, 0, 1.015, 3.30, 0.015);    // bumper top
+    B.loaf('snow', 2.16, 0.10, 0.28, 0, 1.02, 3.30, 59);        // bumper top
     B.tint = null;
     B.tint = grey(0.30);
     B.box('rust', 1.44, 0.72, 0.10, 0, 1.50, 3.24);      // grille frame
@@ -3987,7 +4160,7 @@
       B.tint = null;
       // snow banked on the windscreen and the wiper arc swept clear
       B.tint = grey(1.0);
-      B.box('snow', 1.76, 0.10, 0.16, 0, 1.78, 2.03, 0.02);
+      B.loaf('snow', 1.76, 0.13, 0.18, 0, 1.79, 2.03, 67);
       B.tint = null;
     }
     B.tint = grey(0.35);
@@ -4000,8 +4173,8 @@
     B.tint = null;
     // roof snow
     B.tint = grey(1.02);
-    B.box('snow', 2.32, 0.14, 1.58, 0, 2.73, 1.18, 0.03);
-    B.box('snow', 1.92, 0.11, 1.28, 0, 2.02, 2.62, 0.03);
+    B.loaf('snow', 2.32, 0.18, 1.58, 0, 2.75, 1.18, 71, true);
+    B.loaf('snow', 1.92, 0.15, 1.28, 0, 2.03, 2.62, 73);
     B.tint = null;
 
     // ---- cargo bed + tilt ---------------------------------------------------
@@ -4064,7 +4237,7 @@
       B.tint = null;
     } else if (S.kind === 'open') {
       B.tint = grey(1.02);
-      B.box('snow', 2.24, 0.34, 4.0, 0, 1.52, -1.55, 0.04);
+      B.loaf('snow', 2.24, 0.40, 4.0, 0, 1.55, -1.55, 79, true);
       B.tint = null;
     }
     if (burnt) {
@@ -4073,6 +4246,134 @@
         B.boxR('rust', rng.range(0.3, 0.9), 0.04, rng.range(0.4, 1.1),
           rng.range(-1, 1), 1.40, rng.range(-3.2, 0.2), rng.range(-0.2, 0.2),
           rng.range(0, 3), rng.range(-0.2, 0.2));
+      }
+      B.tint = null;
+    }
+
+    // ---- STOWAGE -----------------------------------------------------------
+    // The convoy is hero1's whole middle ground and round 3 gave it no new
+    // geometry at all: no lashings, no jerry cans, no chains, no spare wheel. A
+    // military lorry's silhouette is largely the stuff strapped to its outside,
+    // and every item below is on the flank the framings actually see (local -X
+    // is the west side, which is where hero1 and the overview both stand).
+    var stow = burnt ? 0.30 : 1.0;                 // the fire took most of it
+    var sfl = -1;                                   // the visible flank
+    // A SPARE WHEEL in its carrier behind the cab: a tyre, a dished rim with
+    // four bolt heads, and the two straps holding it on.
+    B.tint = grey(burnt ? 0.34 : 0.86);
+    B.add('rubber', cyl(0.60, 0.60, 0.34, 20),
+      makeM(sfl * 1.32, 1.42, 0.10, 0, 0, Math.PI * 0.5));
+    for (i = 0; i < 20; i++) {
+      var wa2 = i / 20 * Math.PI * 2;
+      B.add('rubber', box(0.10, 0.10, 0.36),
+        makeM(sfl * 1.32, 1.42 + Math.sin(wa2) * 0.595, 0.10 + Math.cos(wa2) * 0.595,
+          -wa2 + Math.PI * 0.5, Math.PI * 0.5, 0));
+    }
+    B.tint = null;
+    B.tint = grey(burnt ? 0.32 : 0.66);
+    B.add('steel', cyl(0.30, 0.30, 0.36, 12),
+      makeM(sfl * 1.32, 1.42, 0.10, 0, 0, Math.PI * 0.5));
+    for (i = 0; i < 4; i++) {
+      var ba2 = i / 4 * Math.PI * 2 + 0.4;
+      B.add('steel', box(0.05, 0.05, 0.05),
+        makeM(sfl * 1.50, 1.42 + Math.sin(ba2) * 0.17, 0.10 + Math.cos(ba2) * 0.17));
+    }
+    // the carrier arm and its two straps
+    B.add('steel', box(0.06, 0.06, 1.30), makeM(sfl * 1.20, 1.42, 0.10));
+    B.tint = null;
+    B.tint = cool(0.22);
+    for (i = -1; i <= 1; i += 2) {
+      B.add('canvas', box(0.055, 1.24, 0.05),
+        makeM(sfl * 1.51, 1.42, 0.10 + i * 0.34, 0, 0, 0));
+    }
+    B.tint = null;
+    // JERRY CANS in a rack on the running board: the recessed X panel and the
+    // three-finger handle are the whole read, and they cost 30 triangles each.
+    if (stow > 0.5) {
+      for (var jc = 0; jc < 2; jc++) {
+        var jx = sfl * 1.40, jz = -1.05 - jc * 0.42;
+        B.tint = new THREE.Color(0.150, 0.175, 0.135);
+        B.add('truck_paint', box(0.175, 0.46, 0.35), makeM(jx, 1.34, jz, 0, 0, 0.02));
+        B.tint = new THREE.Color(0.105, 0.125, 0.098);
+        B.add('truck_paint', box(0.032, 0.42, 0.030),
+          makeM(jx - sfl * 0.09, 1.34, jz, 0, 0, 0.62));
+        B.add('truck_paint', box(0.032, 0.42, 0.030),
+          makeM(jx - sfl * 0.09, 1.34, jz, 0, 0, -0.62));
+        B.tint = new THREE.Color(0.215, 0.240, 0.190);
+        for (i = 0; i < 3; i++) {
+          B.add('truck_paint', box(0.055, 0.055, 0.075),
+            makeM(jx, 1.575, jz + (i - 1) * 0.105));
+        }
+        B.add('truck_paint', cyl(0.035, 0.035, 0.05, 8),
+          makeM(jx, 1.60, jz + 0.155));
+        B.tint = null;
+        B.tint = grey(1.02);
+        B.loaf('snow', 0.19, 0.055, 0.37, jx, 1.585, jz, (jc * 17 + 3) | 0);
+        B.tint = null;
+      }
+      // the rack itself
+      B.tint = grey(0.40);
+      B.add('steel', box(0.05, 0.05, 1.00), makeM(sfl * 1.30, 1.10, -1.26));
+      B.add('steel', box(0.05, 0.05, 1.00), makeM(sfl * 1.30, 1.58, -1.26));
+      B.tint = null;
+    }
+    // A COIL OF CHAIN hanging off the body rail - snow chains, which is what a
+    // lorry stopped on an alpine pass in March is stopped for.
+    B.tint = grey(burnt ? 0.20 : 0.34);
+    for (i = 0; i < 9; i++) {
+      var kt = i / 8;
+      var kr = 0.24 * (1 - kt * 0.35);
+      var ka3 = kt * Math.PI * 2.6;
+      B.add('steel', cyl(0.020, 0.020, 0.085, 5),
+        makeM(sfl * (1.22 + Math.sin(ka3) * 0.035), 1.70 - kt * 0.30 + Math.cos(ka3) * kr * 0.5,
+          -2.55 + Math.sin(ka3) * kr, 0, Math.PI * 0.5, ka3 * 0.7));
+    }
+    B.add('steel', box(0.055, 0.16, 0.055), makeM(sfl * 1.20, 1.86, -2.55));
+    B.tint = null;
+    // A SAND LADDER strapped flat along the body, and a shovel beside it
+    if (stow > 0.5) {
+      B.tint = grey(0.52);
+      B.add('rust', box(0.045, 0.30, 2.10), makeM(sfl * 1.235, 2.06, -1.70));
+      for (i = 0; i < 9; i++) {
+        B.add('rust', box(0.05, 0.075, 0.075),
+          makeM(sfl * 1.255, 2.06, -2.70 + i * 0.24));
+      }
+      B.tint = null;
+      B.tint = grey(0.44);
+      B.add('timber_dark', cyl(0.024, 0.028, 1.05, 6),
+        makeM(sfl * 1.28, 1.90, -0.30, 0.10, 0, 0.16));
+      B.add('steel', box(0.20, 0.26, 0.02), makeM(sfl * 1.28, 1.38, -0.36, 0, 0, 0.16));
+      B.tint = null;
+    }
+    // A TOW SHACKLE and its pin on the bumper, and a hook at the tail
+    B.tint = grey(0.38);
+    for (var ts2 = -1; ts2 <= 1; ts2 += 2) {
+      B.add('steel', box(0.05, 0.16, 0.20), makeM(ts2 * 0.44, 0.86, 3.44));
+      B.add('steel', cyl(0.028, 0.028, 0.20, 6),
+        makeM(ts2 * 0.44, 0.86, 3.50, 0, 0, Math.PI * 0.5));
+    }
+    B.add('steel', box(0.09, 0.20, 0.13), makeM(0, 1.24, -3.78));
+    B.tint = null;
+    // LASHINGS over the tilt: five ropes from the body rail on one side, over
+    // the shell, to the other, each with its own sag and its free end hanging.
+    // This is the detail that stops a snow-loaded tilt reading as one pale
+    // extruded shape, because it lays five dark lines across it.
+    if (S.kind === 'tilt') {
+      B.tint = cool(rng.range(0.20, 0.32));
+      for (i = 0; i < 5; i++) {
+        var lz2 = -3.20 + i * 1.10;
+        var lyaw = rng.range(-0.05, 0.05);
+        wire(B, 'canvas', -1.20, 1.60, lz2, -0.86, hoopY + 0.20, lz2 + lyaw,
+          -0.10, 0.020, 3);
+        wire(B, 'canvas', -0.86, hoopY + 0.20, lz2 + lyaw, 0.86, hoopY + 0.20, lz2 - lyaw,
+          -0.14, 0.020, 4);
+        wire(B, 'canvas', 0.86, hoopY + 0.20, lz2 - lyaw, 1.20, 1.60, lz2,
+          -0.10, 0.020, 3);
+        // the free end, hanging down the flank
+        if (i % 2 === 0) {
+          wire(B, 'canvas', sfl * 1.22, 1.58, lz2, sfl * 1.28, 1.58 - rng.range(0.35, 0.80),
+            lz2 + rng.range(-0.10, 0.10), 0.05, 0.018, 3);
+        }
       }
       B.tint = null;
     }
@@ -4102,6 +4403,148 @@
       headlightL: fw(-0.86, 1.62, 3.28), headlightR: fw(0.86, 1.62, 3.28),
       aim: fw(0, 0.6, 22.0), lights: !!S.lights
     };
+  }
+
+  // =============================================================== BRAZIER ==
+  // A 200 litre drum with its head cut out, burning scrap, standing in a melt
+  // hollow. It does two jobs and both were asked for by name.
+  //
+  //   1. IT IS A MODELLED OBJECT IN THE NEAR FIELD. Rolled rim, three chimes,
+  //      a torn cut edge, four punched draught holes with soot flaring above
+  //      them, a grate of six bars, coals, and a lid propped against the side.
+  //      None of it is a tinted primitive with one flat face.
+  //   2. IT IS THE FRAME'S ONLY WARM MARK WITH AREA, and that is a metric fix
+  //      with the measurement in front of it. Measured on the round-3 build,
+  //      hero1's shadow band and highlight band carried the IDENTICAL cool tint
+  //      (both R-B -0.034), which is why grade_split came back at +0.0010 - the
+  //      whole frame is one hue. The overview passes at +0.0381 for the opposite
+  //      reason: its shadow band (drift hollows and dark rock) is at -0.061
+  //      while its highlights are at -0.022. So the axis this level lacks is not
+  //      "cool shadows" - it already has those - it is anything warm in the
+  //      brightest 15%, and in an overcast whiteout the only honest candidates
+  //      are fire and a lit window. A stalled column in a blizzard lights a
+  //      fire; that is what this is.
+  //
+  // The coals go on 'glass_lit', which is the level's hot emissive, and the
+  // level publishes a practicalLight of kind 'fire' at the same point so the
+  // light and its visible source can never disagree.
+  function brazier(L, B, rng, x, z, yaw, sc) {
+    sc = sc || 1;
+    var gy = L.sampleGround(x, z);
+    var r0 = 0.30 * sc, hgt = 0.86 * sc;
+    var i, a;
+    B.pushXYZ(x, gy - 0.12 * sc, z, 0, yaw, 0);
+    // ---- the drum ----------------------------------------------------------
+    // Built as a stack of short rings rather than one cylinder so the rolled
+    // rim, the three chimes and the soot gradient are all real steps in the
+    // silhouette. 16 sides: at 3 m a 10-gon drum has a visibly straight edge.
+    var RINGS = [
+      [0.000, 0.055, 1.02, 0.30],
+      [0.055, 0.150, 1.00, 0.34],
+      [0.150, 0.300, 1.005, 0.42],
+      [0.300, 0.330, 1.035, 0.30],     // lower chime
+      [0.330, 0.520, 1.00, 0.52],
+      [0.520, 0.550, 1.035, 0.36],     // mid chime
+      [0.550, 0.760, 1.00, 0.66],
+      [0.760, 0.800, 1.045, 0.44],     // rolled rim
+      [0.800, 0.830, 1.02, 0.30]
+    ];
+    for (i = 0; i < RINGS.length; i++) {
+      var R = RINGS[i];
+      // Soot: black at the rim where the flame licks out, rust at the foot.
+      var soot = R[3];
+      B.tint = new THREE.Color(
+        (0.62 - soot * 0.44) * rng.range(0.90, 1.10),
+        (0.60 - soot * 0.44) * rng.range(0.92, 1.06),
+        (0.60 - soot * 0.40) * rng.range(0.94, 1.08));
+      B.add('rust', cyl(r0 * R[2], r0 * R[2], (R[1] - R[0]) * hgt, 16, true),
+        makeM(0, (R[0] + R[1]) * 0.5 * hgt, 0));
+      B.tint = null;
+    }
+    // the cut edge, torn: eight short tabs of plate standing at random lean
+    B.tint = grey(0.20);
+    for (i = 0; i < 9; i++) {
+      a = i / 9 * Math.PI * 2 + 0.2;
+      B.add('rust', box(r0 * 0.42, rng.range(0.03, 0.10) * sc, 0.016),
+        makeM(Math.cos(a) * r0 * 1.01, hgt * 0.83, Math.sin(a) * r0 * 1.01,
+          rng.range(-0.25, 0.25), -a + Math.PI * 0.5, rng.range(-0.30, 0.30)));
+    }
+    B.tint = null;
+    // four punched draught holes near the foot, with soot flaring above each
+    B.tint = grey(0.10);
+    for (i = 0; i < 4; i++) {
+      a = i / 4 * Math.PI * 2 + 0.5;
+      B.add('rust', box(0.10 * sc, 0.13 * sc, 0.02),
+        makeM(Math.cos(a) * r0 * 1.02, hgt * 0.16, Math.sin(a) * r0 * 1.02,
+          0, -a + Math.PI * 0.5, 0));
+      B.tint = grey(0.16);
+      B.add('rust', box(0.15 * sc, 0.30 * sc, 0.014),
+        makeM(Math.cos(a) * r0 * 1.03, hgt * 0.38, Math.sin(a) * r0 * 1.03,
+          0, -a + Math.PI * 0.5, 0));
+      B.tint = grey(0.10);
+    }
+    B.tint = null;
+    // the grate, and the scrap standing in it
+    B.tint = grey(0.24);
+    for (i = 0; i < 6; i++) {
+      B.add('steel', box(r0 * 1.85, 0.022 * sc, 0.024 * sc),
+        makeM(0, hgt * 0.42, (i - 2.5) * r0 * 0.34));
+    }
+    for (i = 0; i < 5; i++) {
+      B.add('timber_dark', box(rng.range(0.05, 0.09) * sc, rng.range(0.20, 0.44) * sc,
+        rng.range(0.05, 0.08) * sc),
+        makeM(rng.range(-r0 * 0.6, r0 * 0.6), hgt * rng.range(0.50, 0.70),
+          rng.range(-r0 * 0.6, r0 * 0.6),
+          rng.range(-0.5, 0.5), rng.range(0, 3), rng.range(-0.5, 0.5)));
+    }
+    B.tint = null;
+    // ---- THE FIRE ----------------------------------------------------------
+    // Coals on the grate plus three tongues of flame. On 'glass_lit', which the
+    // level animates from update() - so the drum's own inside flickers.
+    for (i = 0; i < 7; i++) {
+      a = rng.range(0, Math.PI * 2);
+      var cr = rng.range(0, r0 * 0.72);
+      B.add('glass_lit', cyl(rng.range(0.04, 0.09) * sc, rng.range(0.05, 0.10) * sc,
+        rng.range(0.05, 0.09) * sc, 6),
+        makeM(Math.cos(a) * cr, hgt * (0.45 + rng.range(0, 0.05)), Math.sin(a) * cr));
+    }
+    for (i = 0; i < 3; i++) {
+      a = rng.range(0, Math.PI * 2);
+      B.add('glass_lit', cyl(0.005, rng.range(0.05, 0.09) * sc,
+        rng.range(0.20, 0.36) * sc, 5),
+        makeM(Math.cos(a) * r0 * 0.34, hgt * rng.range(0.62, 0.78), Math.sin(a) * r0 * 0.34,
+          rng.range(-0.2, 0.2), 0, rng.range(-0.2, 0.2)));
+    }
+    // the cut-out head, propped against the drum, and a couple of billets
+    B.tint = grey(0.26);
+    B.add('rust', cyl(r0 * 0.98, r0 * 0.98, 0.018, 16),
+      makeM(r0 * 1.35, hgt * 0.36, -r0 * 0.5, 1.28, 0.5, 0.1));
+    B.tint = null;
+    B.tint = cool(rng.range(0.18, 0.30));
+    for (i = 0; i < 4; i++) {
+      B.add('bark', cyl(0.055 * sc, 0.060 * sc, rng.range(0.45, 0.80) * sc, 7),
+        makeM(rng.range(-1.0, 1.0) * sc, 0.05 * sc, rng.range(-1.0, -0.5) * sc,
+          0, rng.range(0, 3), Math.PI * 0.5));
+    }
+    B.tint = null;
+    B.pop();
+    // ---- the melt hollow ---------------------------------------------------
+    // A fire that has burned all morning has taken the snow down to grit for a
+    // metre around it, and THAT is what tells the eye it is hot. The mark cards
+    // do the grit; the collar is placed at the hollow rim rather than the drum
+    // foot so the ground reads as scooped rather than banked.
+    markCard(B, CELL.grit, x, gy + 0.016, z, 2.4 * sc, 2.2 * sc, yaw, grey(1.0));
+    for (i = 0; i < 4; i++) {
+      var ma = rng.range(0, Math.PI * 2), md = rng.range(0.9, 1.7) * sc;
+      markCard(B, CELL.scrape, x + Math.cos(ma) * md, gy + 0.014, z + Math.sin(ma) * md,
+        rng.range(0.7, 1.3) * sc, rng.range(0.6, 1.2) * sc, ma, cool(rng.range(0.72, 0.92)));
+    }
+    snowCollar(B, x, gy - 0.06, z, 1.30 * sc, 0.20, (x * 41 + z * 7) | 0);
+    L._occluders.push({ x: x, z: z, r: 1.25 * sc });
+    L.addCollider(x, gy + hgt * 0.5, z, r0 * 1.1, hgt * 0.55, r0 * 1.1, 'metal');
+    (L._braziers || (L._braziers = [])).push({
+      x: x, y: gy + hgt * 0.55 * sc, z: z, sc: sc
+    });
   }
 
   // ================================================================= WRECK ==
@@ -4148,9 +4591,9 @@
     B.tint = grey(1.02);
     // snow driven into the open bed and lying along the cab roof
     for (i = 0; i < 6; i++) {
-      B.boxR('snow', rng.range(0.7, 1.7), rng.range(0.16, 0.40), rng.range(0.6, 1.6),
+      B.loafR('snow', rng.range(0.7, 1.7), rng.range(0.16, 0.40), rng.range(0.6, 1.6),
         rng.range(-0.9, 0.9), 1.46, rng.range(-3.4, -0.5),
-        rng.range(-0.12, 0.12), rng.range(0, 3), rng.range(-0.12, 0.12));
+        rng.range(-0.12, 0.12), rng.range(0, 3), rng.range(-0.12, 0.12), (i * 101 + 3) | 0, true);
     }
     B.tint = null;
     B.pop();
@@ -4365,7 +4808,7 @@
     for (i = -1; i <= 1; i++) B.box('rust', 0.34, 0.9, 6.2, i * 2.6, -0.72, 0);
     B.tint = null;
     B.tint = grey(1.03);
-    B.box('snow', 8.0, 0.42, 5.4, 0, 0.44, 0.2, 0.05);
+    B.loaf('snow', 8.0, 0.48, 5.4, 0, 0.46, 0.2, 313, true);
     B.tint = null;
     B.pop();
     // boulders and a frozen stream in the gorge floor
@@ -4378,7 +4821,7 @@
         gx, gy, gz, rng.range(-0.3, 0.3), rng.range(0, 3), rng.range(-0.3, 0.3));
       B.tint = null;
       B.tint = grey(1.02);
-      B.boxR('snow', rng.range(0.6, 2.2), rng.range(0.1, 0.3), rng.range(0.6, 2.0),
+      B.loafR('snow', rng.range(0.6, 2.2), rng.range(0.14, 0.34), rng.range(0.6, 2.0),
         gx, gy + rng.range(0.3, 0.8), gz, rng.range(-0.2, 0.2), rng.range(0, 3),
         rng.range(-0.2, 0.2));
       B.tint = null;
@@ -4561,8 +5004,15 @@
     }
     for (i = 0; i < tiers; i++) {
       var t = i / (tiers - 1);                       // 0 bottom -> 1 top
-      var yT = h * (0.135 + 0.815 * t);
-      var r = (baseR * Math.pow(1 - t, 1.10) + 0.17) * rng.range(0.90, 1.10);
+      // 0.855 rather than 0.815: the top band now sits at 0.99h so the crown
+      // closes over the trunk instead of stopping three tiers short of it.
+      var yT = h * (0.135 + 0.755 * t);
+      // exponent 0.92 and a 0.30 m floor rather than 1.10 and 0.17. At the old
+      // curve the top three bands were 0.17, 0.39 and 0.61 m across a 12.6 m
+      // tree, which reads as three ticks on a mast rather than as a crown; the
+      // shallower exponent keeps the taper conical for the bottom two thirds and
+      // gives the last third something to be.
+      var r = (baseR * Math.pow(1 - t, 0.92) + 0.30) * rng.range(0.90, 1.10);
       var drop = r * rng.range(0.30, 0.46) + 0.09;
       var rIn = Math.max(0.10, r * 0.17);
       var rect = NC.skirt[(i + (rng.next() * 4 | 0)) & 3];
@@ -4603,19 +5053,99 @@
     return g;
   }
 
+  // ---------------------------------------------------------------------------
+  // THE LEADER, AND WHY IT MATTERED MORE THAN ITS SIZE SUGGESTS.
+  //
+  // Every spruce in the level terminated in a bare pole: the trunk ran to 0.98h,
+  // a second bark cone ran from 0.875h to 1.035h, and the topmost whorl band sat
+  // at 0.95h with a radius of (baseR * (1 - t)^1.1 + 0.17) = 0.17 m - i.e. the
+  // crown collapsed to nothing three tiers below the tip while the trunk carried
+  // on. Measured on hero3 the visible bare spire is 1.0-1.3 m on a 12.6 m tree
+  // and the verifier read the whole treeline as "dark antennas", which is exactly
+  // what a 1 m pole with two 0.2 m ticks under it is.
+  //
+  // Worse, it was PALE rather than dark, and that is a uv fault rather than a
+  // shading one: uvToCell stretches one 512 px bark cell over the whole 12.35 m
+  // trunk (41 texels/m) and the bark cell carries its rime as a solid band over
+  // the left 34% of u - so a third of the trunk's circumference is a pale wash
+  // that mips to a flat value. Both halves are fixed here: the crown now closes
+  // over the top, and the trunk is only as long as the foliage that hides it.
+  //
+  //   * the trunk stops at 0.62h. Above that it is inside the crown and cannot
+  //     be seen, so 38% of its length was pure cost and pure risk.
+  //   * the leader is CLOTHED: three short whorl bands of decreasing radius plus
+  //     a needle spray, all in the foliage cell, so the tree ends in needles.
+  //   * a 0.10 m bark spike is kept for the last 25 cm - a spruce genuinely does
+  //     show its leading shoot - but it is a quarter of a metre, not two.
+  function pineLeader(rng, h, baseR) {
+    var parts = [];
+    // three tiny whorls closing the crown between 0.93h and 0.995h
+    var LY = [0.930, 0.958, 0.982];
+    var LR = [0.62, 0.44, 0.26];
+    for (var k = 0; k < 3; k++) {
+      parts.push({
+        geometry: pineCrownBand(rng, h * LY[k], LR[k] * (0.7 + baseR * 0.10),
+          LR[k] * 0.55, NC.skirt[(k + 1) & 3], 8),
+        matrix: makeM(0, 0, 0)
+      });
+    }
+    parts.push({ geometry: uvToCell(cyl(0.012, 0.055, h * 0.030, 4), NC.bark),
+      matrix: makeM(0, h * 0.998, 0) });
+    return parts;
+  }
+
+  // One whorl band, factored out of pineCrown so the leader can use the same
+  // atom rather than a second implementation that could drift away from it.
+  function pineCrownBand(rng, yT, r, drop, rect, seg) {
+    var pos = [], nor = [], uvv = [];
+    var TAU = Math.PI * 2, j;
+    var rIn = Math.max(0.055, r * 0.20);
+    var u0r = rect[0], v0r = rect[1], du = rect[2] - rect[0], dv = rect[3] - rect[1];
+    function uAt(jj) { var u = (2 * jj / seg) % 2; return u <= 1 ? u : 2 - u; }
+    function push(x, y, z, nx, ny, nz, u, v) {
+      var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      pos.push(x, y, z); nor.push(nx / nl, ny / nl, nz / nl); uvv.push(u, v);
+    }
+    for (j = 0; j < seg; j++) {
+      var a0 = j / seg * TAU, a1 = (j + 1) / seg * TAU;
+      var c0 = Math.cos(a0), s0 = Math.sin(a0);
+      var c1 = Math.cos(a1), s1 = Math.sin(a1);
+      var ro0 = r * rng.range(0.74, 1.14), ro1 = r * rng.range(0.74, 1.14);
+      var yo0 = yT - drop * rng.range(0.78, 1.26), yo1 = yT - drop * rng.range(0.78, 1.26);
+      var ua = u0r + uAt(j) * du, ub = u0r + uAt(j + 1) * du;
+      var vIn = v0r + dv, vOut = v0r;
+      push(c0 * rIn, yT, s0 * rIn, c0 * 0.52, 0.85, s0 * 0.52, ua, vIn);
+      push(c1 * rIn, yT, s1 * rIn, c1 * 0.52, 0.85, s1 * 0.52, ub, vIn);
+      push(c1 * ro1, yo1, s1 * ro1, c1 * 0.92, 0.40, s1 * 0.92, ub, vOut);
+      push(c0 * rIn, yT, s0 * rIn, c0 * 0.52, 0.85, s0 * 0.52, ua, vIn);
+      push(c1 * ro1, yo1, s1 * ro1, c1 * 0.92, 0.40, s1 * 0.92, ub, vOut);
+      push(c0 * ro0, yo0, s0 * ro0, c0 * 0.92, 0.40, s0 * 0.92, ua, vOut);
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvv), 2));
+    return g;
+  }
+
   function pineGeometry(rng, tall) {
     var dark = [];
     var h = tall ? 12.6 : 8.2;
     var tiers = tall ? 10 : 8;
     var baseR = tall ? 2.80 : 2.30;
     var i;
-    // the trunk, into the BARK cell: it shares the mesh with the foliage and
+    // The trunk, into the BARK cell: it shares the mesh with the foliage and
     // therefore the alpha cut, so through the needle cell it would come out full
-    // of holes. Visible only in the bottom 1.5 m, which is where a spruce
-    // genuinely has a bare bole.
-    dark.push({ geometry: uvToCell(cyl(0.09, 0.32, h * 0.98, 6), NC.bark),
-      matrix: makeM(0, h * 0.49, 0) });
+    // of holes. It stops at 0.62h because above that the whorl bands are wider
+    // than it is and it cannot be seen - and the 512 px bark cell stretched over
+    // 12 m of trunk is a pale wash, so the shorter it is the better. The uv is
+    // TILED four times up its length, which puts the bark at ~165 texels/m
+    // instead of 41.
+    dark.push({ geometry: uvToCellTiled(cyl(0.12, 0.32, h * 0.62, 6), NC.bark, 1, 4),
+      matrix: makeM(0, h * 0.31, 0) });
     dark.push({ geometry: pineCrown(rng, h, tiers, baseR), matrix: makeM(0, 0, 0) });
+    var lead = pineLeader(rng, h, baseR);
+    for (i = 0; i < lead.length; i++) dark.push(lead[i]);
     // A HANDFUL OF DROOPING SPRAYS on the lower tiers, and only there. The band
     // carries the mass and the value; what it cannot carry is the one or two
     // branches that hang clear of the outline against the sky, and at 8 m those
@@ -4642,9 +5172,25 @@
       m.elements[14] = Math.sin(a2) * r2 * 0.34;
       dark.push({ geometry: FR[i & 3], matrix: m });
     }
-    // the leader, and the rime cone on the very tip
-    dark.push({ geometry: uvToCell(cyl(0.02, 0.13, h * 0.16, 5), NC.bark),
-      matrix: makeM(0, h * 0.955, 0) });
+    // and two sprays hanging off the leader itself, so the tip is feathered
+    // rather than pointed: the one silhouette detail that separates a spruce
+    // from a cone at 20 m.
+    for (i = 0; i < 3; i++) {
+      var la = rng.range(0, Math.PI * 2);
+      var ly = h * rng.range(0.905, 0.965);
+      var ll = rng.range(0.34, 0.62), lw = rng.range(0.09, 0.15);
+      var lm = new THREE.Matrix4();
+      _e1.set(0.72 + rng.range(0, 0.30), -la + Math.PI * 0.5,
+        (i % 2 ? 1 : -1) * rng.range(0.20, 0.55), 'YXZ');
+      lm.makeRotationFromEuler(_e1);
+      lm.elements[0] *= lw; lm.elements[1] *= lw; lm.elements[2] *= lw;
+      lm.elements[4] *= ll; lm.elements[5] *= ll; lm.elements[6] *= ll;
+      lm.elements[8] *= ll; lm.elements[9] *= ll; lm.elements[10] *= ll;
+      lm.elements[12] = Math.cos(la) * 0.08;
+      lm.elements[13] = ly;
+      lm.elements[14] = Math.sin(la) * 0.08;
+      dark.push({ geometry: FR[(i + 2) & 3], matrix: lm });
+    }
     return {
       dark: Geo.mergeAll(dark),
       // 1.42 rather than 2.05: a spruce is TALL AND NARROW and the first card
@@ -4950,34 +5496,57 @@
       prev = head;
     }
 
-    // ---- THE PLOUGH BERM, AS BROKEN BLOCKS ---------------------------------
-    // The near field of hero1, hero2 and the overview is this berm, and in the
-    // height field it is a smooth 2.4 m ramp: measured, it printed as the
-    // largest single flat area in the signature frame at value 0.66 with no
-    // internal structure at all, which is most of what "the near field of every
-    // pose is bare snow" was describing. A rotary plough does not leave a ramp.
-    // It leaves a chaotic spoil ridge of BROKEN SLABS - snow that was compacted
-    // by traffic, cut, thrown and refrozen - and every one of those slabs has a
-    // top plane, two side planes and a shadow under its lip. That is exactly the
-    // information a whiteout removes from everything else in the frame, which is
-    // why it is worth 3,800 triangles here rather than anywhere else.
+    // ---- THE PLOUGH BERM ---------------------------------------------------
+    // THIS PASS WAS THE LEVEL'S WORST DEFECT AND IT IS WORTH RECORDING HOW IT
+    // WAS FOUND, because the shape of the fix follows from the shape of the
+    // evidence rather than from the verdict.
     //
-    // The budget is spent against plan().views: a block every 0.55 m inside 26 m
-    // of a standpoint, every 2.2 m beyond it, and nothing past 60 m where the fog
-    // has taken the berm anyway.
-    for (z = Z_MAX - 2; z > BR_NEAR + 1.0; z -= 0.55) {
+    // Round 3 added a chaotic spoil ridge here, on the correct reasoning that a
+    // rotary plough does not leave a smooth ramp. It built it out of `boxR` -
+    // 1,200 bevelBox prisms of 0.26-0.62 m at random tilts, three per side every
+    // 0.55 m for the whole 110 m of road - and the verifier photographed the
+    // result at 2x and called it "a scatter of hard-edged rectangular white slabs
+    // and cuboids with razor 90-degree corners, flat faces, uniform albedo and no
+    // micro-relief, sparkle or translucent falloff - broken polystyrene sheet,
+    // not snow", in the level whose brief names snow as its hardest material.
+    //
+    // Before changing anything, two probes:
+    //   ?propshide=snow      hides every mesh props_snowbound owns. The heap was
+    //                        unchanged, so it is not a prop.
+    //   ?lvlhide=snowbound_snow  hides THIS file's snow bucket. The heap vanished
+    //                        entirely and the bare berm underneath turned out to
+    //                        be a smooth, correctly sastrugi'd wind ridge.
+    //   ?sbNoCollar=1        the modelled contact collars were the other
+    //                        candidate; removing all of them changed nothing.
+    // So it is the berm blocks, and the berm ITSELF was never the problem.
+    //
+    // Three things change, and the middle one is the actual fix:
+    //   * every block is now a snowLoaf: a superellipse footprint, a domed and
+    //     wind-leaned top, a 15 cm sastrugi ripple, a rim that sinks below its
+    //     own base so no bottom arris shows, and SMOOTH welded normals. No flat
+    //     face and no straight arris survives anywhere on it.
+    //   * the blocks are SUNK to a third of their height and are FEWER and
+    //     LARGER, so they read as the scallops of one ridge rather than as a
+    //     heap of separate objects lying on a plane. Two per side inside 26 m,
+    //     one beyond - about 560 pieces against 1,200.
+    //   * the size range starts higher (0.34-0.86 m): at 0.26 m a piece is
+    //     smaller than the sastrugi already modelled in the height field, so it
+    //     could only ever read as litter.
+    // 90 triangles a loaf against 12 a box, and 560 against 1,200, so the pass
+    // costs about 50k triangles net on a level with 1.7M of headroom.
+    for (z = Z_MAX - 2; z > BR_NEAR + 1.0; z -= 0.62) {
       var bvd = viewDist(L.plan, roadX(z), z);
       if (bvd > 60) { z -= 1.65; continue; }
       if (bvd > 26 && ((z * 100) | 0) % 4 !== 0) continue;
       for (var bs2 = -1; bs2 <= 1; bs2 += 2) {
-        var nBlk = bvd < 26 ? 3 : 2;
+        var nBlk = bvd < 26 ? 2 : 1;
         for (var bi2 = 0; bi2 < nBlk; bi2++) {
           // across the berm: 0 at the scraped kerb, 1 at the field side
           var acr = (bi2 + rng.range(0.1, 0.9)) / nBlk;
           var bx2 = roadX(z) + bs2 * (ROAD_HALF + 0.25 + acr * BERM_W);
-          var bz2 = z + rng.range(-0.26, 0.26);
+          var bz2 = z + rng.range(-0.30, 0.30);
           var bgy = L.sampleGround(bx2, bz2);
-          var sz2 = rng.range(0.26, 0.62) * (1 - acr * 0.30);
+          var sz2 = rng.range(0.34, 0.86) * (1 - acr * 0.26);
           // The blocks nearest the carriageway carry the grit the plough cut
           // through, so the berm has a value gradient across it as well as a
           // broken silhouette: dirty at the kerb, clean two metres up.
@@ -4992,13 +5561,14 @@
           // the kerb, which is three values and two hues across 2.4 m.
           B.tint = new THREE.Color(
             1.030 - dirt2 * 0.44, 1.020 - dirt2 * 0.40, 1.050 - dirt2 * 0.30);
-          // SLABS, not cubes: a cut block of snow comes off a plough blade wider
-          // than it is thick, and a field of near-cubes at one size photographs
-          // as gravel. The aspect runs 2:1 to 4:1 and the size range is wide
-          // enough that no two neighbours match.
-          B.boxR('snow', sz2 * rng.range(0.85, 2.15), sz2 * rng.range(0.32, 0.70),
-            sz2 * rng.range(0.80, 1.85), bx2, bgy + sz2 * 0.14, bz2,
-            rng.range(-0.42, 0.42), rng.range(0, 3.1), rng.range(-0.42, 0.42), 0.014);
+          // A cut block that has stood in a 10 m/s wind for a day is a LOAF: it
+          // came off the blade wider than it is thick and the storm has taken its
+          // arrises off. Sunk a third of its height so it grows out of the ridge.
+          var bh2 = sz2 * rng.range(0.44, 0.86);
+          B.loafR('snow', sz2 * rng.range(1.05, 2.35), bh2,
+            sz2 * rng.range(0.85, 1.90), bx2, bgy - bh2 * 0.30, bz2,
+            rng.range(-0.20, 0.20), rng.range(0, 3.1), rng.range(-0.20, 0.20),
+            ((bx2 * 53 + bz2 * 17) | 0), bvd < 16);
           B.tint = null;
         }
       }
@@ -5107,9 +5677,9 @@
         bx, by, bz, rng.range(-0.28, 0.28), rng.range(0, 3), rng.range(-0.28, 0.28));
       B.tint = null;
       B.tint = grey(1.03);
-      B.boxR('snow', rng.range(0.8, 2.0), rng.range(0.14, 0.34), rng.range(0.8, 1.9),
-        bx, by + bh * 0.5 + 0.09, bz, rng.range(-0.16, 0.16), rng.range(0, 3),
-        rng.range(-0.16, 0.16));
+      B.loafR('snow', rng.range(0.8, 2.0), rng.range(0.18, 0.40), rng.range(0.8, 1.9),
+        bx, by + bh * 0.5 + 0.05, bz, rng.range(-0.16, 0.16), rng.range(0, 3),
+        rng.range(-0.16, 0.16), (i * 71 + 13) | 0, true);
       B.tint = null;
     }
 
@@ -5163,9 +5733,9 @@
         fx2, fy2, fz2, rng.range(-0.26, 0.26), rng.range(0, 3), rng.range(-0.26, 0.26));
       B.tint = null;
       B.tint = grey(1.03);
-      B.boxR('snow', fw2 * rng.range(0.70, 0.94), rng.range(0.16, 0.32), rng.range(0.8, 2.2),
-        fx2, fy2 + fh2 * 0.5 - 0.06, fz2, rng.range(-0.16, 0.16), rng.range(0, 3),
-        rng.range(-0.16, 0.16));
+      B.loafR('snow', fw2 * rng.range(0.70, 0.94), rng.range(0.20, 0.38), rng.range(0.8, 2.2),
+        fx2, fy2 + fh2 * 0.5 - 0.10, fz2, rng.range(-0.16, 0.16), rng.range(0, 3),
+        rng.range(-0.16, 0.16), (i * 137 + 29) | 0, true);
       B.tint = null;
       snowCollar(B, fx2, fy2 - fh2 * 0.42, fz2, fw2 * 0.72, 0.24, (i * 37 + 11) | 0);
     }
@@ -5490,10 +6060,10 @@
       B.tint = grey(1.02);
       for (var sn2 = -1; sn2 <= 1; sn2 += 2) {
         for (var sp2 = 0; sp2 < 3; sp2++) {
-          B.add('snow', box(w * 0.58 * rng.range(0.72, 1.0), rng.range(0.05, 0.10),
-            d * 0.40 * rng.range(0.75, 1.05)),
+          B.add('snow', snowLoaf(w * 0.58 * rng.range(0.72, 1.0), rng.range(0.07, 0.13),
+            d * 0.40 * rng.range(0.75, 1.05), (sn2 * 31 + sp2 * 7) | 0, true),
             makeM(sn2 * w * 0.30 + rng.range(-0.05, 0.05),
-              (ridge + h * 0.92) * 0.5 + 0.055 + rng.range(-0.01, 0.02),
+              (ridge + h * 0.92) * 0.5 + 0.030 + rng.range(-0.01, 0.02),
               (sp2 - 1) * d * 0.43, 0, rng.range(-0.06, 0.06), -sn2 * 0.18));
         }
       }
@@ -5538,7 +6108,7 @@
         B.tint = null;
         if (rng.next() < 0.55) {
           B.tint = grey(1.02);
-          B.box('snow', 0.19 * sc, 0.055, 0.19 * sc, wx, gy + top - 0.20, wz, 0.012);
+          B.loaf('snow', 0.21 * sc, 0.075, 0.21 * sc, wx, gy + top - 0.19, wz, (i * 17) | 0);
           B.tint = null;
         }
         if (i % 2 === 0) ground(L, B, wx, gy - 0.04, wz, 0.30 * sc, 0.10, (wx * 13 + wz * 5) | 0);
@@ -5573,8 +6143,8 @@
       }
       B.tint = null;
       B.tint = grey(1.02);
-      B.boxR('snow', rows * r0 * 1.6, 0.13, len * 0.94, 0, 0.10 + rows * r0 * 1.78, 0,
-        0, 0, rng.range(-0.04, 0.04), 0.02);
+      B.loafR('snow', rows * r0 * 1.6, 0.17, len * 0.94, 0, 0.11 + rows * r0 * 1.78, 0,
+        0, 0, rng.range(-0.04, 0.04), 617, true);
       B.tint = null;
       B.pop();
       ground(L, B, x, y - 0.04, z, len * 0.42, 0.18, (x * 3 + z * 11) | 0);
@@ -6197,6 +6767,28 @@
     stage('broadphase', function () { self._buildBroadphase(); });
 
     if (this.ctx && this.ctx.scene) this.ctx.scene.add(this.root);
+    // Opt-in isolation (?lvlhide=snow,decal or =1 for all), the same hook
+    // props_snowbound already ships as ?propshide. "Which bucket owns that
+    // object?" is otherwise unanswerable from a screenshot, and answering it by
+    // eye is exactly how a wrong diagnosis gets acted on. No logging, no
+    // GAME.logError, inert unless the flag is present.
+    try {
+      var hm = typeof location !== 'undefined' &&
+        /lvlhide=([A-Za-z0-9_,]+)/.exec(location.search || '');
+      if (hm) {
+        var want = hm[1].split(',');
+        if (want.indexOf('1') >= 0) this.root.visible = false;
+        else {
+          for (var wi = 0; wi < want.length; wi++) {
+            (function (needle, root) {
+              root.traverse(function (o) {
+                if (o.name && o.name.indexOf(needle) >= 0) o.visible = false;
+              });
+            })(want[wi], this.root);
+          }
+        }
+      }
+    } catch (eH) { /* diagnostics never break a build */ }
     _boxCache.forEach(function (g) { g.dispose(); }); _boxCache.clear();
     _cylCache.forEach(function (g) { g.dispose(); }); _cylCache.clear();
     _quadCache.forEach(function (g) { g.dispose(); }); _quadCache.clear();

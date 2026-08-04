@@ -374,8 +374,18 @@
     // cylinder that reading fails on. The panel scale this entry's note is
     // arguing for is carried by the lap seams and the band rings, which are
     // real geometry standing 30-55 mm proud, not by the albedo.
+    // 0x968f85, NOT 0x8b9095, AND IT IS A HUE CHANGE AT CONSTANT VALUE.
+    // 0x8b9095 is BLUE-SHIFTED (R 139 < B 149), and the columns are the largest
+    // single area of it in the level. Measured on hero1, C1's shell came back
+    // R-B -0.0033 with 68.0% of its chromatic pixels COOL - on the tallest
+    // object in a frame whose brief assigns the upper plant to firelight - and a
+    // blue albedo is half of why: the level was fighting its own premise in the
+    // material as well as in the rig. Aluminium jacketing is not blue; weathered
+    // mill-finish sheet is a faintly warm grey. 0x968f85 is 143.8 in Rec.709
+    // against 143.3, i.e. the SAME value to within 0.4%, so nothing about the
+    // exposure argument in the two notes above moves - only the hue.
     lag:       { uv: 1.95, cast: true, recv: true, wear: false,
-                 base: 'painted_metal', albedoTarget: 0x8b9095,
+                 base: 'painted_metal', albedoTarget: 0x968f85,
                  rough: 0.58, metal: 0.42, env: 1.15, ns: 0.46 },
     // ---- TANK SHELL -----------------------------------------------------------
     // THE CAMOUFLAGE WAS THE BASE MAP, and it took three passes to find because
@@ -755,6 +765,43 @@
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
     g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
     return g;
+  }
+
+  // ---- MERCURY VAPOUR IS NOT A BLACKBODY, AND THAT IS THE WHOLE BUG ---------
+  // Note 2 at the head of the lamp rig says "WHITE IS NOT COOL" and then tries
+  // to buy cool with KELVIN, twice - 5400 -> 6600 -> 7600 - and the rig comment
+  // records both attempts as if they had landed. They did not, and the reason is
+  // arithmetic. GAME.Color.kelvin is a Planckian locus fit, and the locus is
+  // ASYMPTOTICALLY WHITE: at 6800 K it returns linear (0.955, 0.923, 1.000),
+  // whose R/B ratio is 0.955. Measured on the delivered hero1, the three 7600 K
+  // uplights put R-B -0.0033 on C1's shell and the 6600 K tank floods put
+  // +0.0844 on T2's - i.e. under a warm grade the "cold" fixtures print WHITE
+  // and then get graded WARM, and there is no kelvin that fixes it because the
+  // locus never gets past 0.93.
+  //
+  // A real mercury-vapour or metal-halide discharge is not a blackbody at all:
+  // it is line-dominated (405/436/546/578 nm), which is why an MV-lit yard
+  // photographs cyan-green next to sodium. `sodium` already gets exactly this
+  // treatment in lighting.js - GAME.Color.kelvin then x(1.0, 0.755, 0.34) - and
+  // the cold family never had the counterpart. This is it.
+  //
+  // LUMINANCE-PRESERVING BY CONSTRUCTION, so switching a fixture over is a HUE
+  // change and nothing else: the rotation is applied and then renormalised back
+  // to the blackbody's own Rec.709 luminance, and only then clamped so no
+  // channel exceeds 1 (three multiplies colour by intensity, and a channel over
+  // 1 would quietly re-scale every halo and bulb gain derived from it). The
+  // residual loss after the clamp is ~17% at amt 1, which is why every fixture
+  // converted below carries a matching ~1.2x on its candela.
+  function coldCol(kelvin, amt) {
+    var c = GAME.Color.kelvin(kelvin, new THREE.Color());
+    var a = amt === undefined ? 1.0 : M.clamp(amt, 0, 1);
+    var l0 = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+    c.setRGB(c.r * (1 - 0.45 * a), c.g * (1 - 0.10 * a), c.b);
+    var l1 = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+    if (l1 > 1e-5) c.multiplyScalar(l0 / l1);
+    var mx = Math.max(c.r, Math.max(c.g, c.b));
+    if (mx > 1) c.multiplyScalar(1 / mx);
+    return c;
   }
 
   // Colour helper: keep the tint bright (it multiplies albedo) but shift hue.
@@ -4717,6 +4764,61 @@
       new THREE.Vector3(SITE_X1 + 4, 52.0, SITE_Z1 + 4));
     this.anchors = buildAnchors(this.noise);
     this.sunDir = new THREE.Vector3(SUN_X, SUN_Y, SUN_Z).normalize();
+
+    // ---- THE DECLARATIVE LIGHT RIG ------------------------------------------
+    // Published on the level rather than in main.js's env profile because these
+    // are facts about THIS SITE's geometry, not about its hour, and lighting.js
+    // adopts them (via _adoptLevelRig) before the sky-visibility bake.
+    //
+    //  practicals / active  the rig below publishes 31 fixtures against the old
+    //      24-entry build cap, and BOTH numbers are set above that count on
+    //      purpose. `active` defaults to 24, which would install the per-frame
+    //      selection - and the selection splits its budget per LIGHT TYPE, so
+    //      with 27 spots and 4 points it resolves to 3 point slots and would
+    //      drop one of the three pump-house battens in favour of the flare
+    //      whenever the interior framing is captured (scored it: nearest batten
+    //      92, flare 1.94, far batten 1.64). Publishing active >= built keeps
+    //      _selBudget null, so every fixture is simply on and the frame is
+    //      deterministic.
+    //  svNormal 2.2  the sky-visibility grid over this site is 3.4 x 1.0 x 2.7 m
+    //      per cell (see svBox), so the shipped 0.60 m offset never leaves the
+    //      cell the wall is standing in and a wall in the open samples its own
+    //      occupancy. 2.2 is ~2/3 of a cell in x and clears it in z.
+    //  svFloor 0.10  the sun is 6.8 degrees UNDER the horizon: there is no key
+    //      to fill the shadows with, so the "no room is ever pitch black"
+    //      guarantee is the only floor the apron has. The two failing framings
+    //      are both failing on floor legibility.
+    //  shadowFill 0.20  scales with the key, so at this hour it is nearly inert
+    //      on the site and does its work on the far backdrop where the CSM still
+    //      has something to resolve. Cheap, and it cannot blow anything out.
+    //  beamPhase / beamFeather  the four surviving volumetric shells in the
+    //      level are all viewed obliquely, which is exactly where a normalised
+    //      Henyey-Greenstein term leaves the authored brightness alone; the
+    //      feather is what stops a shell printing a straight silhouette edge
+    //      across the sky, which this level has already had to fix twice by
+    //      zeroing beams outright.
+    this.lightRig = {
+      practicals: 40, active: 40,
+      svNormal: 2.2, svFloor: 0.10, svGamma: 0.80,
+      shadowFill: 0.20, beamPhase: 0.32, beamFeather: 0.40
+    };
+    // `amount` IS the ground albedo. SURF.pave is 0x787876 = 0.185 linear and
+    // SURF.road is 0x3c3c3c = 0.045; the site is ~80% apron by area, so 0.17 is
+    // the area-weighted answer rather than the 0.30-0.35 a bleached hardstanding
+    // would take. `lamps` is raised well above the 0.25 default because on a
+    // sunless level the lamp pools ARE the only thing arriving on the ground -
+    // there is no key term at all in the bracket at this hour - and the pools on
+    // this site are large and overlapping. ao 0.22: an open yard's undersides
+    // really do see the lit slab, so the term should barely be gated.
+    this.groundBounce = { amount: 0.17, ao: 0.22, lamps: 0.55, max: 1.2 };
+    // The default box is `bounds` + 4 m, which spends 26 of the volume's 26
+    // vertical cells on y -10.2..15.8 - nine metres of it underground, and the
+    // top cut off below the pipe bridges. It also spans 208 m in x for a site
+    // whose framings never look outside x -70..62. Re-centred: 3.36 x 1.00 x
+    // 2.66 m cells over the region the five poses actually use, with better
+    // than two cells of margin past the furthest surface that matters (T3's
+    // bund at x -70, the heater at x 61, the coolers at z -102).
+    this.svBox = { min: [-78, -3.0, -108], max: [70, 23.0, 94] };
   }
 
   // ---------------------------------------------------------------------------
@@ -5286,11 +5388,40 @@
     // lv_overview, which is the half of that frame the coverage metric weighs.
     // MASTS[0] is 100 m out and its pool is a receding note rather than a
     // working light.
+    //
+    // ---- ROUND 4: THE SIXTH AND SEVENTH COLUMNS, AND WHY TWO MASTS FLIPPED --
+    // The brief is "orange fire from above and cold floods from below" and the
+    // delivered frame measured it INVERTED: rows 0-140 of hero1 came back 11.8%
+    // warm / 76.4% cool and rows 430-560 came back 71.5% warm / 16.5% cool. The
+    // cause is not the flare and it is not the grade - it is that a 13.2 m head
+    // with `cone: 1.05` is a SIXTY-DEGREE half-angle, so the near cold mast puts
+    // more light on the structure BESIDE and ABOVE it than on the road beneath
+    // it. Measured off the geometry: from MASTS[2]'s head to the z = 6 pipe
+    // bridge is 12.4 m at 46 degrees off axis, i.e. inside the penumbra at
+    // ~4.3 lux, against 4.1 lux on the road it is aimed at. A "cold flood from
+    // below" that spends half its output on a bridge soffit 13 m up is a cold
+    // flood from ABOVE, which is the inversion, in one number.
+    //
+    // So the sixth column is a PER-MAST CONE. The two cold masts narrow to
+    // 0.70/0.80 rad, which drops their whole output onto the carriageway and
+    // takes the mercury off the bridge, the rack top and the column tops; the two
+    // sodium masts keep 1.05 because a wide warm wash down the road IS the
+    // level's amber rhythm. The seventh column is the explicit lamp CHROMATICITY
+    // (see coldCol at the head of the file): 6800 K on the Planckian locus is
+    // linear (0.955, 0.923, 1.000) and prints white, which is what note 2 above
+    // has been trying and failing to buy with kelvin since round 2.
+    //
+    // MASTS[1] flips from sodium to cold as well. Its pool lands 40-46 m ahead
+    // of the hero1 eye, which is the middle of the row band that measured 71.5%
+    // warm, and with the column row now flooded in sodium (see UPS below) the
+    // road no longer needs to carry the warm on its own. The leading line reads
+    // cold-cold-sodium-FIRE into depth: cool ground, warm plant, fire at the end.
+    //   x      z     aimX  aimZ  cold trim  cone
     var MASTS = [
-      [-9.9, -52.0, 3.0, -46.0, 0, 0.90],
-      [9.9, -20.0, -3.0, -14.0, 0, 1.00],
-      [-9.9, 12.0, -5.5, 9.0, 1, 1.00],
-      [9.9, 44.0, -3.0, 40.0, 0, 1.22]
+      [-9.9, -52.0, 3.0, -46.0, 0, 0.90, 1.05],
+      [9.9, -20.0, -3.0, -14.0, 1, 1.20, 0.80],
+      [-9.9, 12.0, -5.5, 9.0, 1, 1.02, 0.70],
+      [9.9, 44.0, -3.0, 40.0, 0, 1.22, 1.05]
     ];
     for (var mi = 0; mi < MASTS.length; mi++) {
       var mx = MASTS[mi][0], mz = MASTS[mi][1];
@@ -5339,10 +5470,18 @@
       // The pool itself is right - the road IS lit - it was the haze in front of
       // it that had to come down. The halo stays at 0.95, because that is the
       // lamp's own glow and it is what says "sodium" from a hundred metres.
+      // haloGain 0.44/0.72, not 0.60/0.95, and haloMax 2.0/2.4 rather than
+      // 2.4/2.9. MEASURED on the delivered hero1: both visible mast heads print
+      // as blown starbursts - the top-left head samples max 1.000 over a 40 px
+      // disc - and a lamp that reads as a white blob is a car-park lamp. The
+      // halo is the AIR around the source, not the source; the bloom threshold
+      // is already doing the "this is a light" work off the emissive lens.
       push('rf_mast_' + mi, mCold ? 'mercury' : 'sodium', mx, headY, mz,
-        mCold ? 6800 : 1980, Math.round((mCold ? 900 : 760) * MASTS[mi][5]), 46, 1.05, aimTo,
-        { haloMax: mCold ? 2.4 : 2.9, haloGain: mCold ? 0.6 : 0.95,
-          beam: mCold ? 0.24 : 0.32 });
+        mCold ? 6800 : 1980, Math.round((mCold ? 900 : 760) * MASTS[mi][5]), 46,
+        MASTS[mi][6], aimTo,
+        { haloMax: mCold ? 2.0 : 2.4, haloGain: mCold ? 0.44 : 0.72,
+          beam: mCold ? 0.24 : 0.32,
+          color: mCold ? coldCol(6800) : null });
     }
 
     // ---- 6-8. cold uplights on the column plinth --------------------------------
@@ -5414,7 +5553,7 @@
       // the climbing bracket and the conduit, so a 3.6 m stand is a real one
       B.strut('struct', ux, uy + 3.30, uz, ux - 0.52, uy + 2.55, uz, 0.055, 0.055);
       B.tube('rust', ux + 0.16, uy + 0.5, uz, ux + 0.16, uy + 3.30, uz, 0.032, 5);
-      floodHead(ux, uy + 3.62, uz, uaim, 1.35, false);
+      floodHead(ux, uy + 3.62, uz, uaim, 1.35, true);
       self.addCollider(ux, uy + 1.8, uz, 0.42, 1.8, 0.42, 'metal');
       // 6200 K, not 5600. The whole level is inside a warm grade with a warm
       // key; a mercury unit that is merely "not sodium" reads as white, and
@@ -5433,9 +5572,99 @@
       // 1050 rather than 1150: with the stand-off tripled the aim-point lux is
       // already up on where it was, and this trims the plinth pool the oblique
       // throw now lays down on its way to the shell.
-      push('rf_colup_' + ui, 'mercury', ux, uy + 3.62, uz, 7600, 1050, 60, 0.56, uaim,
-        { haloMax: 2.2, haloGain: 0.50, beam: 0.09 });
+      // ---- ROUND 4: SODIUM, NOT MERCURY, AND THIS IS THE HEADLINE CHANGE ----
+      // The critique is "you have built a refinery and then lit it like a car
+      // park", and these three fixtures are the reason. Measured on hero1: the
+      // flame reads R-B +0.2951, the derrick 5 m under it +0.0443, and then C1
+      // and C2 - 30-50 m from the fire and the tallest objects in the frame -
+      // read +0.0075 and -0.0173, with 68.0% of C1's chromatic pixels COOL.
+      // Three 7600 K uplights at a 14 m stand-off out-vote a 6200 cd flare on
+      // precisely the surfaces the brief assigns to the fire, and the frame
+      // inverts: cool above, warm below.
+      //
+      // The fix is not to dim them and it is not to re-aim them - the stand-off
+      // arithmetic above is right and stays. It is that a distillation column
+      // ANYWHERE IN THE WORLD is floodlit with high-pressure sodium, because HPS
+      // is what you hang on a hazardous-area plant, and that is why every night
+      // photograph of a refinery is orange. Turning the column floods warm puts
+      // the level's premise back the right way up in one change: the tallest
+      // objects in every framing become the warm mass, the cold moves to the
+      // ground where "cold floods from below" belongs (the two near road masts
+      // and four apron units, all now on an explicit mercury chromaticity), and
+      // the total warm/cool balance the last round bought at 43.0/42.9 is
+      // REDISTRIBUTED rather than swung back.
+      //
+      // 1260 rather than 1050: lighting.js multiplies a `sodium` kind by
+      // (1.00, 0.755, 0.34) after the blackbody, which is 0.778 of the luminance
+      // at equal candela, so this is the same light on the shell. The halo gain
+      // goes up with it because a sodium halo IS the fixture's signature at
+      // 70 m, and the emissive lens above flips warm with the lamp - a
+      // warm-glass fixture throwing blue-white light is the tell that a rig was
+      // retuned without its geometry.
+      push('rf_colup_' + ui, 'sodium', ux, uy + 3.62, uz, 2050, 1260, 60, 0.56, uaim,
+        { haloMax: 2.2, haloGain: 0.72, beam: 0.09 });
     }
+
+    // ---- 6b. THE UNIT LIGHTING MAST : "ORANGE FIRE FROM ABOVE" -------------
+    // MEASURED, AND IT IS THE OTHER HALF OF THE SAME FINDING. The flare cannot
+    // light the plant the signature frame sees, and that is geometry rather than
+    // a tuning failure: the hero1 eye stands at (-1.2, 26) and C1 at (28, -44),
+    // so the visible face of the column has an outward normal of (-0.38, +0.92)
+    // in XZ, while the flare at (34, -78) illuminates the face at (+0.17, -0.99)
+    // - a dot product of -0.973, i.e. the exactly opposite side. Every lumen the
+    // fire puts on the column row lands where the camera cannot see it. Raising
+    // the flare's range only re-orange-ises the ground, which is what round 2
+    // already had to undo.
+    //
+    // So the light that comes "from above" has to be MOUNTED above, and on a
+    // real unit it is: a lighting mast on the plinth, well clear of the columns,
+    // with a head frame at 18 m raking north up the row. Both heads throw at the
+    // SOUTH faces - the ones the frame is looking at - and the throw also lands
+    // on the east rack's top tier and 20 m of plinth deck on the way.
+    //
+    // The sightline was solved, not chosen: the axis from (22.5, 4.5) to
+    // (25.0, -24.0) passes x = 23.7 at z = -9, which is 5.3 m clear of C3's
+    // 2.1 m shell, and 4.0 m clear of C4 at (25.5, 2.0). Nothing occludes it.
+    (function () {
+      var x = 22.5, z = 4.5;
+      var g0 = gy(x, z);
+      var headY = g0 + 18.10;
+      B.paint = 'wall';
+      B.box('wall', 1.25, 0.66, 1.25, x, g0 + 0.16, z, 0.03);
+      B.paint = 'steel';
+      B.cyl('struct', 0.15, 0.29, 17.7, x, g0 + 8.95, z, 0, 0, 0, 12);
+      B.cyl('struct', 0.42, 0.42, 0.07, x, g0 + 0.52, z, 0, 0, 0, 14);
+      B.box('struct', 0.16, 0.13, 3.00, x, headY + 0.32, z, 0.012);
+      B.box('struct', 1.70, 0.13, 0.14, x, headY + 0.32, z, 0.012);
+      B.strut('struct', x, headY - 0.90, z, x, headY + 0.26, z - 1.35, 0.075, 0.075);
+      B.strut('struct', x, headY - 0.90, z, x, headY + 0.26, z + 1.35, 0.075, 0.075);
+      B.railRing(x, z, 0.90, headY - 1.60, 1.05, 12);
+      B.ring('grate', 0.32, 0.94, x, headY - 1.60, z, 12);
+      B.ladder(x + 0.40, z, g0 + 0.9, headY - 1.75, 0, true);
+      B.paint = 'steel';
+      B.tube('rust', x - 0.31, g0 + 0.6, z, x - 0.31, headY - 0.5, z, 0.040, 6);
+      B.paint = 'paint';
+      B.box('clad', 0.60, 1.02, 0.40, x - 0.86, g0 + 0.53, z + 0.40, 0.014);
+      B.paint = 'flat';
+      decalCard(B, CELL.hazard, x, g0 + 0.05, z, 2.4, 0.58, 'y', 1.1);
+      B.paint = 'steel';
+      self.addCollider(x, g0 + 8.9, z, 0.34, 8.9, 0.34, 'metal');
+
+      // Head A: the long throw, at C2's shell 16 m up and 29 m north. Solved as
+      // I = E * d^2 for 1.5 lux at the aim -> 1310, trimmed to 1150 because the
+      // cone crosses 20 m of plinth deck on its way and that deck is the right
+      // third of the signature frame.
+      var aimA = [25.0, g0 + 15.5, -24.0];
+      floodHead(x - 0.72, headY, z, aimA, 1.35, true);
+      push('rf_unithi_0', 'sodium', x - 0.72, headY, z, 2050, 1150, 56, 0.44, aimA,
+        { haloMax: 2.2, haloGain: 0.66, beam: 0.05 });
+
+      // Head B: the near throw, down onto C4, C3's skirt and the plinth itself.
+      var aimB = [26.5, g0 + 8.0, -11.0];
+      floodHead(x + 0.72, headY, z, aimB, 1.35, true);
+      push('rf_unithi_1', 'sodium', x + 0.72, headY, z, 2050, 780, 38, 0.58, aimB,
+        { haloMax: 2.0, haloGain: 0.60, beam: 0.05 });
+    })();
 
     // ---- 9-11. tank-farm floods on the bund wall ---------------------------------
     // ---- WHY THESE ARE NOT ON THE BUND WALL --------------------------------
@@ -5480,8 +5709,37 @@
       B.paint = 'steel';
       B.tube('rust', tx + 0.22, tg0 + 0.5, tz, tx + 0.22, ty - 0.4, tz, 0.032, 5);
       self.addCollider(tx, tg0 + 4.7, tz, 0.28, 4.7, 0.28, 'metal');
-      push('rf_tank_' + ti, 'mercury', tx, ty, tz, 6600, 900, 68, 0.95, taim,
-        { haloMax: 2.4, haloGain: 0.50, beam: 0.26 });
+      // ---- 430, NOT 900, AND THE FOUR FAILED MATERIAL PASSES ON `tank` WERE
+      // ---- LOOKING AT THE WRONG LAYER --------------------------------------
+      // SURF.tank records six changes to its uv and two to its albedoTarget,
+      // all chasing the same symptom: T2's shell fills the left quarter of
+      // hero3 at cell medians of 0.39-0.79 against a frame median of 0.20. No
+      // material change moved it, and the reason is that the defect is not in
+      // the material - it is that THE FIXTURE STANDS WHERE THE CAMERA STANDS.
+      // TF[1]'s mast is at (-26, -22) and the hero3 eye is at (-26, -6): same
+      // x, 16 m apart. Tracing TF[1]'s axis onto T2 (centre -50, -7, r 14.5)
+      // gives a hit at (-37.5, 5.5, -14.3) at 14.4 m, and the shell normal
+      // there is (0.862, -0.503) against a light direction of (-0.833, 0.555)
+      // - a cosine of 0.997, i.e. DEAD NORMAL INCIDENCE. That is a flashgun
+      // mounted on the lens: 4.3 lux with no terminator anywhere on a curved
+      // surface, so there is no shading gradient for any albedo or any tiling
+      // to modulate. Re-aiming cannot fix it either (I solved the far-shoulder
+      // aim: the ray enters the cylinder at the same point, 14 m out) because
+      // the ONLY free variable at a 14 m stand-off is flux.
+      //
+      // So: 430 cd with the cone widened to 1.12, which puts ~1.4 lux peak on
+      // the plate. The shell drops from a near-white wall to a dark curve with
+      // a lit lower third and its roof rim against the twilight band, which is
+      // what the hero3 pose note has asked for since it was written ("the tanks
+      // are pure silhouette against the brightest sky in the level"). The
+      // widened cone is what keeps the bund floor and the apron in front of it
+      // inside the spill at the lower flux, and `rf_bundapron` below replaces
+      // the ground light this gives up. `color` is the explicit mercury
+      // chromaticity: at 6600 K on the locus these floods measured R-B +0.0844
+      // with 97.3% of the shell's chromatic pixels WARM - a "cold flood" that
+      // was printing warmer than the road it was supposed to contrast with.
+      push('rf_tank_' + ti, 'mercury', tx, ty, tz, 6600, 430, 68, 1.12, taim,
+        { haloMax: 2.2, haloGain: 0.46, beam: 0.22, color: coldCol(6600) });
     }
 
     // ---- 12-13. floods off the west rack, down onto the road ---------------------
@@ -5515,9 +5773,74 @@
       // 6800 K. These are the only cold light landing on the ROAD, which is the
       // bottom third of the signature frame; at 5200 the carriageway was pure
       // sodium and the frame had no cool anywhere below the skyline.
-      push('rf_rack_' + ri, 'mercury', rx + rsd * 0.95, ry + 0.30, rz, 6800, 820, 42, 0.78, raim,
-        { haloMax: 2.0, haloGain: 0.48, beam: 0.45 });
+      // 980 rather than 820, and an explicit mercury chromaticity. These two and
+      // the four apron units are now the whole cold half of the level, so they
+      // have to actually be cold: coldCol costs ~17% of the luminance after the
+      // channel clamp and the candela carries it back.
+      push('rf_rack_' + ri, 'mercury', rx + rsd * 0.95, ry + 0.30, rz, 6800, 980, 42, 0.78, raim,
+        { haloMax: 2.0, haloGain: 0.44, beam: 0.45, color: coldCol(6800) });
     }
+
+    // ---- 13b-13d. THE WEST RACK'S WEST FLANK, AND THE APRON UNDER IT --------
+    // MEASURED, AND IT IS EVERY ONE OF hero3's EIGHT FAILING CELLS. On an 8x8
+    // grid that framing reads 0.587-0.781 down the two LEFT columns (T2's shell)
+    // and 0.034-0.086 down the two RIGHT ones, and all eight cells below the
+    // 0.045 floor are in columns 6 and 7. Those two columns subtend 20-40
+    // degrees east of the frame axis, which from the (-26, -6) mark is the WEST
+    // PIPE RACK at x -19.3..-10.7 between z -20 and z -60, eleven to thirty
+    // metres away and filling rows 150-450. It is the single largest object in
+    // that half of the frame and it has NO fixture pointed at it: rf_rack_1
+    // hangs on the same west leg line but aims AWAY, west at the tank apron;
+    // rf_deck is 15 m up on the walkway aimed inboard across the tiers; rf_tank
+    // is 30 m out aimed at a shell. The rack's west flank has never been lit.
+    //
+    // Two floods, bracketed off the west leg line at 6.2 and 9.6 m and raking
+    // ALONG the flank from opposite ends, which is what a plant puts down an
+    // aisle a truck reverses into. Cross-lighting a lattice from both ends is
+    // also the only way to make one read as depth rather than as a flat black
+    // grille: every bent gets a lit face and a shaded face, and the two sets
+    // disagree, so the eye counts them.
+    //
+    // Sodium, because this is the rack the hero2 framing stands ON and the hero1
+    // framing looks along, and the brief's warm half belongs on the plant. The
+    // COLD in this corner of the site is rf_bundapron below, on the ground.
+    (function () {
+      var lx = WR_X - WR_HALF - 0.35;            // just outboard of the west legs
+      var RK = [
+        // z     headY   aimX   aimY  aimZ    cd   cone  dist
+        [-2.0, 6.20, -18.4, 3.9, -30.0, 640, 0.50, 42],
+        [-52.0, 9.60, -18.4, 4.6, -28.0, 560, 0.50, 40]
+      ];
+      for (var k = 0; k < RK.length; k++) {
+        var rz2 = RK[k][0];
+        var g1 = gy(lx, rz2);
+        var hy = g1 + RK[k][1];
+        var am = [RK[k][2], gy(RK[k][2], RK[k][4]) + RK[k][3], RK[k][4]];
+        B.paint = 'steel';
+        B.strut('struct', lx + 0.85, hy, rz2, lx + 0.10, hy + 0.10, rz2, 0.07, 0.07);
+        B.tube('rust', lx + 0.90, hy - 4.2, rz2 + 0.12, lx + 0.90, hy - 0.1, rz2 + 0.12,
+          0.030, 5);
+        floodHead(lx, hy + 0.10, rz2, am, 1.25, true);
+        push('rf_wflank_' + k, 'sodium', lx, hy + 0.10, rz2, 2100, RK[k][5],
+          RK[k][7], RK[k][6], am, { haloMax: 2.0, haloGain: 0.62, beam: 0.05 });
+      }
+
+      // ...and the ground the hero3 eye is standing on, which is the other thing
+      // the tank floods were carrying before they came down. A wall pack on the
+      // same leg line at 5.6 m raking WEST across the apron and up the bund's
+      // east face: it is the cold in that corner, it is unobstructed because it
+      // stands on the outboard face of the rack rather than inside it, and its
+      // 12 m throw crosses the frame's lower middle where the bund wall is the
+      // leading line.
+      var bz2 = -17.0;
+      var bg = gy(lx, bz2);
+      var bam = [-30.4, gy(-30.4, -15.0) + 1.1, -15.0];
+      B.paint = 'steel';
+      B.strut('struct', lx + 0.85, bg + 5.60, bz2, lx + 0.05, bg + 5.66, bz2, 0.06, 0.06);
+      floodHead(lx - 0.05, bg + 5.66, bz2, bam, 1.30, false);
+      push('rf_bundapron', 'mercury', lx - 0.05, bg + 5.66, bz2, 6800, 720, 34, 0.88, bam,
+        { haloMax: 2.0, haloGain: 0.44, beam: 0.30, color: coldCol(6800) });
+    })();
 
     // ---- 14. flood off the east rack, up at the columns --------------------------
     (function () {
@@ -5529,8 +5852,8 @@
       floodHead(x + 0.9, y + 0.25, z, aim, 1.30, false);
       // beam 0.07: same finding as the column uplights. This cone runs 14 m
       // diagonally up across hero2's sky and was one of the four pale wedges.
-      push('rf_rack_e', 'mercury', x + 0.9, y + 0.25, z, 6800, 820, 44, 0.78, aim,
-        { haloMax: 2.0, haloGain: 0.48, beam: 0.07 });
+      push('rf_rack_e', 'mercury', x + 0.9, y + 0.25, z, 6800, 980, 44, 0.78, aim,
+        { haloMax: 2.0, haloGain: 0.44, beam: 0.07, color: coldCol(6800) });
     })();
 
     // ---- 15-17. the pump house interior ------------------------------------------
@@ -5669,8 +5992,76 @@
       decalCard(B, CELL.danger, x + 0.85, g0 + 0.85, z + 0.63, 0.55, 0.42, 'z');
       B.paint = 'steel';
       self.addCollider(x, g0 + 7.6, z, 0.36, 7.6, 0.36, 'metal');
-      push('rf_gate', 'mercury', x, headY, z, 6600, 1440, 70, 1.30, aim,
-        { haloMax: 2.6, haloGain: 0.52, beam: 0.30 });
+      // haloGain 0.34 / haloMax 2.0, not 0.52 / 2.6: on the delivered overview
+      // this head is the ugliest single element in the establishing frame - a
+      // blown white starburst dead centre of the bottom third. The pool is what
+      // the fixture is for; the halo was drawing attention to the lamp instead
+      // of to the truck park it lights. Explicit mercury chromaticity, and the
+      // candela carries the ~17% coldCol costs.
+      push('rf_gate', 'mercury', x, headY, z, 6600, 1700, 70, 1.30, aim,
+        { haloMax: 2.0, haloGain: 0.34, beam: 0.30, color: coldCol(6600) });
+    })();
+
+    // ---- 19b-19c. THE PERIMETER FLOODS : THE ESTABLISHING FRAME'S DEAD CORNERS
+    // MEASURED, AND IT IS ALL NINE of lv_overview's failing cells. On an 8x8
+    // grid the establishing frame reads 0.039/0.035/0.035 down the whole of
+    // column 0 in rows 5-7, and 0.035/0.037/0.034/0.035 across columns 5-7 in
+    // rows 6-7. I unprojected those cells against the published pose - eye
+    // (26, 30, 92), aim (-4, 1, -34), 75-degree vertical FOV - onto the apron
+    // plane, and they are two specific pieces of ground:
+    //
+    //   bottom-left  x -20..-57, z 50..75  the south-west apron quadrant. The
+    //       nearest fixture of any kind is rf_mast_3 at (9.9, 44), 35-70 m away
+    //       and aimed at the road.
+    //   bottom-right x 37..60, z 46..62  the EAST half of the gate compound and
+    //       the strip out to the fence. rf_gate is 15.4 m up at (21, 60) but its
+    //       axis points WEST at (10, 62): I traced it, and (50, 55) sits 98
+    //       degrees off that axis, i.e. completely outside a 74-degree cone. The
+    //       truck park's east half has never had a photon.
+    //
+    // Two 15.4 m / 12.4 m perimeter masts, sited by solving the cone against the
+    // unprojected cell centres rather than by eye. Every one of the nine cells is
+    // inside a cone at 0.38 lux or better against a 0.045 luminance floor, and
+    // the SW mast at (-24, 68) additionally stands as a lit vertical in the one
+    // corner of the establishing shot that had no readable content at all.
+    // MERCURY, because these are the two largest new pools in the level and the
+    // brief's cold half is the ground.
+    (function () {
+      // tag    x      z    headY  aimX   aimZ   cd    cone  dist
+      var PM = [
+        ['sw', -24.0, 68.0, 15.40, -36.0, 62.0, 1400, 1.20, 55],
+        ['se', 48.0, 62.0, 12.40, 52.0, 50.0, 850, 1.20, 42]
+      ];
+      for (var q = 0; q < PM.length; q++) {
+        var px = PM[q][1], pz = PM[q][2], hh = PM[q][3];
+        var g2 = gy(px, pz);
+        var hY = g2 + hh;
+        var aimP = [PM[q][4], gy(PM[q][4], PM[q][5]) + 0.30, PM[q][5]];
+        B.paint = 'wall';
+        B.box('wall', 1.15, 0.62, 1.15, px, g2 + 0.15, pz, 0.03);
+        B.paint = 'steel';
+        B.cyl('struct', 0.15, 0.27, hh - 0.5, px, g2 + (hh - 0.5) * 0.5 + 0.30, pz,
+          0, 0, 0, 10);
+        B.cyl('struct', 0.40, 0.40, 0.06, px, g2 + 0.50, pz, 0, 0, 0, 12);
+        B.box('struct', 2.10, 0.11, 0.13, px, hY + 0.29, pz, 0.012);
+        B.strut('struct', px, hY - 0.72, pz, px - 0.92, hY + 0.24, pz, 0.065, 0.065);
+        B.strut('struct', px, hY - 0.72, pz, px + 0.92, hY + 0.24, pz, 0.065, 0.065);
+        floodHead(px - 0.78, hY, pz, aimP, 1.30, false);
+        floodHead(px + 0.78, hY, pz,
+          [aimP[0] + 11.0, aimP[1], aimP[2] + (q === 0 ? 9.0 : 8.0)], 1.30, false);
+        B.paint = 'steel';
+        B.tube('rust', px + 0.28, g2 + 0.6, pz, px + 0.28, hY - 0.45, pz, 0.036, 5);
+        B.paint = 'paint';
+        B.box('clad', 0.52, 0.92, 0.36, px + 0.72, g2 + 0.48, pz + 0.38, 0.013);
+        B.paint = 'flat';
+        decalCard(B, CELL.hazard, px, g2 + 0.05, pz, 2.2, 0.56, 'y', 0.9 + q);
+        B.paint = 'steel';
+        self.addCollider(px, g2 + (hh - 0.5) * 0.5 + 0.3, pz, 0.32, (hh - 0.5) * 0.5,
+          0.32, 'metal');
+        push('rf_perim_' + PM[q][0], 'mercury', px, hY, pz, 6600, PM[q][6], PM[q][8],
+          PM[q][7], aimP,
+          { haloMax: 2.0, haloGain: 0.36, beam: 0.06, color: coldCol(6600) });
+      }
     })();
 
     // ---- the heater platform, now a FIXTURE rather than a practical ----------
@@ -5743,7 +6134,7 @@
       var aim = [FL_X - 1.5, gy(FL_X, FL_Z) + 26.0, FL_Z - 1.0];
       B.paint = 'steel';
       B.cyl('struct', 0.09, 0.13, 5.2, x, gy(x, z) + 2.6, z, 0, 0, 0, 8);
-      floodHead(x, y, z, aim, 1.4, false);
+      floodHead(x, y, z, aim, 1.4, true);
       self.addCollider(x, gy(x, z) + 2.6, z, 0.25, 2.6, 0.25, 'metal');
       // beam: 0.04. MEASURED, and the single most useful number in this pass.
       // lighting.js gives every cone published by a level a full-strength
@@ -5751,8 +6142,27 @@
       // straight up the derrick did precisely what the halo was doing: it
       // blanketed the object it was supposed to reveal. Turning the beam off
       // keeps every one of those lumens on the STEEL.
-      push('rf_flarepad', 'mercury', x, y, z, 6400, 1250, 62, 0.46, aim,
-        { haloMax: 2.2, haloGain: 0.48, beam: 0.04 });
+      //
+      // ---- SODIUM, NOT 6400 K MERCURY, AND THE OLD NOTE'S OWN REASONING IS
+      // ---- WHAT CONDEMNS IT ------------------------------------------------
+      // The note above says this fixture is cold so that it can be "the largest
+      // cool mass in hero1". That is a defensible thing to want and it is the
+      // wrong object to spend it on: the derrick is the 47 m lattice standing
+      // DIRECTLY UNDER A 6200 cd FLAME, five metres away. Measured on the
+      // delivered frame it reads R-B +0.0443 against the flame's +0.2951 - a
+      // structure inside a fire's own near field photographing as neutral steel,
+      // which is the single most conspicuous place in the level where the light
+      // contradicts the fiction. The flare cannot fix this itself: its point
+      // light is 3.4 m above the flame and the lattice hangs below and around
+      // it, so most of the derrick's visible face is at grazing incidence to it.
+      // A sodium flood raking up the shaft is what a real flare pad has, and it
+      // is what makes the derrick read as fire-lit from a hundred metres. The
+      // cool mass hero1 needs is now the road and the west apron, which is where
+      // the brief puts it.
+      // 1420: I = E * d^2 is unchanged at 1250; the extra 14% is the luminance
+      // the `sodium` kind's (1.00, 0.755, 0.34) costs at equal candela.
+      push('rf_flarepad', 'sodium', x, y, z, 2100, 1420, 62, 0.46, aim,
+        { haloMax: 2.2, haloGain: 0.70, beam: 0.04 });
     })();
 
     // ---- 22. the cross-road junction ------------------------------------------------

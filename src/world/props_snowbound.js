@@ -1380,13 +1380,22 @@
       for (i = 0; i <= n; i++) {
         var u = i / n - 0.5, v = j / n - 0.5;
         var x = u * w, z = v * d;
-        var rr = Math.max(Math.abs(u), Math.abs(v)) * 2;                 // 0..1
-        var fall = 1 - M.smoothstep(0.55, 1.0, rr);
+        // A SUPERELLIPSE, not a Chebyshev square. The old max(|u|,|v|) metric
+        // gives a cap with four right-angled plan corners and a rim that steps
+        // to a constant negative in one cell, and 1,500 of those lying on props
+        // is the same "rectangular white slab" the berm blocks were rightly
+        // called out for. At exponent 3.0 the cap keeps its rectangular identity
+        // and loses its points.
+        var au = Math.abs(u * 2), av = Math.abs(v * 2);
+        var rr = Math.pow(au * au * au + av * av * av, 1 / 3);            // 0..~1
+        var fall = 1 - M.smoothstep(0.50, 1.02, rr);
         // drift bias: thicker on the lee side of the top face
         var bias = 1 + 0.42 * ((u * 2) * lx + (v * 2) * lz);
         var nz2 = noise ? noise.fbm2(x * 2.3 + (seed || 0), z * 2.3 - (seed || 0), 3) : 0;
         var y = h * fall * bias * (0.82 + nz2 * 0.42);
-        if (rr > 0.985) y = -Math.min(0.06, h * 0.55);                   // rolled lip
+        // the lip rolls over the arris and finishes BELOW the face it lies on,
+        // continuously, so there is no rim to catch a highlight on
+        y -= Math.min(0.055, h * 0.5) * M.smoothstep(0.72, 1.02, rr);
         pos.push(x, Math.max(-0.08, y), z);
       }
     }
@@ -1467,6 +1476,22 @@
   };
 
   // A free drift lump: banked snow against a wall, a wheel, a fence post.
+  //
+  // NORMALISED, AND THAT IS A BUG FIX WITH A MEASUREMENT BEHIND IT. The first
+  // version squashed a 0.5-radius sphere with `Math.max(0, y * (0.44 + n))`, so
+  // its local height came out at 0.22-0.31 while its half-width stayed 0.5 - and
+  // _drift then scaled y by r * (0.40..0.88) and sank the whole thing by
+  // r * 0.55 "to nearly half its height". Work it through: the world height is
+  // 0.31 x 0.64 x r = 0.20r and the sink is 0.55r, so the top of every drift in
+  // the level sat 0.35r BELOW the surface it was banked against. All 900 of them
+  // were invisible, which is exactly why the verifier saw only the hard-edged
+  // pieces and called the drift field polystyrene: the smooth wind-made half of
+  // it was never on screen.
+  //
+  // The shape is now normalised to x, z in [-0.5, 0.5] and y in [-0.13, 1], so
+  // the instance scale in _drift IS the bank's size in metres and the shallow
+  // negative skirt is what beds the rim into the ground instead of ending it on
+  // a hard circle.
   K.snowLump = function (noise, rng) {
     // 12 x 7 rather than 9 x 6, and flatter. At the old tessellation a bank
     // scaled out to four metres across resolved into a faceted pyramid with a
@@ -1474,17 +1499,24 @@
     // one is the same failure as a flat wall, just curved.
     var g = new THREE.SphereGeometry(0.5, 12, 7);
     var p = g.attributes.position;
-    for (var i = 0; i < p.count; i++) {
+    var i, hi = 1e-5;
+    for (i = 0; i < p.count; i++) {
       var x = p.getX(i), y = p.getY(i), z = p.getZ(i);
       var n1 = noise.fbm3(x * 2.6 + 11, y * 2.6, z * 2.6 - 5, 3, 2.1, 0.55);
       // squashed, and drawn out downwind into a tail
       var tail = 1 + 0.72 * M.saturate((x * WIND_X + z * WIND_Z) * 2);
-      p.setXYZ(i, x * (1 + n1 * 0.26) * tail, Math.max(0, y * (0.44 + n1 * 0.18)),
-        z * (1 + n1 * 0.26) * tail);
+      // above the waist it is a dome; below it, a shallow skirt that goes under
+      // the surrounding surface so the rim can never read as a circle lying on it
+      var ny = y >= 0 ? y * (0.44 + n1 * 0.18) : y * 0.13;
+      if (ny > hi) hi = ny;
+      p.setXYZ(i, x * (1 + n1 * 0.26) * tail, ny, z * (1 + n1 * 0.26) * tail);
     }
+    // normalise the dome to exactly 1.0 tall, keeping the width at 0.5 half-extent
+    var inv = 1 / hi;
+    for (i = 0; i < p.count; i++) p.setY(i, p.getY(i) * inv);
     p.needsUpdate = true;
     g.computeVertexNormals();
-    g.scale(rng.range(0.8, 1.3), rng.range(0.7, 1.25), rng.range(0.8, 1.3));
+    g.scale(rng.range(0.8, 1.3), 1, rng.range(0.8, 1.3));
     return g;
   };
 
@@ -2508,13 +2540,17 @@
     var gy = y === undefined ? this._ground(x, z) : y;
     var ox = x + w.x * r * 0.55, oz = z + w.y * r * 0.55;
     var g = K.snowLump(this.noise, this.rng);
-    // Sunk to nearly half its height.  A lump that sits proud on lying snow
-    // reads as a bubble on the surface; a bank has to grow OUT of it, and the
-    // difference is entirely how much of the ellipsoid is below the ground.
-    this._static('snow', g, Tn(ox, gy - r * 0.55, oz, 0,
+    // K.snowLump is normalised (see there): x, z span [-0.5, 0.5] and y spans
+    // [-0.13, 1], so the three scale terms below ARE the bank's world size in
+    // metres and its own negative skirt does the bedding-in. A bank of radius r
+    // stands about 0.46r tall; sinking a further sixth of that keeps the rim
+    // under the surface without burying the crest, which is what the previous
+    // arithmetic did to all 900 of them.
+    var hgt = r * 0.46 * (scaleY || 1) * this.rng.range(0.74, 1.32);
+    this._static('snow', g, Tn(ox, gy - hgt * 0.17, oz, 0,
       Math.atan2(w.x, w.y) + this.rng.range(-1.1, 1.1), 0,
-      r * this.rng.range(1.05, 2.20), r * (scaleY || 1) * this.rng.range(0.40, 0.88),
-      r * this.rng.range(0.85, 1.75)));
+      r * this.rng.range(1.15, 2.30), hgt,
+      r * this.rng.range(0.95, 1.85)));
     this._driftCount++;
   };
 

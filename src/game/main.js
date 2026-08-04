@@ -106,9 +106,62 @@
       name: 'Meridian Tower',
       level: 'LevelHighrise', props: 'PropsHighrise',
       defaultScenario: 'lv_hero1',
+      // FULLY DECLARATIVE. All three of these used to be overridden by
+      // level_highrise.js from update() - the hour and the aerosol behind three
+      // guards on the first frame, the fog block from build() - and that file's
+      // own comment says the right home for them is here ("The correct long-term
+      // fix is `timeOfDay: 0.712` in the LEVELS table; this block should be
+      // deleted the day that lands"). They are now here.
+      //
+      // It is not just tidiness. sky._resolveEnvProfile() lands every key below
+      // BEFORE the first transmittance LUT, the PMREM and lighting.build(); an
+      // override from update() lands after all three. At 0.80 the disc sits 0.32
+      // DEGREES BELOW the horizon (sky.js _solar: t = 0.75 is sunset), so the sky,
+      // the IBL and the whole light rig were generated for a level with no direct
+      // key at all, and were then handed a 9-degree sun on frame 1.
       env: {
-        timeOfDay: 0.80, sky: 'clear', weather: 'clear', turbidity: 0.03,
-        grade: 'warm', exposure: 0.0, lightRig: 'mixed', interior: false
+        // 0.712, not 0.80: 8.9 degrees of elevation, the last hour of real sun
+        // rather than the first minutes of dusk. This is the level whose one-line
+        // brief is "the low sun rakes straight through the open plates casting
+        // enormous column shadows", and at 0.80 there was no key to rake with.
+        timeOfDay: 0.712,
+        sky: 'clear', weather: 'clear',
+        // 0.062, not 0.03. 0.03 was the thinnest air in the roster and it left the
+        // shadows with no blue in them: a clear sunset works because 2500 K direct
+        // sits against 12000 K skylight, and that needs Rayleigh dominating an
+        // aerosol thick enough to redden the low disc. Measured at 0.03: shadow
+        // chroma [-0.000, -0.001, +0.001], i.e. perfectly neutral.
+        turbidity: 0.062,
+        grade: 'warm', exposure: 0.0, lightRig: 'mixed', interior: false,
+        // The atmosphere this level needs, moved off level_highrise.js's build().
+        // sky.js's default fog is a GROUND fog (density at baseY = 0, e-folding
+        // 5.5 m); from an eye 176 m above the street that puts maximum opacity on
+        // the entire city and none of it on the floor plate, i.e. exactly
+        // backwards. Re-based on the STREET (CITY_Y = -176, so baseY = -174) with
+        // a real atmospheric scale height. Solved, not eyeballed:
+        //   40 m across the plate at y = 0      -> ~5%   (concrete stays crisp)
+        //   300 m down to the street at -30 deg -> ~38%  (near city dark)
+        //   635 m to the city rim               -> ~64%  (the rim recedes)
+        // maxOpacity 0.52 keeps ~70% of the near city's own radiance, so a 6:1
+        // split between two faces of one tower survives as ~3:1 - which is what
+        // makes a skyline read as buildings rather than as a card. mieG/glowGain
+        // are held down because two framings look within 30 degrees of the sun and
+        // a wide bright forward lobe erases whatever is standing in the aperture.
+        // The two-lobe tint is the "orange / glass blue" half of the roster line:
+        // sunward haze is scattered 2400 K sunlight, anti-sun haze is 12000 K
+        // skylight, and the blend is luminance-preserving by contract so no
+        // coverage or exposure metric can move on it.
+        fog: {
+          density: 0.0019,
+          baseY: -174.0,
+          heightScale: 380.0,
+          maxOpacity: 0.52,
+          mieG: 0.52,
+          glowGain: 0.70,
+          desaturate: 0.24,
+          tint: [0.30, 0.41, 0.66],
+          tintAmount: 0.46
+        }
       }
     },
     boneyard: {
@@ -121,7 +174,25 @@
         // the one level whose premise is a brutal overhead sun, and at 30 its
         // shadows run 1.7x object height - the market's golden hour re-dressed
         // in a desert. Per-instance in sky.js, so market and harbor cannot move.
-        sunElevation: 66,
+        //
+        // 58, NOT 66, AND THE TWO NUMBERS USED TO DISAGREE. level_boneyard.js
+        // holds SUN_EL_DEG = 58 and requests it through sky.setSolarArc() on its
+        // first update(), which runs AFTER this profile is applied - so 58 was
+        // always the elevation that rendered, and every shadow-aware number in
+        // that level (shadeOffset(), the shade zones, the hangar shafts, the slab
+        // bounce aim and all five camera poses) is solved against 58. The 66 here
+        // was therefore dead: it could not reach the frame, and it contradicted
+        // the file it was describing. Reconciled to the value that renders.
+        //
+        // This is not merely cosmetic. sky._resolveEnvProfile() lands this key
+        // BEFORE the first LUT, the PMREM and lighting.build(), whereas the
+        // level's call arrives on frame 1 - so with 66 in the table the sky, the
+        // IBL and the light rig were all generated against a sun 8 degrees higher
+        // than the one the level then switched to. With 58 they are built against
+        // the real key, and the level's own setSolarArc(58) becomes the confirming
+        // no-op it was written to be (setSolarArc returns early on an unchanged
+        // arc). Keep the two in step: if the level moves SUN_EL_DEG, move this.
+        sunElevation: 58,
         timeOfDay: 0.50, sky: 'clear', weather: 'clear', turbidity: 0.035,
         grade: 'bleach', exposure: 0.0, lightRig: 'sun', interior: false
       }

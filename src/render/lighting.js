@@ -11,6 +11,9 @@
 //   lighting.setRig(name)       'sun' | 'practicals' | 'mixed' | 'mixedsun'
 //                               ALSO accepts an object - see RIG OVERRIDES below
 //   lighting.setInterior(flag)  the level is fully enclosed
+//   lighting.setShadowCookie(o) canopy/gobo break-up on the CSM term
+//   lighting.setGroundBounce(o) the down-facing indirect term (opt-in)
+//   lighting.setSkyVisBox(o)    where the sky-visibility volume's cells go
 //   lighting.dispose()
 //
 // WHAT A LEVEL PUBLISHES AND THIS MODULE CONSUMES, GENERICALLY
@@ -27,14 +30,33 @@
 //                          axis - see THE PRACTICAL BEAM CONE below.
 //   level.lightShafts      [ {origin, dir, width, length, strength, kind} ]
 //                          plus, for a shaft that is a FIXTURE rather than a
-//                          hole in a roof: {always, color|kelvin, lux}.
+//                          hole in a roof: {always, color|kelvin, lux}, and to
+//                          decouple the cone from the pool and make the beam
+//                          arrive: {haze, hazeGain, land, pool, poolR}.
 //   level.lightRig         OPTIONAL {preset, key, sky, amb, env, bnc, cfill,
-//                             fills, sun, lampFloor, cookie:{...}} - scalars
-//                          merged OVER the named preset, so a level can lift
-//                          its own anti-crush floor, restore the bounce
-//                          directionals, or switch the canopy cookie on without
-//                          this file being edited for it. Ignored on market and
-//                          harbor (both are non-declarative).
+//                             fills, sun, lampFloor, cookie:{...},
+//                             beams, beamGain, shaftMin, beamFeather, beamPhase,
+//                             practicals, active, shadowFill,
+//                             svNormal, svFloor, svGamma, svBox:{...},
+//                             groundBounce:{...}} - scalars merged OVER the named
+//                          preset, so a level can lift its own anti-crush floor,
+//                          raise its practical budget, fill its cast shadows or
+//                          switch the canopy cookie on without this file being
+//                          edited for it. Ignored on market and harbor (both are
+//                          non-declarative).
+//   level.groundBounce     same object setGroundBounce takes.
+//   level.svBox            same object setSkyVisBox takes.
+//                          `practicalsEarly: 1` additionally closes the build-
+//                          order race described in _hookScenes, which is what
+//                          decides whether the level gets its emissive bulbs,
+//                          its halos, its `anchor` placement and its enclosure
+//                          boost at all. It MOVES an already-graded level.
+//   level.skyOccluders     [ collider ] - geometry that blocks LIGHT but not
+//                          MOVEMENT (roofs, canopies, soffits, awnings, a shed's
+//                          deck). The sky-visibility volume is rasterised from
+//                          level.colliders, and a roof is precisely what a level
+//                          does not collide, so without this a closed shed reads
+//                          as open sky. Same format as colliders, section 6.
 //   level.litWindows       [ {x,y,z,w,h,kelvin,gain, yaw, scale, tint, ...} ]
 //                          Additive glow cards on apertures the level knows
 //                          about (the market finds its own; nobody else can).
@@ -301,10 +323,14 @@
   // constant survives only as the value used before the bake lands.
   var SV_REF = 0.50;
 
-  function svShape(v) {
+  // The GLSL shaping curve, in JS. Parameterised on floor/gamma because a
+  // declarative level may publish its own (svFloor / svGamma) and the
+  // compensation below has to be derived from the curve actually in force.
+  function svShapeF(v, floor, gamma) {
     v = v < 0 ? 0 : (v > 1 ? 1 : v);
-    return SV_FLOOR + (1 - SV_FLOOR) * Math.pow(Math.max(v, 1e-4), SV_GAMMA);
+    return floor + (1 - floor) * Math.pow(Math.max(v, 1e-4), gamma);
   }
+  function svShape(v) { return svShapeF(v, SV_FLOOR, SV_GAMMA); }
   var SV_COMP = 1 / svShape(SV_REF);
   // Same compensation for the weakly-gated (SV_DIR_GATE) bounce directionals.
   function svCompDir(ref) {
@@ -343,8 +369,41 @@
   //
   // x = 1/world scale, y = scroll u, z = scroll v, w = amount (0 = identity).
   var CK_PARAMS = new Float32Array([1 / 6, 0, 0, 0]);
-  // x = contrast/sharpness of the dapple, y/z/w reserved.
+  // x = contrast/sharpness of the dapple, y = SHADOW FILL (see THE SHADOW FILL),
+  // z/w reserved. Both extra components default to 0 = the identity path.
   var CK_PARAMS2 = new Float32Array([0.5, 0, 0, 0]);
+
+  // --------------------------------------------------------------------------
+  // THE GROUND-BOUNCE IRRADIANCE TERM  (opt-in; see setGroundBounce)
+  //
+  // xyz = the bounced irradiance in LINEAR working space, already carrying its
+  // own magnitude; w = how much of the sky-visibility gate it takes.
+  //
+  // WHY THIS IS A UNIFORM AND NOT A HemisphereLight. A HemisphereLight with its
+  // axis pointing DOWN is exactly the right shape for this term (weight
+  // 0.5 - 0.5*n.y, so an underside collects all of it and a floor none), it
+  // costs no draw call, and it cannot alias - this file has paid twice for
+  // zero-solid-angle specular sources on wet and high-frequency normals. But it
+  // reaches the shader through `irradiance`, and `irradiance` is multiplied
+  // per-fragment by the SKY-VISIBILITY VOLUME. The surfaces this term exists to
+  // light - the lower skin of a wing, the belly of a fuselage, a catwalk
+  // underside, a soffit, a wheel arch - are PRECISELY the fragments where sky
+  // visibility is lowest, so a hemisphere would be attenuated hardest exactly
+  // where it is needed most. Measured on the boneyard, whose 6 m cells return
+  // near their floor next to a 32 m shed: the gate there is the difference
+  // between a fill and no fill at all.
+  //
+  // A ground bounce is not skylight and must not be gated like skylight, so it
+  // is hoisted out of the multiply the same way the AmbientLight already is (see
+  // patchShaderChunks) and takes its own, level-chosen, share of the gate
+  // instead. Adding a vec4 is free where adding a sampler is not, and it also
+  // avoids moving NUM_HEMI_LIGHTS, which would recompile every one of the 99
+  // programs in the build.
+  //
+  // Because the term lands in `irradiance`, three's own aomap_fragment - which
+  // runs AFTER lights_fragment_end - still multiplies it by the material's AO
+  // map. That is the "AO-modulated fill" for free.
+  var GB_PARAMS = new Float32Array([0, 0, 0, 0]);
 
   var SV_DATA = null, SV_TEX = null;
   (function allocSkyVisTexture() {
@@ -584,6 +643,31 @@
     // has to reach fragments beyond the last cascade too (which is exactly the
     // 20 m canopy case). Fragments already in core shadow stay in core shadow -
     // multiplying 0 by anything is still 0.
+    // ---- SHADOW FILL (opt-in; boCookieParams2.y, 0 everywhere by default) ----
+    // A cast shadow in this build receives the hemisphere, the ambient floor and
+    // the environment and NOTHING from the key, so the ratio across a shadow
+    // boundary is whatever the key/fill ratio happens to be - measured on the
+    // refinery's establishing frame, 0.034 in shadow against 0.109 out of it on
+    // the same paving, and the unshadowed GAP between two cast shadows therefore
+    // printed as a hard pale wedge at 0.130. Physically that gap is not 4x
+    // brighter than its surroundings: a shadow on a plant floor is filled by one
+    // bounce off every sunlit surface around it, and the wider the penumbra the
+    // more of that surround it sees.
+    //
+    // This is the film-lighting operator for it, applied to the RESOLVED cascade
+    // term so it survives the cross-fade and reaches beyond the last cascade:
+    // the key's contribution in core shadow is lifted to `fill` of its
+    // unshadowed value and everything between is compressed toward it, which
+    // both raises the shadow and softens the boundary in VALUE (a 3.2:1 step
+    // becomes 2.1:1 at fill 0.25). It is deliberately a KEY-side term: unlike
+    // raising `amb`, it cannot lift a surface the key never reached, so it
+    // cannot flatten an interior or a night side.
+    //
+    // The PENUMBRA WIDTH is not offered as a per-level knob and cannot be: the
+    // Poisson tap radii, SEARCH_TEXELS and MAX_PENUMBRA are compiled into the
+    // GLSL above at script load and are shared with two frozen levels.
+    L.push('\tfloat boSf = boCookieParams2.y;');
+    L.push('\tif ( boSf > 0.0 ) result = boSf + ( 1.0 - boSf ) * result;');
     L.push('\tresult *= boShadowCookie( wpos );');
     L.push('\treturn result;');
     L.push('}');
@@ -610,6 +694,11 @@
     L.push('uniform vec3 boSkyVisInvSize;');
     L.push('uniform vec4 boSkyVisParams;');   // floor, gamma, specular amount, enable
     L.push('uniform vec4 boSkyVisParams2;');  // normal offset, -, -, -
+    // Ground bounce: xyz = irradiance, w = share of the sky gate it takes.
+    // Declared here rather than with the cookie because the cookie lives inside
+    // the CSM patch, which is wrapped in `#if USE_SHADOWMAP` - and this term has
+    // to reach a material with shadows disabled too.
+    L.push('uniform vec4 boGndBounce;');
     L.push('float boSkyVisibility( const in vec3 wpos, const in vec3 wnrm ) {');
     L.push('\tfloat amt = boSkyVisParams.w;');
     L.push('\tfloat result = 1.0;');
@@ -689,7 +778,17 @@
         lines[anchor] = lines[anchor] +
           '\nfloat boSkyVis = boSkyVisibility(' +
           ' cameraPosition + ( vec4( - vViewPosition, 0.0 ) * viewMatrix ).xyz,' +
-          ' normalize( ( vec4( geometryNormal, 0.0 ) * viewMatrix ).xyz ) );';
+          ' normalize( ( vec4( geometryNormal, 0.0 ) * viewMatrix ).xyz ) );' +
+          // Ground bounce, weighted for DOWN-facing normals: 1 straight down,
+          // 0.5 on a vertical, 0 on a floor - the shape a HemisphereLight with
+          // its axis pointing down would have. The world normal is recovered the
+          // same way the line above does it, and the `normalize` is dropped
+          // because geometryNormal is already unit and viewMatrix's rotation is
+          // orthonormal. With boGndBounce at 0 (market, harbor, and every level
+          // that has not opted in) this is an exact vec3( 0.0 ), so the
+          // `irradiance +=` in lights_fragment_end is an exact no-op.
+          '\nvec3 boGndIrr = boGndBounce.xyz * ( 0.5 - 0.5 *' +
+          ' ( vec4( geometryNormal, 0.0 ) * viewMatrix ).y );';
         // Directional lights at index >= NUM_DIR_LIGHT_SHADOWS cast no shadow:
         // in this rig that is exactly the ground-bounce and wall-bounce fills.
         // An unshadowed infinite fill is a real reason interiors read as bright
@@ -722,6 +821,11 @@
           '\tvec3 boFloor = getAmbientLightIrradiance( ambientLightColor );\n' +
           '\tirradiance = max( irradiance - boFloor, vec3( 0.0 ) ) * boSkyVis + boFloor;\n' +
           '\tiblIrradiance *= boSkyVis;\n' +
+          // ...and the ground bounce, ADDED AFTER the gate rather than inside it.
+          // Light that came off the paving two metres away does not care whether
+          // there is a wing above it - see the GROUND-BOUNCE block - so the level
+          // chooses how much of the gate it takes through boGndBounce.w.
+          '\tirradiance += boGndIrr * mix( 1.0, boSkyVis, boGndBounce.w );\n' +
           '#endif\n' +
           '#if defined( RE_IndirectSpecular )\n' +
           '\tradiance *= mix( 1.0, boSkyVis, boSkyVisParams.z );\n' +
@@ -767,6 +871,7 @@
         add.boSkyVisInvSize = { value: SV_INVSIZE };
         add.boSkyVisParams = { value: SV_PARAMS };
         add.boSkyVisParams2 = { value: SV_PARAMS2 };
+        add.boGndBounce = { value: GB_PARAMS };
       }
       for (var i = 0; i < libs.length; i++) {
         var lib = THREE.ShaderLib[libs[i]];
@@ -1715,11 +1820,67 @@
   var LIT_DARK_RATIO = 50;
   // A declarative level places its own lights, and an industrial or underground
   // one needs many more than a market street. Still well under the harbor's 28.
+  // THIS IS NOW ONLY THE DEFAULT - see THE PRACTICAL BUDGET below. Every level
+  // graded before that block existed publishes nothing and therefore still gets
+  // exactly 24 built and 24 active.
   var MAX_PRACTICALS_RIG = 24;
   // Same idea for the glow cards: a level that publishes its own apertures is
   // not guessing where they are, and every card is one more instance in a mesh
   // that is drawn anyway - the ceiling is the instance buffer, not a draw call.
   var MAX_WINDOWS_RIG = 20;
+
+  // ==========================================================================
+  // THE PRACTICAL BUDGET  (rig scalars `practicals` and `active`)
+  //
+  // Three levels named MAX_PRACTICALS_RIG = 24 as the binding constraint on
+  // their level, ahead of triangles and draw calls, and all three were right
+  // about the symptom and wrong about the limit. WHAT THE 24 ACTUALLY PROTECTS,
+  // measured on SwiftShader (the capture GPU) at the refinery's hero1:
+  //
+  //   MAX_FRAGMENT_UNIFORM_VECTORS   1024      <- not the limit. three's
+  //     SpotLight struct costs at most 7 vec4 of that array, so 24 spots is
+  //     ~168 of 1024 and even 64 would fit. The 24 was never a uniform ceiling.
+  //   MAX_TEXTURE_IMAGE_UNITS        16        <- the REAL hard cliff, and it
+  //     only applies to SHADOW-CASTING lights: each one costs the fragment
+  //     shader one sampler, and this file already documents (see _buildCascades)
+  //     that crossing 16 makes programs fail to validate SILENTLY - the draw
+  //     calls are still counted while whole objects stop drawing. Every rig
+  //     practical is castShadow:false, so the practical count spends none of it.
+  //   the per-fragment light loop                <- the real cost, and it is a
+  //     PER-FRAME cost, not a per-fixture one. Measured: the refinery's world
+  //     pass costs (see report) ~0.05 ms per active practical at 960x540 on
+  //     SwiftShader, and the cost is identical whether the lamp is 3 m from the
+  //     eye or 180 m away with its pool off the far side of the level.
+  //   info.programs                  99        <- and the reason the ACTIVE
+  //     count must be STABLE. three keys a program on NUM_SPOT_LIGHTS and
+  //     NUM_POINT_LIGHTS, so a selection that swapped a spot for a point would
+  //     recompile all 99 programs mid-flight. The two budgets below are
+  //     therefore resolved PER LIGHT TYPE and then held fixed for the level's
+  //     lifetime: the SET changes every frame, the COUNT never does, so there is
+  //     exactly one program permutation.
+  //
+  // So the cap splits in two, and neither half is a cap on what a level may
+  // MODEL:
+  //   `practicals`  how many level.practicalLights entries become real lights.
+  //                 A BUILD number. Costs one THREE.Light, one bulb instance and
+  //                 one halo instance each - no draw call (both are instanced)
+  //                 and no per-fragment cost while the light is not active.
+  //   `active`      how many may be uploaded to the shader at once. THIS is the
+  //                 per-fragment budget. Which ones is decided every frame by
+  //                 expected screen contribution - irradiance at the near edge
+  //                 of the lamp's own reach, so a 40 m flood 45 m away still
+  //                 ranks by the pool it lands 5 m from the eye - with a 1.45x
+  //                 hysteresis on the incumbent so the set cannot chatter.
+  //
+  // A DESELECTED FIXTURE IS STILL IN THE PICTURE. Only `light.visible` is
+  // cleared; the emissive bulb and the additive halo keep tracking the lamp's
+  // own output, because "there is a lit fitting 90 m down the platform" is
+  // information the frame needs and it costs nothing (both are instances in a
+  // mesh that is drawn anyway). What stops is the fragment cost of a source
+  // whose pool is not in shot.
+  var MAX_PRACTICALS_HARD = 64;   // ceiling on `practicals`, ~10x the fragment cost of one
+  var SEL_HYST = 1.45;            // incumbent bonus in the active-set scan
+  var SEL_BEHIND = 0.10;          // score scale for a lamp entirely behind the eye
 
   // ==========================================================================
   // THE CHARACTER / VERTICAL FILL  (rig scalar `cfill`)
@@ -1830,8 +1991,22 @@
   // Declared here for documentation, RESOLVED in _volBudget: BEAM_MAX and
   // SHAFT_MIN_LEN are declared further down the file, so reading them at script
   // load would capture `undefined` through var hoisting.
-  var VOL_KEYS = ['beams', 'beamGain', 'shaftMin'];
-  var VOL_RANGE = { beams: [1, 24], beamGain: [0, 12], shaftMin: [1.2, 6.0] };
+  // Every per-level scalar that is a COUNT, a LENGTH or a UNIFORM VALUE rather
+  // than a 0..8 multiplier, so it must bypass _applyRigOverride's 0..8 clamp and
+  // carry its own range. Each one defaults to the value the shared constant
+  // already had, which is what makes market, harbor and the eight already-graded
+  // levels render bit for bit unless they publish something.
+  var VOL_KEYS = ['beams', 'beamGain', 'shaftMin', 'beamFeather', 'beamPhase',
+    'practicals', 'active', 'shadowFill', 'svNormal', 'svFloor', 'svGamma',
+    'practicalsEarly'];
+  var VOL_RANGE = {
+    beams: [1, 24], beamGain: [0, 12], shaftMin: [1.2, 6.0],
+    beamFeather: [0, 1], beamPhase: [0, 0.85],
+    practicals: [1, MAX_PRACTICALS_HARD], active: [1, MAX_PRACTICALS_HARD],
+    shadowFill: [0, 0.60],
+    svNormal: [0.05, 4.0], svFloor: [0, 0.90], svGamma: [0.25, 1.60],
+    practicalsEarly: [0, 1]
+  };
   // A default for a level that needs one before it can publish its own. Prefer
   // `level.lightRig` in the level file over adding a row here - a row here is a
   // per-level edit to a shared system, which is exactly what the declarative rig
@@ -1928,6 +2103,7 @@
     this._lampMat = null;
     this._lampOn = 0;
     this._shafts = null;
+    this._shaftPool = null;      // one merged additive mesh for every floor pool
     // Resolved lazily by _volBudget, invalidated whenever the rig changes.
     this._vol = null;
 
@@ -1988,6 +2164,12 @@
     this._localCol = new THREE.Color(1, 0.92, 0.82);  // colour of the pool the eye is in
     this._localE = 0;                            // its rough irradiance at the eye
     this._rigWarned = false;
+    // Active-set state. Null = every built practical is active, which is what
+    // market, harbor and every level that has not raised `practicals` run.
+    this._selBudget = null;
+    this._lampPeakE = 0;                         // brightest lamp pool, from _rigMeter
+    this._gbnc = null;                           // ground-bounce request
+    this._svBox = null;                          // sky-visibility focus box
     // Published for a probing critic, mutated in place so the frame loop never
     // allocates. Null until a declarative level has run one update.
     this.rigDiag = null;
@@ -2336,6 +2518,10 @@
     this._rigP = out;
     this._vol = null;                 // re-resolve against the new override
     if (o.cookie !== undefined) this.setShadowCookie(o.cookie);
+    // Two more OBJECT-valued requests that travel on the same rig, for the same
+    // reason the cookie does: they are per-level data, not multipliers.
+    if (o.groundBounce !== undefined) this.setGroundBounce(o.groundBounce);
+    if (o.svBox !== undefined) this.setSkyVisBox(o.svBox);
   };
 
   // level.js builds after lighting, so a rig override published on the LEVEL
@@ -2353,8 +2539,58 @@
         this.setRig(lvl.lightRig);
       }
       if (lvl.shadowCookie !== undefined) this.setShadowCookie(lvl.shadowCookie);
+      if (lvl.groundBounce !== undefined) this.setGroundBounce(lvl.groundBounce);
+      if (lvl.svBox !== undefined) this.setSkyVisBox(lvl.svBox);
+      this._applyParamOverrides();
     } catch (e) {
       GAME.logError('lighting.adoptLevelRig', e);
+    }
+  };
+
+  // ==========================================================================
+  // URL OVERRIDES for the numeric rig scalars, so a level can be TUNED without
+  // an edit-and-rebuild cycle:
+  //
+  //   ?ltRig=practicals:40,active:26,shadowFill:0.22,gbnc:0.30
+  //
+  // Gated on _declarative, so market and harbor cannot be reached by it however
+  // the URL is spelled - the same guarantee every other addition in this file
+  // has. sky.js already carries this pattern (?dustGain, ?fogTint, ?sunElev) and
+  // it is what made those terms tunable in one capture instead of six.
+  //
+  // `gbnc` / `gbncAo` / `gbncMax` are shorthands for the groundBounce object,
+  // because that one is not a scalar on the rig.
+  // ==========================================================================
+  Lighting.prototype._applyParamOverrides = function () {
+    if (!this._declarative || !GAME.params) return;
+    var raw = GAME.params.ltRig;
+    if (typeof raw !== 'string' || !raw) return;
+    try {
+      var o = {}, gb = null, parts = raw.split(','), i;
+      for (i = 0; i < parts.length; i++) {
+        var kv = parts[i].split(':');
+        if (kv.length !== 2) continue;
+        var k = kv[0].trim(), v = parseFloat(kv[1]);
+        if (!k || !isFinite(v)) continue;
+        if (k === 'gbnc') { gb = gb || {}; gb.amount = v; }
+        else if (k === 'gbncAo') { gb = gb || {}; gb.ao = v; }
+        else if (k === 'gbncMax') { gb = gb || {}; gb.max = v; }
+        else if (k === 'gbncLamps') { gb = gb || {}; gb.lamps = v; }
+        else o[k] = v;
+      }
+      this._applyRigOverride(o);
+      if (gb) {
+        var cur = this._gbnc || {};
+        this.setGroundBounce({
+          amount: gb.amount != null ? gb.amount : (cur.amount != null ? cur.amount : 0),
+          ao: gb.ao != null ? gb.ao : cur.ao,
+          max: gb.max != null ? gb.max : cur.max,
+          lamps: gb.lamps != null ? gb.lamps : cur.lamps,
+          color: cur.color
+        });
+      }
+    } catch (e) {
+      GAME.logError('lighting.paramOverride', e);
     }
   };
 
@@ -2392,16 +2628,187 @@
     var c = this._cookie;
     if (!c || !this._declarative) {
       CK_PARAMS[3] = 0;
+    } else {
+      CK_PARAMS[0] = 1 / Math.max(c.scale, 0.5);
+      // A canopy moves. Scrolling the pattern rather than the geometry is what
+      // makes a still frame read as air rather than as a decal, and it costs two
+      // scalar writes per frame.
+      CK_PARAMS[1] = this._t * c.speed;
+      CK_PARAMS[2] = this._t * c.speed * 0.63;
+      CK_PARAMS[3] = c.amount;
+      if (CK_PARAMS2) CK_PARAMS2[0] = c.sharp;
+    }
+    // The SHADOW FILL travels on the same payload but is INDEPENDENT of the
+    // cookie - a level may want either, both or neither - so it is written
+    // outside the branch above. 0 for market, harbor and any level that has not
+    // published `shadowFill`, which is the identity path in getCSMShadow.
+    if (CK_PARAMS2) {
+      CK_PARAMS2[1] = this._declarative ? this._volBudget().shadowFill : 0;
+    }
+  };
+
+  // ==========================================================================
+  // THE GROUND BOUNCE  (opt-in; see the GB_PARAMS block for why it is a uniform)
+  //
+  //   lighting.setGroundBounce({ amount, ao, max, lamps, color | kelvin })
+  //   level.groundBounce = { ... }         (same shape, adopted on first update)
+  //   level.lightRig = { groundBounce: {...} }
+  //
+  // `amount` IS THE GROUND'S ALBEDO and that is the whole design: the magnitude
+  // is then MEASURED off the live rig rather than authored, so a level states a
+  // material property it actually knows and gets a correct term at every hour
+  // and under every practical it publishes. Bleached concrete hardstanding is
+  // 0.30-0.35, asphalt 0.10, a plant floor 0.20, snow 0.75, jungle mud 0.09.
+  //
+  // What it is measured against is the irradiance ARRIVING on the ground:
+  //   key    keyIntensity * max( solar.y, 0 ) * dayFactor - the cosine term, so
+  //          it follows the sun down on its own and is 0 on a sunless level.
+  //   sky    the hemisphere's own magnitude, which an up-facing normal collects
+  //          in full.
+  //   lamps  the BRIGHTEST measured lamp pool in the level (_rigMeter's peak,
+  //          which is already irradiance at a characteristic receiver distance
+  //          rather than at the filament). Weighted by `lamps`.
+  // Deliberately the peak and not the camera-local sum: a fill that changes
+  // magnitude as the player walks is a hazard, and `max` bounds it anyway.
+  // ==========================================================================
+  Lighting.prototype.setGroundBounce = function (o) {
+    try {
+      if (o === true) o = { amount: 0.28 };
+      if (!o || typeof o !== 'object' || !this._declarative) {
+        this._gbnc = null;
+      } else {
+        var col = null;
+        if (o.color && o.color.isColor) col = o.color.clone();
+        else if (typeof o.color === 'number') col = new THREE.Color(o.color);
+        else if (Array.isArray(o.color) && o.color.length === 3) {
+          col = new THREE.Color().setRGB(o.color[0], o.color[1], o.color[2]);
+        } else if (isFinite(o.kelvin)) {
+          col = GAME.Color.kelvin(+o.kelvin, new THREE.Color());
+        }
+        this._gbnc = {
+          amount: M.clamp(isFinite(o.amount) ? +o.amount : 0.28, 0, 1.2),
+          // How much of the sky-visibility gate the term takes. 0 = none, which
+          // is the physical answer for a wing underside standing over bright
+          // tarmac; 1 = the same gate skylight takes, which is what an interior
+          // wants so the term reads as a corner-darkened fill instead of a lift.
+          ao: M.clamp(isFinite(o.ao) ? +o.ao : 0.35, 0, 1),
+          // A hard safety ceiling on the irradiance, not a tuning knob. 1.6 is
+          // deliberately ABOVE the physical answer for the worst case in the
+          // roster - a 0.30-albedo hardstanding under a noon key measures
+          // 0.30 * (4.75 key + 0.7 sky) = 1.63 - so it never silently clips a
+          // level that got its albedo right, and still stops a mis-set rig from
+          // flooding every underside in the build.
+          max: M.clamp(isFinite(o.max) ? +o.max : 1.6, 0, 4),
+          // Weight on the LAMP term only, and it is separate from `amount`
+          // because the two are not the same quality of estimate. The key and
+          // sky terms are the real irradiance on a horizontal plane; the lamp
+          // term is the brightest single POOL in the level applied globally,
+          // which is right under that pool and an over-estimate everywhere else.
+          // 0.25 is the area-weighted guess; a level whose floor is one
+          // continuous lit surface (a flooded platform, a lit control room)
+          // should raise it toward 1.
+          lamps: M.clamp(isFinite(o.lamps) ? +o.lamps : 0.25, 0, 3),
+          color: col
+        };
+      }
+    } catch (e) {
+      GAME.logError('lighting.setGroundBounce', e);
+      this._gbnc = null;
+    }
+    this._updateGroundBounce(this.ctx);
+    return this._gbnc;
+  };
+
+  Lighting.prototype._updateGroundBounce = function (ctx) {
+    if (!GB_PARAMS) return;
+    var g = this._gbnc;
+    if (!g || !this._declarative || !(g.amount > 0)) {
+      GB_PARAMS[0] = 0; GB_PARAMS[1] = 0; GB_PARAMS[2] = 0; GB_PARAMS[3] = 0;
       return;
     }
-    CK_PARAMS[0] = 1 / Math.max(c.scale, 0.5);
-    // A canopy moves. Scrolling the pattern rather than the geometry is what
-    // makes a still frame read as air rather than as a decal, and it costs two
-    // scalar writes per frame.
-    CK_PARAMS[1] = this._t * c.speed;
-    CK_PARAMS[2] = this._t * c.speed * 0.63;
-    CK_PARAMS[3] = c.amount;
-    if (CK_PARAMS2) CK_PARAMS2[0] = c.sharp;
+    // Irradiance arriving on a horizontal ground plane, from everything that can
+    // put light on one.
+    var eKey = Math.max(0, this.keyIntensity) *
+      Math.max(0, this.solarDirection.y) * M.saturate(this.dayFactor);
+    var eSky = this.hemi ? colMag(this.hemi.color) * Math.max(0, this.hemi.intensity) : 0;
+    var eLamp = Math.max(0, this._lampPeakE) * g.lamps;
+    // amount IS the ground albedo, so the whole bracket is the irradiance
+    // arriving and `e` is the irradiance leaving. That is the entire model.
+    var e = M.clamp(g.amount * (eKey + eSky + eLamp), 0, g.max);
+
+    // Hue: the ground's own colour, filtered by whatever is actually lighting it.
+    // sky.js hue-normalises groundColor (largest channel forced to 1), which is
+    // exactly what is wanted here - `e` carries the whole magnitude and the
+    // colour must not carry any of it, or a dark ground albedo would be counted
+    // twice.
+    if (g.color) _c3.copy(g.color);
+    else if (this.hemi) _c3.copy(this.hemi.groundColor);
+    else _c3.copy(PAL.bounce);
+    if (!g.color) {
+      // Lit by lamps or lit by the key, whichever is putting more on the floor.
+      if (eLamp > eKey && this._localE > 1e-4) _c3.multiply(this._localCol);
+      else if (eKey > 1e-4) _c3.multiply(this.keyColor);
+    }
+    var mx = colMag(_c3);
+    _c3.multiplyScalar(mx > 1e-4 ? e / mx : 0);
+    GB_PARAMS[0] = _c3.r; GB_PARAMS[1] = _c3.g; GB_PARAMS[2] = _c3.b;
+    GB_PARAMS[3] = g.ao;
+  };
+
+  // ==========================================================================
+  // THE SKY-VISIBILITY FOCUS BOX  (opt-in)
+  //
+  //   lighting.setSkyVisBox({ min:[x,y,z], max:[x,y,z] })
+  //   lighting.setSkyVisBox({ center:[x,y,z], size:[w,h,d] })
+  //   level.svBox = {...}   /   level.lightRig = { svBox: {...} }
+  //
+  // SV_W x SV_H x SV_D is a COMPILE-TIME constant (the Data3DTexture has to exist
+  // at its final size before any material compiles - see the header), so the grid
+  // is 44 x 26 x 76 cells on every level and the CELL SIZE is decided entirely by
+  // how much world it is asked to span. Over the market district that is ~1.2 m.
+  // Over a 190 x 192 m yard it is 6.0 x 1.0 x 2.9 m, and a 6 m cell next to a
+  // 32 m shed cannot tell the difference between "beside the shed" and "inside
+  // it": the boneyard measured its hangar's shaded end wall at 0.0035 linear
+  // against 0.373 on its own sunlit face, i.e. a wall standing in the open
+  // photographing as if it were in a cave.
+  //
+  // The box is the honest fix that does not touch the frozen levels: a level
+  // spends its 87k cells on the region its framings actually use instead of on
+  // its full bounds. Outside the box the shader's own edge fade returns OPEN SKY
+  // (see buildSkyVisSource), which for the far field of an outdoor level is the
+  // correct answer and for an interior one means the box must contain the level.
+  // The fade occupies the outer ~9% of the box, so leave two cells of margin
+  // beyond the last surface that matters.
+  // ==========================================================================
+  Lighting.prototype.setSkyVisBox = function (o) {
+    try {
+      if (!o || typeof o !== 'object' || !this._declarative) { this._svBox = null; }
+      else {
+        var n3 = function (a) {
+          if (Array.isArray(a) && a.length === 3 &&
+            isFinite(a[0]) && isFinite(a[1]) && isFinite(a[2])) return a;
+          if (a && isFinite(a.x) && isFinite(a.y) && isFinite(a.z)) return [a.x, a.y, a.z];
+          return null;
+        };
+        var lo = n3(o.min), hi = n3(o.max);
+        if (!lo || !hi) {
+          var c = n3(o.center || o.centre), s = n3(o.size);
+          if (c && s) {
+            lo = [c[0] - s[0] * 0.5, c[1] - s[1] * 0.5, c[2] - s[2] * 0.5];
+            hi = [c[0] + s[0] * 0.5, c[1] + s[1] * 0.5, c[2] + s[2] * 0.5];
+          }
+        }
+        if (lo && hi && hi[0] - lo[0] > 2 && hi[1] - lo[1] > 2 && hi[2] - lo[2] > 2) {
+          this._svBox = { x0: lo[0], y0: lo[1], z0: lo[2], x1: hi[0], y1: hi[1], z1: hi[2] };
+        } else {
+          this._svBox = null;
+        }
+      }
+    } catch (e) {
+      GAME.logError('lighting.setSkyVisBox', e);
+      this._svBox = null;
+    }
+    return this._svBox;
   };
 
   // Declare the level fully enclosed. Sun and sky are switched off entirely,
@@ -2443,11 +2850,36 @@
     if (this.bounce) this.bounce.visible = wantFills;
     if (this.fillA) this.fillA.visible = wantFills;
     if (this.fillB) this.fillB.visible = wantFills;
-    // Re-purpose (interior) or leave alone (everything else) the volume's floor.
-    // SV_PARAMS is the shared uniform payload every material in the build reads
-    // by reference, so this one store reaches shaders compiled hours ago.
-    if (SV_PARAMS) SV_PARAMS[0] = this.interior ? INT_SV_FLOOR : SV_FLOOR;
+    // Re-purpose (interior) or leave alone (everything else) the volume's floor,
+    // and apply whatever shaping the level published. SV_PARAMS is the shared
+    // uniform payload every material in the build reads by reference, so these
+    // stores reach shaders compiled hours ago.
+    this._applySvParams();
     return P;
+  };
+
+  // The three sky-visibility SHAPING scalars, in one place because two callers
+  // write them (the bake, and _applyRigLights every frame) and they must not
+  // disagree - the bake can be triggered from scene.onBeforeRender, i.e. AFTER
+  // _updateFill has run for that frame, so a bake that wrote the raw constants
+  // would stomp a level's own values for the rest of the frame.
+  //
+  // Every default is the constant this file has always used, so a level that
+  // publishes nothing is unchanged and market/harbor never reach it at all
+  // (both callers are behind a _declarative gate, except the bake, which passes
+  // the constants through _volBudget's non-declarative early-out).
+  Lighting.prototype._applySvParams = function () {
+    if (!SV_PARAMS) return;
+    var VB = this._volBudget();
+    SV_PARAMS[0] = (VB.svFloor >= 0) ? VB.svFloor
+      : (this.interior ? INT_SV_FLOOR : SV_FLOOR);
+    SV_PARAMS[1] = VB.svGamma;
+    SV_PARAMS[2] = SV_SPEC;
+    // How far along the world normal the volume is sampled. 0.60 m is half a
+    // market cell; on a level whose cells are 6 m wide (see THE SKY-VISIBILITY
+    // FOCUS BOX) it does not leave the cell the wall is standing in, which is
+    // how a wall in the open photographs as if it were in a cave.
+    if (SV_PARAMS2) SV_PARAMS2[0] = VB.svNormal;
   };
 
   // Resolve this level's volumetric budget once: the global constants, then a
@@ -2462,7 +2894,18 @@
   // time the rig is disposed and rebuilt. `beamGain` is read every frame.
   Lighting.prototype._volBudget = function () {
     if (this._vol) return this._vol;
-    var v = { beams: BEAM_MAX, beamGain: 1.0, shaftMin: SHAFT_MIN_LEN };
+    // Every default here is the value the shared constant already had. `active`
+    // 0 and `svFloor` -1 are the two SENTINELS: 0 active means "derive it from
+    // what got built" and a negative floor means "keep whatever the interior
+    // flag decides", both of which a published value in range cannot collide
+    // with.
+    var v = {
+      beams: BEAM_MAX, beamGain: 1.0, shaftMin: SHAFT_MIN_LEN,
+      beamFeather: 0, beamPhase: 0,
+      practicals: MAX_PRACTICALS_RIG, active: 0, shadowFill: 0,
+      svNormal: SV_NORMAL_OFFSET, svFloor: -1, svGamma: SV_GAMMA,
+      practicalsEarly: 0
+    };
     if (!this._declarative) { this._vol = v; return v; }
     try {
       var id = (this.ctx && typeof this.ctx.levelId === 'string') ? this.ctx.levelId : '';
@@ -2482,6 +2925,8 @@
         }
       }
       if (v.beams !== (v.beams | 0)) v.beams = Math.round(v.beams);
+      v.practicals = Math.round(v.practicals);
+      v.active = Math.round(v.active);
     } catch (e) {
       GAME.logError('lighting.volBudget', e);
     }
@@ -2494,7 +2939,103 @@
     // A declarative level places its own lights against its own geometry, and
     // an underground or industrial one needs far more of them than a market
     // street does. The market keeps its own cap exactly.
-    return this._declarative ? MAX_PRACTICALS_RIG : MAX_PRACTICALS;
+    if (!this._declarative) return MAX_PRACTICALS;
+    // `practicals` defaults to MAX_PRACTICALS_RIG, so a level that publishes
+    // nothing gets exactly the 24 it was graded against.
+    return this._volBudget().practicals;
+  };
+
+  // ==========================================================================
+  // THE ACTIVE SET  (see THE PRACTICAL BUDGET above)
+  //
+  // Resolved ONCE, after the practicals exist, and then held: the per-type
+  // counts are program keys in three, so they must not move. Returns without
+  // installing a budget when everything the level built fits, which is the case
+  // for market, harbor and every level that has not raised `practicals` - those
+  // never enter the selection at all and `p.sel` stays undefined for them.
+  // ==========================================================================
+  Lighting.prototype._resolveActiveBudget = function () {
+    this._selBudget = null;
+    if (!this._declarative) return;
+    var n = this.practicals.length;
+    if (!n) return;
+    var want = this._volBudget().active;
+    // 0 = "derive it": a level that raised `practicals` without saying anything
+    // about `active` gets the old 24 running at a time out of however many it
+    // published, which is the conservative reading of its intent.
+    if (!(want > 0)) want = MAX_PRACTICALS_RIG;
+    want = Math.min(want, n);
+    if (want >= n) return;
+    var S = 0, P = 0, i;
+    for (i = 0; i < n; i++) {
+      if (this.practicals[i].light.isSpotLight) S++; else P++;
+    }
+    // Split proportionally, then repair: a type with any fixtures at all keeps
+    // at least one slot, and a type that cannot use its share hands it back.
+    var aS = S ? Math.max(1, Math.round(want * S / n)) : 0;
+    var aP = want - aS;
+    if (P > 0 && aP < 1 && aS > 1) { aP = 1; aS = want - 1; }
+    if (aS > S) { aP += aS - S; aS = S; }
+    if (aP > P) { aS += aP - P; aP = P; }
+    aS = M.clamp(aS, 0, S);
+    aP = M.clamp(aP, 0, P);
+    if (aS + aP >= n) return;               // the repair gave everything a slot
+    this._selBudget = { spot: aS, point: aP, total: aS + aP, spots: S, points: P };
+  };
+
+  // Score every practical by the irradiance it can put on something the eye can
+  // see, then keep the top `budget` of each type. A partial max-scan rather than
+  // a sort: at most 24 passes over at most 64 entries, allocating nothing,
+  // because this runs in the frame loop.
+  Lighting.prototype._selectPracticals = function (ctx) {
+    var B = this._selBudget;
+    if (!B) return;
+    var list = this.practicals, i, p, L;
+    var cx = 0, cy = 0, cz = 0, fx = 0, fy = 0, fz = -1;
+    var cam = ctx && ctx.camera;
+    if (cam) {
+      cam.updateMatrixWorld();
+      var e = cam.matrixWorld.elements;
+      cx = e[12]; cy = e[13]; cz = e[14];
+      // Column 2 of matrixWorld is the camera's local +Z, i.e. BACKWARD.
+      fx = -e[8]; fy = -e[9]; fz = -e[10];
+    }
+    for (i = 0; i < list.length; i++) {
+      p = list[i];
+      L = p.light;
+      var dx = L.position.x - cx, dy = L.position.y - cy, dz = L.position.z - cz;
+      var d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      var reach = p.distance || 10;
+      // Distance to the NEAR EDGE of the volume this lamp lights, not to the
+      // lamp. A 40 m flood standing 45 m away still lands its pool 5 m from the
+      // eye, and ranking it as a 45 m light would drop the one fixture that is
+      // lighting the foreground.
+      var de = Math.max(1.0, d - reach * 0.75);
+      var sc = (p.intensity || 1) * (p.boost || 1) / (de * de);
+      // Behind the eye AND out of reach of anything in front of it. Not zero: an
+      // unshadowed lamp behind the player still lights the wall he is facing.
+      if (d > reach * 0.6 && (dx * fx + dy * fy + dz * fz) < -reach * 0.25) {
+        sc *= SEL_BEHIND;
+      }
+      p.selScore = (p.sel === false) ? sc : sc * SEL_HYST;
+      p.sel = false;
+    }
+    this._pickTop(B.spot, true);
+    this._pickTop(B.point, false);
+  };
+
+  Lighting.prototype._pickTop = function (k, wantSpot) {
+    var list = this.practicals, i, n;
+    for (n = 0; n < k; n++) {
+      var bi = -1, bw = -1;
+      for (i = 0; i < list.length; i++) {
+        if (!!list[i].light.isSpotLight !== wantSpot) continue;
+        if (list[i].sel || !(list[i].selScore > bw)) continue;
+        bw = list[i].selScore; bi = i;
+      }
+      if (bi < 0) break;
+      list[bi].sel = true;
+    }
   };
 
   Lighting.prototype._buildPracticals = function (ctx, defs) {
@@ -2619,6 +3160,9 @@
       });
     }
     this.pointLights = this.practicals;
+    // The per-type active counts are program keys, so they are resolved here -
+    // once, against the set that actually got built - and then never move.
+    this._resolveActiveBudget();
   };
 
   // level.js builds after lighting, so its lamp placements can only be picked
@@ -2828,6 +3372,16 @@
     // spending texels up there just coarsens the storeys that matter.
     var oy = minY - SV_Y_BELOW, sy = SV_Y_SPAN;
     if (!(sx > 1) || !(sz > 1)) { sx = 54; sz = 97; }
+    // ---- the level's own focus box, if it published one --------------------
+    // Taken verbatim, with no SV_PAD_XZ: an explicit box IS the region, and the
+    // shader's edge fade is documented as sitting inside it. Declarative only -
+    // this.  _svBox is null for market and harbor by construction (setSkyVisBox
+    // refuses on a non-declarative rig). See THE SKY-VISIBILITY FOCUS BOX.
+    var fb = this._svBox;
+    if (fb && this._declarative) {
+      ox = fb.x0; oz = fb.z0; oy = fb.y0;
+      sx = fb.x1 - fb.x0; sy = fb.y1 - fb.y0; sz = fb.z1 - fb.z0;
+    }
 
     var G = { cs: SV_OCC_CELL, ox: ox - 1.0, oy: oy - 1.0, oz: oz - 1.0 };
     G.nx = Math.ceil((sx + 2) / G.cs);
@@ -2842,6 +3396,32 @@
     }
     G.occ = new Uint8Array(G.nx * G.ny * G.nz);
     this._bakeOccupancy(cols, G);
+    // ---- geometry that blocks LIGHT but not MOVEMENT ------------------------
+    // MEASURED, and it is the largest defect the volume had. The occupancy grid
+    // is rasterised from level.colliders, and a ROOF is exactly the thing a level
+    // does not make a collider: nobody walks on it. The boneyard's hangar
+    // publishes four wall colliders and a floor slab and builds its roof, its
+    // trusses and its ridge monitors as geometry only - so a probe 5 m off the
+    // floor INSIDE a closed 32 x 32 m shed with an 11 m eave returns sky
+    // visibility 0.962, while a point 1 m OUTSIDE its east wall returns 0.719.
+    // The volume was reporting the inside of the building as more open than the
+    // apron beside it, which is the exact failure it exists to prevent ("a sealed
+    // shop interior gets the same ambient as an open rooftop").
+    //
+    // A level cannot fix that with colliders without making its roofs solid to
+    // bullets and to the player, so it publishes them separately, in the same
+    // format (ARCHITECTURE section 6). Declarative only, and neither frozen level
+    // publishes it.
+    //
+    // CAVEAT WORTH KNOWING: this is the SAME grid _anchorPracticals,
+    // _clampPracticals and _solveShaft use, which is the point - a shaft's
+    // upward trace should stop at the roof it comes through. But a lamp mounted
+    // 20 cm under a newly-solid ceiling now has less than the 0.7 m clearance
+    // _clampPracticals wants and will be nudged down unless the level marks it
+    // `fixed: true`.
+    if (this._declarative && Array.isArray(lvl.skyOccluders) && lvl.skyOccluders.length) {
+      this._bakeOccupancy(lvl.skyOccluders, G);
+    }
 
     // ---- per-column roofline, max-filtered over the ray range --------------
     // Anything above this is trivially open, which removes roughly a third of
@@ -2983,9 +3563,13 @@
 
     SV_ORIGIN[0] = ox; SV_ORIGIN[1] = oy; SV_ORIGIN[2] = oz;
     SV_INVSIZE[0] = 1 / sx; SV_INVSIZE[1] = 1 / sy; SV_INVSIZE[2] = 1 / sz;
-    SV_PARAMS[0] = SV_FLOOR; SV_PARAMS[1] = SV_GAMMA; SV_PARAMS[2] = SV_SPEC;
+    // Through _applySvParams, not by writing the raw constants: the bake can be
+    // triggered from scene.onBeforeRender, i.e. after _updateFill has already run
+    // for this frame, and writing the constants there would stomp a level's own
+    // shaping for the rest of the frame. Resolves to the constants exactly for
+    // market, harbor and any level that publishes nothing.
+    this._applySvParams();
     SV_PARAMS[3] = 1;
-    SV_PARAMS2[0] = SV_NORMAL_OFFSET;
     this._svGate = 1;
 
     this.skyVis = {
@@ -3000,9 +3584,14 @@
     // street ~0.4 stops under its own fixed point. Clamped because this scales
     // every indirect term in the build - a pathological bake must not be able to
     // double the game's ambient.
+    // Shaped with the floor and gamma ACTUALLY IN FORCE (SV_PARAMS was just
+    // written by _applySvParams), not with the module constants: a level that
+    // lifts svFloor or svGamma has moved its own fixed point, and compensating
+    // against the wrong one is the exact defect the 0.68 constant above caused.
     this.skyRef = M.clamp(this._probeRoadwayVisibility(lvl), 0.20, 0.95);
-    this.skyComp = M.clamp(1 / svShape(this.skyRef), 1.0, 1.62);
-    this.skyCompDir = M.clamp(svCompDir(this.skyRef), 1.0, 1.30);
+    var sRef = svShapeF(this.skyRef, SV_PARAMS[0], SV_PARAMS[1]);
+    this.skyComp = M.clamp(1 / sRef, 1.0, 1.62);
+    this.skyCompDir = M.clamp(1 / M.lerp(1, sRef, SV_DIR_GATE), 1.0, 1.30);
 
     // The field is live, so the practicals can finally be placed against real
     // geometry instead of against ART_DIRECTION's prose. Order matters: move
@@ -3688,8 +4277,127 @@
         var solved = this._solveShaft(G, defs[i], poses);
         if (solved) this._makeShaft(solved, this._shafts.length === 0);
       }
+      this._buildShaftPools();
     } catch (e) {
       GAME.logError('lighting.shafts', e);
+    }
+  };
+
+  // ==========================================================================
+  // THE FLOOR POOL  (shaft field `pool`, 0 = not built)
+  //
+  // The other half of "no published beam ever lands": what makes a shaft read as
+  // light arriving is the ellipse of scattered light ON the surface, and the
+  // shell cannot draw it - its opacity is |N.V|, which is 0 exactly where a
+  // ground plane is seen from a standing eye.
+  //
+  // ONE MESH FOR EVERY SHAFT THAT ASKS, so the whole feature is a single draw
+  // call however many shafts opt in - jungle and refinery are both within 20
+  // draws of the budget and a per-shaft mesh would have been unaffordable. The
+  // per-shaft colour and level travel in a vertex-colour attribute that
+  // _updateShafts rewrites, so each pool still tracks its own light.
+  //
+  // The disc lies in world XZ at the traced floor height + 6 cm, which assumes
+  // the landing surface is roughly level; a shaft landing on a steep ramp should
+  // leave `pool` at 0.
+  // ==========================================================================
+  Lighting.prototype._buildShaftPools = function () {
+    var list = this._shafts;
+    if (!list || !list.length || this._shaftPool) return;
+    var want = [], i;
+    for (i = 0; i < list.length; i++) {
+      if (list[i].def && list[i].def.pool > 0) want.push(list[i]);
+    }
+    if (!want.length) return;
+    try {
+      var RS = 20;                                  // radial segments
+      var RINGS = [0.0, 0.40, 0.74, 1.0];           // radius fractions
+      var GLOW = [1.0, 0.82, 0.34, 0.0];            // and their falloff
+      var perV = 1 + (RINGS.length - 1) * RS;
+      var n = want.length;
+      var pos = new Float32Array(n * perV * 3);
+      var glow = new Float32Array(n * perV);
+      var col = new Float32Array(n * perV * 3);
+      var idx = [];
+      var vo = 0, r, j, k;
+      for (i = 0; i < n; i++) {
+        var s = want[i].def;
+        var R = s.poolR || (s.width * 0.75);
+        var fy = s.floor.y + 0.06;
+        var base = vo;
+        pos[vo * 3] = s.floor.x; pos[vo * 3 + 1] = fy; pos[vo * 3 + 2] = s.floor.z;
+        glow[vo] = GLOW[0];
+        vo++;
+        for (r = 1; r < RINGS.length; r++) {
+          for (j = 0; j < RS; j++) {
+            var a = j / RS * Math.PI * 2;
+            pos[vo * 3] = s.floor.x + Math.cos(a) * R * RINGS[r];
+            pos[vo * 3 + 1] = fy;
+            pos[vo * 3 + 2] = s.floor.z + Math.sin(a) * R * RINGS[r];
+            glow[vo] = GLOW[r];
+            vo++;
+          }
+        }
+        // centre fan
+        for (j = 0; j < RS; j++) {
+          idx.push(base, base + 1 + j, base + 1 + ((j + 1) % RS));
+        }
+        // the annuli
+        for (r = 1; r < RINGS.length - 1; r++) {
+          var a0 = base + 1 + (r - 1) * RS, b0 = base + 1 + r * RS;
+          for (j = 0; j < RS; j++) {
+            k = (j + 1) % RS;
+            idx.push(a0 + j, b0 + j, a0 + k, a0 + k, b0 + j, b0 + k);
+          }
+        }
+        want[i].poolFrom = base;
+        want[i].poolTo = vo;
+      }
+      var geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('aGlow', new THREE.BufferAttribute(glow, 1));
+      var ca = new THREE.BufferAttribute(col, 3);
+      ca.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('aCol', ca);
+      geo.setIndex(idx);
+      var mat = new THREE.ShaderMaterial({
+        uniforms: {},
+        vertexShader: [
+          'attribute float aGlow;',
+          'attribute vec3 aCol;',
+          'varying float vG;',
+          'varying vec3 vC;',
+          'void main() {',
+          '  vG = aGlow; vC = aCol;',
+          '  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );',
+          '}'
+        ].join('\n'),
+        fragmentShader: [
+          'varying float vG;',
+          'varying vec3 vC;',
+          'void main() {',
+          // Squared, so the falloff has no visible ring where the annuli meet.
+          '  gl_FragColor = vec4( vC * ( vG * vG ), 1.0 );',
+          '}'
+        ].join('\n'),
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+        fog: false
+      });
+      var mesh = new THREE.Mesh(geo, mat);
+      mesh.name = 'shaftFloorPools';
+      mesh.castShadow = false; mesh.receiveShadow = false;
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 4;
+      mesh.visible = false;
+      this.root.add(mesh);
+      this._shaftPool = { mesh: mesh, col: ca, entries: want };
+    } catch (e) {
+      GAME.logError('lighting.shaftPools', e);
+      this._shaftPool = null;
     }
   };
 
@@ -3834,6 +4542,22 @@
     if (def.color && def.color.isColor) scol = def.color.clone();
     else if (typeof def.color === 'number') scol = new THREE.Color(def.color);
     else if (isFinite(def.kelvin)) scol = GAME.Color.kelvin(def.kelvin, new THREE.Color());
+    // ---- FOUR MORE OPTIONAL FIELDS, all default-off ------------------------
+    // haze / hazeGain UNWELD THE TWO NUMBERS THAT WERE ONE. Until now the cone's
+    // opacity and the floor irradiance were both read off the same `lux`
+    // (uAmt = clamp(lux*SHAFT_HAZE) against intensity = lux*len*len), and the two
+    // wants are OPPOSED: a shaft bright enough to land on a floor is an opaque
+    // column, and one translucent enough to see the level through does not land.
+    //   hazeGain  multiplies the derived haze. The cheap knob.
+    //   haze      replaces it outright, in the shader's own 0..1.6 units.
+    // land / pool MAKE THE BEAM ARRIVE. _makeShaft takes the glow to zero over
+    // the last 22% of the cone, which is the correct fix for the rim it removes
+    // (a cone that stops at a finite brightness draws its own edge) but means no
+    // published beam has ever visibly landed: the glow is 0 exactly where the
+    // floor is. `land` extends the GEOMETRY past the traced floor so the fade
+    // band is buried under it and clipped by the depth test - the trick
+    // _buildHarborCones already uses on twenty mast beams - and `pool` adds the
+    // soft ellipse of scattered light where the axis meets the floor.
     return {
       kind: def.kind || 'shaft',
       strength: isFinite(def.strength) ? M.clamp(def.strength, 0, 2) : 1,
@@ -3842,6 +4566,11 @@
       color: scol,
       lux: isFinite(def.lux) ? M.clamp(def.lux, 0, 60) : null,
       always: !!def.always || isFinite(def.lux),
+      haze: isFinite(def.haze) ? M.clamp(def.haze, 0, 1.6) : null,
+      hazeGain: isFinite(def.hazeGain) ? M.clamp(def.hazeGain, 0, 6) : 1,
+      land: isFinite(def.land) ? M.clamp(def.land, 0, 1) : 0,
+      pool: isFinite(def.pool) ? M.clamp(def.pool, 0, 2) : 0,
+      poolR: isFinite(def.poolR) ? M.clamp(def.poolR, 0.3, 12) : width * 0.75,
       floor: new THREE.Vector3(best.fx, best.fy, best.fz),
       pos: new THREE.Vector3(best.fx - bx * len, best.fy - by * len, best.fz - bz * len)
     };
@@ -3886,8 +4615,19 @@
       var glow = new Float32Array(SEG * RING);
       var idx = [];
       var r0 = s.width * 0.12, r1 = s.width * 0.40;
+      // ---- THE LANDING TERM (`land`, 0 = exactly the previous geometry) ------
+      // The shell is built `ext` times the traced run, so the last-22% fade -
+      // which is what stops the cone drawing its own rim in open air, and which
+      // stays - now happens BELOW the floor, where the ordinary depth test
+      // removes it. The beam therefore terminates on the ellipse where it meets
+      // the floor instead of dying 22% of its length above it. At land 1 the
+      // glow arriving at the floor plane is 0.45 of the apex value instead of 0.
+      // Only meaningful for a shaft whose far end really is against a surface;
+      // a fixture beam ending in open air should leave it at 0.
+      var ext = 1 + 0.30 * (s.land || 0);
       for (var j = 0; j < RING; j++) {
-        var t = j / (RING - 1);
+        var tg = j / (RING - 1);       // 0..1 along the GEOMETRY
+        var t = tg * ext;              // 0..ext along the BEAM (== tg at land 0)
         var rr = M.lerp(r0, r1, t);
         var cxp = s.pos.x + ax.x * len * t;
         var cyp = s.pos.y + ax.y * len * t;
@@ -3895,9 +4635,11 @@
         // Bright just under the aperture, fading as the dust scatters it out.
         // BOTH ends are taken to zero: a cone that starts or stops at a finite
         // brightness draws its own rim, and a visible rim is what turns a beam
-        // back into a cone-shaped object.
+        // back into a cone-shaped object. The fade band is placed on the
+        // GEOMETRY parameter, which is what puts it under the floor when the
+        // shell is extended (and is identical to the old expression at ext 1).
         var g = (1 - t * 0.55) *
-          M.smoothstep(0.0, 0.16, t) * (1 - M.smoothstep(0.78, 1.0, t));
+          M.smoothstep(0.0, 0.16, tg) * (1 - M.smoothstep(0.78, 1.0, tg));
         for (var i2 = 0; i2 < SEG; i2++) {
           var a = i2 / SEG * Math.PI * 2;
           var ca = Math.cos(a), sa = Math.sin(a);
@@ -4101,6 +4843,9 @@
         var apex = new THREE.Vector3().copy(L.position).addScaledVector(ax, 0.10);
         var geo = buildBeamGeometry(apex, ax, len, r0, r1, 18, 12);
         var mesh = new THREE.Mesh(geo, makeBeamMaterial());
+        // The axis never moves (the shell is built in world space with an
+        // identity transform), so the phase term's uniform is written once here.
+        mesh.material.uniforms.uAxis.value.copy(ax);
         mesh.name = 'rigBeam_' + (L.name || i);
         mesh.castShadow = false; mesh.receiveShadow = false;
         mesh.frustumCulled = false;
@@ -4164,7 +4909,9 @@
     // stop several shells summing into a milky veil, and a cap that did not move
     // with the amplitude would simply clamp the gain back to nothing and the
     // knob would appear to do nothing at all. 1.0 everywhere by default.
-    var vgain = this._volBudget().beamGain;
+    var VB = this._volBudget();
+    var vgain = VB.beamGain;
+    var feather = VB.beamFeather, phase = VB.beamPhase;
     var base = BEAM_BASE * (1 + M.clamp(fk * 24.0, 0, 0.75)) * vgain;
     // Normalise the shader's own attenuation at BEAM_REF so the amplitude keeps
     // meaning "this bright when the beam is a subject in the near-middle
@@ -4203,6 +4950,17 @@
         Math.exp(-fkd * fkd);
       var aln = Math.abs((dx * c.axis.x + dy * c.axis.y + dz * c.axis.z) / md);
       c.wgt = wgt * (0.35 + 0.85 * aln);
+      // The shader's phase term is a per-fragment gain of up to ~6x near the
+      // axis, and the accumulation cap is a CPU estimate: leaving it out of the
+      // estimate would let a level switch on `beamPhase` and blow straight
+      // through the cap the cap exists to enforce. Same Henyey-Greenstein,
+      // normalised the same way, evaluated once at the shell's mid-axis.
+      if (phase > 0) {
+        var cta = (dx * c.axis.x + dy * c.axis.y + dz * c.axis.z) / md;
+        var gg = phase * phase;
+        c.wgt *= Math.pow(Math.max(1 + gg - 2 * phase * cta, 1e-3), -1.5) *
+          Math.pow(1 + gg, 1.5);
+      }
     }
 
     // ---- WHICH SHELLS GET DRAWN -------------------------------------------
@@ -4258,6 +5016,7 @@
       u.uTime.value = this._t;
       u.uRain.value = precip;
       u.uAtten.value.set(BEAM_NEAR, BEAM_FALL, fk);
+      u.uSoft.value.set(feather, phase);
       c.mesh.visible = u.uAmt.value > 0.002;
     }
     // A beam-gain diagnostic probe lived here during the round-2 volumetric
@@ -4310,6 +5069,7 @@
       var sh = list[i];
       var d = sh.def;
       var on = amt * d.strength;
+      sh.hz = 0;
       // A shaft that declared itself a FIXTURE - a worklight down a tunnel, a
       // flare stack, a flood through steam - has no opinion about the hour, and
       // carries its own irradiance budget instead of a share of the sun's.
@@ -4325,12 +5085,7 @@
         sh.light.intensity = dlux * d.len * d.len * on;
         sh.light.color.copy(_c2);
         sh.light.visible = on > 0.02;
-        if (sh.haze) {
-          sh.haze.visible = on > 0.02;
-          sh.haze.material.uniforms.uColor.value.copy(_c2);
-          sh.haze.material.uniforms.uAmt.value =
-            M.clamp(dlux * SHAFT_HAZE, 0, 1.1) * on;
-        }
+        this._shaftHaze(sh, _c2, M.clamp(dlux * SHAFT_HAZE, 0, 1.1) * on, on);
         continue;
       }
       // A solar shaft may still carry a tint - a dawn temple wants a warm beam
@@ -4339,12 +5094,8 @@
         sh.light.intensity = this.keyIntensity * d.len * d.len * SHAFT_GAIN * on;
         sh.light.color.copy(d.color);
         sh.light.visible = on > 0.02;
-        if (sh.haze) {
-          sh.haze.visible = on > 0.02;
-          sh.haze.material.uniforms.uColor.value.copy(d.color);
-          sh.haze.material.uniforms.uAmt.value =
-            M.clamp(this.keyIntensity * SHAFT_HAZE, 0, 1.1) * on;
-        }
+        this._shaftHaze(sh, d.color,
+          M.clamp(this.keyIntensity * SHAFT_HAZE, 0, 1.1) * on, on);
         continue;
       }
       if (harbor) {
@@ -4355,19 +5106,57 @@
         sh.light.color.copy(this.keyColor);
       }
       sh.light.visible = on > 0.02;
-      if (sh.haze) {
-        sh.haze.visible = on > 0.02;
-        if (harbor) {
-          sh.haze.material.uniforms.uColor.value.copy(_c1);
-          sh.haze.material.uniforms.uAmt.value =
-            HB.shaftHaze * (0.55 + 0.75 * hRain) * on;
-        } else {
-          sh.haze.material.uniforms.uColor.value.copy(this.keyColor);
-          sh.haze.material.uniforms.uAmt.value =
-            M.clamp(this.keyIntensity * SHAFT_HAZE, 0, 1.1) * on;
-        }
+      if (harbor) {
+        this._shaftHaze(sh, _c1, HB.shaftHaze * (0.55 + 0.75 * hRain) * on, on);
+      } else {
+        this._shaftHaze(sh, this.keyColor,
+          M.clamp(this.keyIntensity * SHAFT_HAZE, 0, 1.1) * on, on);
       }
     }
+
+    // ---- the floor pools ---------------------------------------------------
+    // Written after the loop above has resolved every shaft's own haze level, so
+    // a pool tracks the beam that made it. One attribute upload for all of them.
+    var SP = this._shaftPool;
+    if (SP) {
+      var any = false, e = SP.col.array, q, v;
+      for (i = 0; i < SP.entries.length; i++) {
+        var en = SP.entries[i];
+        var lvl2 = en.hz * (en.def.pool || 0) * 1.35;
+        if (lvl2 > 0.002) any = true;
+        var cr = en.pcol ? en.pcol : (en.pcol = new THREE.Color());
+        for (q = en.poolFrom; q < en.poolTo; q++) {
+          v = q * 3;
+          e[v] = cr.r * lvl2; e[v + 1] = cr.g * lvl2; e[v + 2] = cr.b * lvl2;
+        }
+      }
+      SP.col.needsUpdate = true;
+      SP.mesh.visible = any;
+    }
+  };
+
+  // One place that writes a shaft's haze, so the two OPT-IN overrides
+  // (`hazeGain`, `haze`) cannot be applied in three of the four branches and
+  // forgotten in the fourth - which is how the opacity and the floor irradiance
+  // came to be welded to one number in the first place. Also latches the level
+  // the floor pool is driven from.
+  //
+  // Both overrides are gated on _declarative: neither market nor harbor
+  // publishes them, and "the code is unreachable" is a stronger guarantee than
+  // "the field is absent".
+  Lighting.prototype._shaftHaze = function (sh, col, amt, on) {
+    var d = sh.def;
+    if (this._declarative) {
+      if (d.haze != null) amt = d.haze * on;
+      else if (d.hazeGain !== 1) amt = amt * d.hazeGain;
+    }
+    sh.hz = amt;
+    if (sh.pcol) sh.pcol.copy(col);
+    else sh.pcol = col.clone();
+    if (!sh.haze) return;
+    sh.haze.visible = on > 0.02;
+    sh.haze.material.uniforms.uColor.value.copy(col);
+    sh.haze.material.uniforms.uAmt.value = amt;
   };
 
   // The volume is baked in WORLD space, but the viewmodel scene is authored in
@@ -4386,7 +5175,64 @@
       var prev = scene.onBeforeRender;
       scene.onBeforeRender = function (renderer, sc, cam, target) {
         try {
-          if (gate) self._buildSkyVisibility(self.ctx);
+          if (gate) {
+            // MEASURED, and it was silently discarding half a level's own
+            // lighting contract. This hook exists so the bake lands before any
+            // material compiles, and it therefore CAN fire during the loading
+            // sequence - i.e. before the first update() has read
+            // level.lightRig. Probed on the jungle: an injected
+            // `lightShafts[i].land` was present on the level object
+            // (pubLand [1,1]) while all six BUILT shafts carried land 0,
+            // because _buildShafts had already run from here. Everything
+            // _volBudget resolves at build time - `beams`, `shaftMin`, and the
+            // new shaft fields - was being read before the level had a chance
+            // to publish it, and the only reason it was never noticed is that
+            // the one level needing a non-default shaftMin gets it from
+            // VOL_DEFAULTS, which does not depend on the level object at all.
+            //
+            // Adopting first is idempotent (both are one-shot, both are
+            // no-ops afterwards) and unreachable for the frozen pair:
+            // _adoptLevelRig returns on its first line unless _declarative.
+            // ...and the practicals, for the same reason and with a worse
+            // symptom: the bake is what runs _anchorPracticals,
+            // _clampPracticals, _buildRigBeams AND _buildLampVisuals, and all
+            // four iterate this.practicals. Probed on two levels with identical
+            // code paths, the outcome differed - the refinery reached the bake
+            // with 24 practicals (lampVisuals nP 24, 24 bulbs, 44 halos) and the
+            // jungle reached it with none (lampVisuals null), because the jungle
+            // takes longer to build and a loading-screen render lands inside its
+            // build. A level therefore got its emissive bulbs and additive halos
+            // - which this file's own header calls mandatory, "a light with no
+            // visible source is not a light" - or did not, depending on how many
+            // frames its geometry took to generate. That is a race, not a
+            // budget, and adopting here removes it.
+            //
+            // ---- AND IT IS OPT-IN, WHICH IS A MEASUREMENT ------------------
+            // Winning the race is not neutral: reaching the bake with the
+            // practicals present also means _anchorPracticals moves any lamp
+            // carrying an `anchor`, _clampPracticals pushes lamps out of
+            // geometry, and every lamp gets p.enclosure / p.boost (up to 1.55x
+            // output for a lamp in a sealed room). Captured on the boneyard,
+            // whose hangar high bays run at dayBase 0.90, switching this on
+            // changed the signature frame at identical draw calls and triangles
+            // (407 / 1,943,474) - i.e. it is a real lighting change to a level
+            // that has already been graded. So the ORDERING is fixed
+            // unconditionally for the rig (above), which is provably a no-op
+            // today, and the PRACTICALS are adopted early only when the level
+            // asks for it with `practicalsEarly: 1`. A level that switches it on
+            // gets its bulbs, its halos, its anchors, its clearance clamping and
+            // its enclosure boost, and should expect to re-meter.
+            //
+            // Both calls are one-shot no-ops afterwards, and both are
+            // declarative-gated: the harbor builds its rig through
+            // _buildHarborRig on a schedule its own comments depend on, and the
+            // market's practicals are built in build().
+            self._adoptLevelRig(self.ctx);
+            if (self._declarative && self._volBudget().practicalsEarly > 0) {
+              self._adoptLevelPracticals(self.ctx);
+            }
+            self._buildSkyVisibility(self.ctx);
+          }
           if (SV_PARAMS) SV_PARAMS[3] = gate ? self._svGate : 0;
         } catch (e) { /* never take a frame down for this */ }
         if (typeof prev === 'function') prev.call(this, renderer, sc, cam, target);
@@ -4446,6 +5292,29 @@
     'uniform float uTime;',
     'uniform float uRain;',
     'uniform vec3 uAtten;',   // x = near distance, y = falloff scale, z = fog k
+    // ---- OPT-IN SILHOUETTE WORK (x = feather, y = phase g; 0 = today) -------
+    // A cone published by a level came back reading as "a straight-edged
+    // translucent wedge - a glass shard, not light in air", with four of them
+    // lying across the refinery's hero2. Two things are missing and both are
+    // here, both behind a branch on a uniform that is 0 for Cold Harbor and for
+    // every level graded before this existed:
+    //
+    //   FEATHER. |N.V|^4 does vanish at the shell's silhouette, but on a thin
+    //   cone it vanishes over a couple of pixels: at 10% inside the edge the
+    //   profile (1-(x/R)^2)^4 is already 0.036, so the eye reads the geometric
+    //   boundary rather than a falloff. Multiplying in a smoothstep of the same
+    //   |N.V| moves the last of the energy off the edge entirely.
+    //
+    //   PHASE. A real beam is a forward scatterer: looking INTO it, it blazes;
+    //   looking across it, it is nearly invisible. This shell had no view-angle
+    //   term at all, so it billed the same radiance from every direction - which
+    //   is exactly what makes a translucent solid rather than lit air.
+    //   Henyey-Greenstein, normalised at 90 degrees so the perpendicular view
+    //   keeps the brightness the level authored and only the near-axis view
+    //   gains. _updateRigBeams folds the same factor into the accumulation cap,
+    //   or the cap would stop meaning anything the moment this is switched on.
+    'uniform vec2 uSoft;',
+    'uniform vec3 uAxis;',    // world-space beam axis, apex -> aim
     'varying float vGlow;',
     'varying vec3 vN;',
     'varying vec3 vV;',
@@ -4455,8 +5324,9 @@
     '  // 0 exactly at the silhouette. The exponent is what decides whether the',
     '  // beam has a bright core with air around it (high) or is a flat wedge',
     '  // with a rim (low). 1.45 printed as cardboard.',
-    '  float f = abs( dot( normalize( vN ), normalize( vV ) ) );',
-    '  f = f * f; f = f * f * ( 0.35 + 0.65 * f );',
+    '  float nv = abs( dot( normalize( vN ), normalize( vV ) ) );',
+    '  float f = nv * nv; f = f * f * ( 0.35 + 0.65 * f );',
+    '  if ( uSoft.x > 0.0 ) f = mix( f, f * smoothstep( 0.0, 1.0, nv ), uSoft.x );',
     '  // Rain falling THROUGH the beam. Two incommensurate vertical frequencies',
     '  // sheared by world x/z, so it never settles into a repeating band and it',
     '  // reads as falling water rather than as a scrolling texture.',
@@ -4487,6 +5357,14 @@
     '  float fk = uAtten.z * dCam;',
     '  float atten = ( uAtten.y / ( uAtten.y + max( dCam - uAtten.x, 0.0 ) ) ) *',
     '                exp( - fk * fk );',
+    '  if ( uSoft.y > 0.0 ) {',
+    '    float g = uSoft.y;',
+    '    float gg = g * g;',
+    '    float ct = dot( normalize( vW - cameraPosition ), uAxis );',
+    '    float hg = pow( max( 1.0 + gg - 2.0 * g * ct, 1e-3 ), -1.5 );',
+    '    // normalised at ct = 0, so 90 degrees off the axis is unchanged',
+    '    atten *= hg * pow( 1.0 + gg, 1.5 );',
+    '  }',
     '  gl_FragColor = vec4( uColor * ( uAmt * vGlow * f * shimmer * gust * atten ), 1.0 );',
     '}'
   ].join('\n');
@@ -4498,7 +5376,11 @@
         uAmt: { value: 0 },
         uTime: { value: 0 },
         uRain: { value: 1 },
-        uAtten: { value: new THREE.Vector3(HB.coneNear, HB.coneFall, 0.010) }
+        uAtten: { value: new THREE.Vector3(HB.coneNear, HB.coneFall, 0.010) },
+        // Both 0 = the shell Cold Harbor shipped, exactly. Only _updateRigBeams
+        // ever writes them, and only from a declarative level's own rig.
+        uSoft: { value: new THREE.Vector2(0, 0) },
+        uAxis: { value: new THREE.Vector3(0, -1, 0) }
       },
       vertexShader: BEAM_VERT,
       fragmentShader: BEAM_FRAG,
@@ -6399,11 +7281,15 @@
       // bake is what builds the bulb/halo instance buffers and those are sized
       // from the practical count.
       this._buildHarborRig(ctx);
-      this._adoptLevelPracticals(ctx);
       // A rig override published by the LEVEL (as opposed to by its env
       // profile) can only be read once level.js has built. Before _readSky, so
-      // the override is in force for the very first frame that uses it.
+      // the override is in force for the very first frame that uses it - and now
+      // also BEFORE _adoptLevelPracticals, because `practicals` decides how many
+      // of the level's published lamps become lights and _buildPracticals is
+      // where that is spent. (Reordering is safe for the frozen pair: both are
+      // non-declarative, so _adoptLevelRig returns on its first line.)
       this._adoptLevelRig(ctx);
+      this._adoptLevelPracticals(ctx);
       this._buildSkyVisibility(ctx);
       this._probeSkyVisibility(ctx, dt);
       this._readSky(ctx);
@@ -6426,6 +7312,7 @@
     }
   };
   Lighting.prototype._errors = 0;
+
 
   // The viewmodel renders in camera space, so it cannot sample the world-space
   // volume. Probe it once per frame at the eye instead and use that to dim the
@@ -7033,6 +7920,10 @@
       if (lFloor > lampOn) lampOn = lFloor;
     }
     this._lampOn = lampOn;
+    // Decide which fixtures are uploaded to the shader this frame. A no-op
+    // (and an immediate return) unless the level raised `practicals` past the
+    // active budget.
+    this._selectPracticals(ctx);
 
     for (var i = 0; i < this.practicals.length; i++) {
       var p = this.practicals[i];
@@ -7125,10 +8016,18 @@
       // has to be able to carry it now that the sky-visibility volume has taken
       // the free ambient floor away from interiors.
       L.intensity = Math.max(0, p.intensity * level * mul * (p.boost || 1));
-      L.visible = L.intensity > 0.001;
+      // `p.sel` is UNDEFINED wherever no active budget is installed, so this is
+      // the same expression it has always been for market, harbor and every
+      // level that has not raised `practicals`. A deselected fixture keeps its
+      // intensity - _updateLampVisuals reads that, not `visible`, so its bulb
+      // and halo stay in the picture; what stops is the fragment cost.
+      L.visible = L.intensity > 0.001 && p.sel !== false;
     }
 
-    if (this._declarative) this._rigMeter(ctx);
+    if (this._declarative) {
+      this._rigMeter(ctx);
+      this._updateGroundBounce(ctx);
+    }
   };
 
   // ==========================================================================
@@ -7192,6 +8091,9 @@
     }
     var want = peak / LIT_DARK_RATIO;
     this._rigFloor = isFinite(want) ? M.clamp(want, 0, 3.0) : 0;
+    // The brightest lamp pool in the level, in irradiance. Also what the ground
+    // bounce is measured against on a level with no sun.
+    this._lampPeakE = isFinite(peak) ? peak : 0;
 
     // Published for a probing critic. Mutated in place - the frame loop must
     // not allocate.
@@ -7200,6 +8102,14 @@
     D.rig = this.rig;
     D.interior = this.interior;
     D.practicals = this.practicals.length;
+    // The active-set state, so a probing critic can tell a level whose fixture is
+    // missing from a frame from one whose fixture was deselected for it.
+    D.built = this.practicals.length;
+    D.activeCap = this._selBudget ? this._selBudget.total : this.practicals.length;
+    D.activeNow = 0;
+    for (var av = 0; av < this.practicals.length; av++) {
+      if (this.practicals[av].light.visible) D.activeNow++;
+    }
     D.shafts = this._shafts ? this._shafts.length : 0;
     D.sunOn = !!(this.cascades.length && this.cascades[0].light.visible);
     D.key = Math.round(this.keyIntensity * 1000) / 1000;
@@ -7230,6 +8140,22 @@
       D.beamsDrawn = nd;
     }
     D.cookie = this._cookie ? this._cookie.amount : 0;
+    D.shadowFill = VB.shadowFill;
+    D.beamFeather = VB.beamFeather;
+    D.beamPhase = VB.beamPhase;
+    // The ground bounce as the shader actually receives it, so "the level asked
+    // for a bounce" and "the bounce is reaching fragments" are separable.
+    D.gbnc = GB_PARAMS
+      ? Math.round(Math.max(GB_PARAMS[0], Math.max(GB_PARAMS[1], GB_PARAMS[2])) * 1000) / 1000
+      : 0;
+    D.gbncAO = GB_PARAMS ? GB_PARAMS[3] : 0;
+    D.svFloor = SV_PARAMS ? Math.round(SV_PARAMS[0] * 1000) / 1000 : 0;
+    D.svNormal = SV_PARAMS2 ? SV_PARAMS2[0] : 0;
+    D.svBox = !!this._svBox;
+    // Whether the level actually got the bulbs, halos, anchors and enclosure
+    // boost the bake hands out - see _hookScenes. -1 = the bake ran without any
+    // practicals, which is the race the `practicalsEarly` flag exists to close.
+    D.lampVisuals = this._lampVisuals ? (this._lampVisuals.nP || 0) : -1;
     D.fills = !!(this.bounce && this.bounce.visible);
     D.over = !!this._rigOver;
   };
@@ -7803,6 +8729,13 @@
 
   // Lets another system (e.g. props.js placing a lamp mesh) attach a practical
   // to the rig without owning a light of its own.
+  //
+  // A practical added this way is ALWAYS ACTIVE: it carries no `sel`, and the
+  // active budget is deliberately not re-resolved, because the per-type counts
+  // are program keys and re-deriving them here would recompile every material in
+  // the build at an arbitrary moment. It also has no bulb or halo instance - the
+  // buffers were sized at bake time. Both are reasons to publish through
+  // level.practicalLights instead wherever the level can.
   Lighting.prototype.addPractical = function (opts) {
     opts = opts || {};
     if (this.practicals.length >= this._maxPracticals()) return null;
@@ -7846,6 +8779,11 @@
         if (s.haze) { s.haze.geometry.dispose(); s.haze.material.dispose(); }
       }
       this._shafts = null;
+    }
+    if (this._shaftPool) {
+      this._shaftPool.mesh.geometry.dispose();
+      this._shaftPool.mesh.material.dispose();
+      this._shaftPool = null;
     }
     var lv = this._lampVisuals;
     if (lv) {
@@ -7904,9 +8842,21 @@
     // rebuilt after a bunker would silently render with a 0.45 occlusion floor.
     // CK_PARAMS is the same kind of state for the same reason - a cookie left
     // switched on would dapple the next level's key.
-    if (SV_PARAMS) SV_PARAMS[0] = SV_FLOOR;
+    if (SV_PARAMS) {
+      SV_PARAMS[0] = SV_FLOOR;
+      SV_PARAMS[1] = SV_GAMMA;
+    }
+    if (SV_PARAMS2) SV_PARAMS2[0] = SV_NORMAL_OFFSET;
     if (CK_PARAMS) CK_PARAMS[3] = 0;
+    // Same argument for the two new payloads: a shadow fill or a ground bounce
+    // left switched on would lift the next level's shadows and undersides, and if
+    // that level is a legacy one nothing would ever put them back.
+    if (CK_PARAMS2) CK_PARAMS2[1] = 0;
+    if (GB_PARAMS) { GB_PARAMS[0] = 0; GB_PARAMS[1] = 0; GB_PARAMS[2] = 0; GB_PARAMS[3] = 0; }
     this._cookie = null;
+    this._gbnc = null;
+    this._svBox = null;
+    this._selBudget = null;
     if (this.root.parent) this.root.parent.remove(this.root);
     if (this._viewRig && this._viewRig.group.parent) {
       this._viewRig.group.parent.remove(this._viewRig.group);

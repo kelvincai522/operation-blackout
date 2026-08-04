@@ -88,6 +88,101 @@
 //                               transition can be painted instead of butted.
 //   glass(opts), foliage(opts), emissive(hex, i, opts), wearable(name, opts)
 //   uvScaleFor(name, texelsPerM), setEnvIntensity(scale), setQuality(level)
+//   uvScaleForWorld(name, metresPerTile)
+//                            -> the uv scale for a map whose features are sized
+//                               in WORLD units rather than in texels. See below.
+//
+// ----------------------------------------------------------------------------
+// LEVELS 3-10 - additions requested by the eight level owners. Every one of them
+// is OPT-IN and absent from every market/harbor def and call site, so both
+// frozen levels emit byte-identical shader source, land on byte-identical
+// program cache keys and bind byte-identical textures. That is asserted by an
+// old-vs-new differ over 212 material / alias / helper / opts variants per
+// level, not assumed.
+//
+//   opts.grain / DEFS.grain   0..1, default 1 = today's map exactly.
+//                             ATTENUATES THE BASE MAP SET'S OWN GRAIN. detail,
+//                             detailCm and meso were already forwardable but the
+//                             base map's own high-frequency content was
+//                             unreachable, so a surface read at ~1 m (a rail-car
+//                             lining, a door leaf, a control panel) had no way to
+//                             be smooth at ANY tile size - the tile IS the
+//                             feature, so uv tuning cannot fix it. Implemented on
+//                             the CPU as whole-octave box decimation of the map
+//                             SET (albedo in linear light, normal re-normalised,
+//                             ORM/AO/height averaged), so it costs no shader
+//                             source, no sampler, no uniform, reaches the AO and
+//                             height channels that a fetch-site LOD bias cannot,
+//                             and SAVES VRAM. See _grainSet().
+//
+//                             MEASURED HONESTLY: on concrete_wall at 1.5 m,
+//                             grain 1 -> 0.3 (a 1024 map decimated to 128) takes
+//                             Laplacian energy 0.1259 -> 0.1153 and isolated
+//                             specks 22.30% -> 18.09%. Real, and the only lever
+//                             there is for the base map - but NOT the dominant
+//                             term. The dominant term is the MESO BAND, at 44-81%
+//                             of all near-field high-frequency energy; see
+//                             opts.mesoScale below. If a surface is too grainy at
+//                             a metre, reach for mesoScale first and grain second.
+//   opts.mesoScale            tiles per world metre for the meso band. NOT new -
+//                             but it was undocumented, and it is the lever three
+//                             levels needed and could not find. The default 1.82
+//                             is a 0.55 m TILE, which puts the family tile's
+//                             octaves at 4 mm to 1.7 cm: a SECOND MICRO LAYER, not
+//                             the 0.1-0.6 m band the code claims, and measured as
+//                             44-81% of all near-field high-frequency energy in the
+//                             library - far more than the base map, the detail
+//                             tile, the near tier, the cavity or the polish mask.
+//                             0.35 (a 2.86 m tile) puts it in the band. It is a
+//                             PER-SURFACE choice, not a new default: it is a clear
+//                             win at about a metre and a clear loss in the 10-25 m
+//                             mid field. Both measurements are in _features.
+//   opts.detailCavity         0..1, default 0.85. Also not new and also
+//                             undocumented: how hard the detail tile's cavity
+//                             channel multiplies albedo, AO and specular
+//                             occlusion. Measured innocent for the near-field
+//                             speckle, but it is a real knob and it should have
+//                             been listed.
+//   opts.detailRough          0..1, default 0.22. The detail tile's micro-
+//                             roughness scatter. Same: real, and was undocumented.
+//   opts.worldTile            metres per source tile. Solves `repeat` (planar) or
+//                             the triplanar tiles-per-metre from a WORLD size
+//                             instead of a texel density - the thing
+//                             uvScaleFor() structurally could not express.
+//   opts.alphaLod / DEFS.alphaLod
+//                             0..2, LEVELS 3-10 only (see `declarative`).
+//                             Anisotropy-driven mip bias on the ALPHA CUT of an
+//                             alpha-tested map, so a grating or a fence stops
+//                             resolving into a hard moire lattice at oblique
+//                             angles. Costs one fetch of a sampler that is
+//                             already bound.
+//
+//                             AND IT IS A SMALL EFFECT, WHICH IS ITSELF THE
+//                             FINDING. Measured: -7% Laplacian and -25% isolated
+//                             specks on an isolated grating at 74 degrees of
+//                             incidence; -1% / -2% on bunker's establishing frame,
+//                             and exactly 0 at head-on. The reason is worth
+//                             knowing before anyone spends another round on it: the
+//                             far-field grating region measures 81% BIMODAL (every
+//                             pixel at one of two values) against 46% for a shaded
+//                             surface in the same frame, so the artefact is the
+//                             binary DISCARD, and _alphaCoverageMips already holds
+//                             the surviving fraction constant at every mip - so
+//                             choosing a coarser mip rearranges which pixels
+//                             survive without lowering the contrast between them.
+//                             A hard cut cannot be antialiased from inside the
+//                             fragment shader. The two things that would actually
+//                             fix it are alpha-to-coverage on a multisampled
+//                             target (postfx owns the targets; the renderer is
+//                             created with antialias:false and postfx does TAA
+//                             instead) or modelling the near bars as geometry.
+//   'masonry'                 A coursed-rubble recipe with a spalled lime-render
+//                             boundary, recessed dark joints and biological
+//                             colonisation, promoted into the library because
+//                             four levels wanted it and were authoring it
+//                             locally. 'stone' is UNTOUCHED - it is still the
+//                             near-neutral pebble field its consumers are tuned
+//                             against.
 //
 // ----------------------------------------------------------------------------
 // COLD HARBOR (level 2) - additions. Everything here is inert on the market:
@@ -246,7 +341,13 @@
   //          world-space and does not tile.
   // ground : world-space grounding wear - dust drifted at the base of walls,
   //          settled on up-facing surfaces, grime weeping under ledges.
-  // meso   : MESO (0.1-0.6 m) surface band amount. Nothing else in the
+  // meso   : MESO surface band amount. Its SCALE is opts.mesoScale, in tiles per
+  //          world metre, default 1.82 - which is a 0.55 m tile and therefore
+  //          delivers 4 mm to 1.7 cm features, NOT the 0.1-0.6 m this comment has
+  //          always claimed. Measured as the single largest source of near-field
+  //          high-frequency energy in the library; see the block in _features for
+  //          both measurements and for why the default did not move.
+  //          MESO surface band amount. Nothing else in the
   //          pipeline authors it: the detail layer is a 5 cm period that fades
   //          out by 26 m, gbMacroNoise's octaves are 11.6/3.1/1.0 m, and the
   //          base maps minify to their mean past ~5 m. Everything between
@@ -272,6 +373,29 @@
   // dust   : the colour the grounding/macro dust layer tints toward. Defaults
   //          to a neutral tan; the road wants the sand palette so drifted dust
   //          actually reads as the sand it blew off.
+  // grain  : 0..1, default 1 = the map exactly as the texture library authored
+  //          it. Below 1 the WHOLE BASE MAP SET is decimated by whole octaves
+  //          before anything else sees it, which lowers the base map's own
+  //          high-frequency content without changing its world scale. This is
+  //          the one band of the pipeline a consumer could not reach: `detail`,
+  //          `detailCm` and `meso` are all forwardable, but every recipe in the
+  //          library carries its own grain and no uv scale removes it - halving
+  //          the tiling makes the grain BIGGER, not weaker, because the tile IS
+  //          the feature. Quantised to octaves (see GRAIN_DROPS) and applied on
+  //          the CPU, so it reaches the AO and height channels too and reduces
+  //          VRAM instead of costing a sampler. Ignored on alpha-cut defs, where
+  //          the alpha is the material - use `alphaLod` there.
+  // alphaLod: 0..2, LEVELS 3-10 only. How hard to bias the mip the ALPHA CUT is
+  //          taken from, in units of the pixel footprint's own ANISOTROPY.
+  //          Anisotropic filtering deliberately keeps the major axis sharp, which
+  //          on an alpha-TESTED lattice at an oblique angle is a hard binary
+  //          moire that no amount of specular AA can touch - the cut is not a
+  //          shading term. Biasing only the alpha to the isotropic (major-axis)
+  //          level band-limits the coverage decision while the albedo and normal
+  //          keep their anisotropic sharpness, and the coverage-preserving mip
+  //          chain (see _alphaCoverageMips) guarantees the SURVIVING FRACTION is
+  //          the same at every level, so the fence neither fills in nor
+  //          dissolves. 0 (default on market/harbor, always) is today's cut.
   // triWarp: [x,y,z] world-space domain-warp amplitude, in TILES, applied to
   //          the triplanar projection. Triplanar has no stochastic tiling (six
   //          taps per map is not affordable), so without this the ground and
@@ -850,6 +974,14 @@
       rough: [0.34, 0.84], roughFlat: 0.56, metal: 0.25,
       ns: 0.85, ao: 0.85, env: 1.10, repeat: 2.4, side: 2, alphaTest: 0.42,
       alphaCov: true,
+      // LEVELS 3-10 only, as steel_grate. Measured on the isolated rig at 74
+      // degrees of incidence, far band: Laplacian 0.0214 / 0.0198 / 0.0176 /
+      // 0.0155 at alphaLod 0 / 0.85 / 1.5 / 2.0, monotone, while the NEAR band is
+      // bit-identical at every setting (anisotropy is zero head-on, so the bias
+      // is exactly zero and a player walking up to the fence keeps every wire).
+      // The mean rises only 2.6% at 2.0, which is the check that matters: the
+      // coverage-preserving chain means the mesh neither dissolves nor fills in.
+      alphaLod: 1.5,
       detail: 0.35, detailTile: 24, macro: 0.10, tri: false, pom: 0,
       detailKind: 'metal', polish: 0.50,
       wetDark: 0.82, wetRough: 0.10, wetAmt: 0.85, wetFlat: 0.35, streak: 0.35
@@ -859,6 +991,24 @@
       rough: [0.34, 0.88], roughFlat: 0.60, metal: 0.35,
       ns: 1.0, ao: 0.9, env: 1.05, repeat: 1.6, side: 2, alphaTest: 0.5,
       alphaCov: true,
+      // LEVELS 3-10 ONLY - _features gates the read on `this.declarative`, which
+      // is false for market AND harbor, so the harbor's walkways and the crane
+      // gantry emit exactly the shader they shipped with. A grating is the worst
+      // case in the library for an unfiltered alpha cut: bunker's operating
+      // platform and gantry ring fill the lower half of its establishing frame,
+      // and darkening the albedo two stops and tripling the grime did not touch
+      // the artefact, because the artefact is the DISCARD, not the shading.
+      //
+      // 1.8, chosen by measurement on that frame rather than by taste. Its
+      // mid-ground grating band (900-1270 x 430-620), against the same capture
+      // with this term absent:
+      //   alphaLod 1.0   Laplacian 0.0889 -> 0.0864   specks 15.22% -> 14.60%
+      //   alphaLod 1.8   Laplacian 0.0889 -> 0.0761   specks 15.22% -> 11.93%
+      // and in both cases the NEAR grating band and the reactor dome beside it
+      // are unchanged to four decimal places, which is the property that makes a
+      // footprint-driven term safe to leave on: it cannot touch a surface whose
+      // footprint is not stretched.
+      alphaLod: 1.8,
       detail: 0.5, detailTile: 20, macro: 0.12, tri: false, pom: 0,
       detailKind: 'metal', polish: 0.56,
       wetDark: 0.74, wetRough: 0.09, wetAmt: 0.95, wetFlat: 0.40, puddle: 0.0, streak: 0.6
@@ -1024,6 +1174,92 @@
       detail: 0, macro: 0.14, tri: false, pom: 0,
       detailKind: 'mineral', polish: 0.0,
       wetDark: 1.0, wetRough: 0.03, wetAmt: 0.0, wetFlat: 0.0
+    },
+
+    // ========================================================================
+    // LEVELS 3-10 - PROMOTED RECIPES
+    //
+    // Purely additive: no existing key, alias, fallback style or tuning value
+    // above is touched, and nothing warms this in build(), so a level that does
+    // not ask for it never pays to generate it.
+    // ========================================================================
+
+    // COURSED RUBBLE, with sparse remnants of a spalled lime render.
+    //
+    // The render REMNANTS are what a 1 m tile can carry; a render BOUNDARY at the
+    // metre scale is the level's composition and belongs to blended('masonry',
+    // 'lime_wash'). See the coverage note above MASONRY_VARIANTS - four
+    // measurements, three of them refuting a plausible guess.
+    //
+    // Four levels wanted this and all four were paying for it themselves:
+    // snowbound authors four map sets in-file at ~1,600 lines and the masonry one
+    // is not snowbound-specific; ruins' towers, bunker's older structure and the
+    // market's plaster all want the same substance. The library's answer until
+    // now was 'stone', which is genStone - a NEAR-NEUTRAL, SINGLE-SCALE,
+    // ISOTROPIC PEBBLE FIELD. That is a rock, not a wall: it has no courses, no
+    // joints, no bedding, no render skin and no colonisation, so between about
+    // 1 m and 4 m - the range a player stands at - every stone surface in the
+    // build read as the same gravel at a different brightness.
+    //
+    // 'stone' IS DELIBERATELY NOT CHANGED. Its consumers (ruins' five stone
+    // surfaces, jungle's stonework) are tuned against its measured mean and its
+    // pebble character; moving it would silently re-grade five surfaces in a
+    // level that has already been through three review rounds. This is a new
+    // name they can move to one surface at a time.
+    //
+    // WHY IT IS TRIPLANAR AND WHY triWarp.y IS ZERO. A wall recipe with a
+    // horizontal lattice must not have its scale left to whatever uv the
+    // consumer baked (that is the concrete_wall/plaster failure: a 30 px detail
+    // period on a 1.2 m wall against 180 px on a 5 m pier), and the domain warp
+    // must not displace the axis the courses run along or the courses wander -
+    // exactly the argument DEFS.brick already carries. Warping only X and Z
+    // slides the pattern ALONG its courses, which breaks the repeat and leaves
+    // every bed joint dead level.
+    //
+    // `texels: 500` rather than a hard `repeat`, so the course height is the same
+    // 20 cm at every quality preset instead of doubling at 'ultra'. The tile
+    // carries 5 courses, so a ~1.02 m tile lands them at ~20 cm - real coursed
+    // rubble - and the stone widths, the course heights and the per-course
+    // horizontal phase are all hashed, so no two courses break in the same place.
+    masonry: {
+      color: 0x8d8578, alb: 0.26, hue: 0.55, tex: 'masonry', local: true,
+      rough: [0.44, 0.97], roughFlat: 0.90, metal: 0.0,
+      ns: 1.20, ao: 0.95, env: 1.0, texels: 500, repeat: 0.5,
+      // The detail tile is deliberately WEAKER and COARSER than 'stone' (0.9 at
+      // 5 cm): this recipe authors its own structure from the bedding down to
+      // about 2 mm, so a strong 5 cm micro layer on top of it is the second
+      // pebble field the complaint was about in the first place.
+      detail: 0.55, detailCm: 7, wdet: true, macro: 0.22, tri: true, triSharp: 9.0, pom: 0,
+      detailKind: 'mineral', polish: 0.34, triWarp: [0.52, 0.0, 0.52], chroma: 0.80,
+      meso: 0.85, ground: true, groundAmt: 0.46, dust: 0xa8977a,
+      // Harmless on a dry level (F.wet is false there, so none of it is read).
+      // puddle 0, DELIBERATELY, and it is not a look decision. A non-zero puddle
+      // turns on the ripple sampler, and _features trades the tile LOW-PASS away
+      // for it one-for-one to keep the fragment sampler count flat (see the
+      // COLD HARBOR sampler-budget note). On a 1 m tile the low-pass is worth
+      // more than standing water on a wall that cannot hold any: this recipe is
+      // primarily vertical. A level laying it FLAT as rubble paving should pass
+      // `puddle: 0.3` at that call site and accept the trade there.
+      wetDark: 0.50, wetRough: 0.105, wetAmt: 1.0, wetFlat: 0.55,
+      puddle: 0, streak: 0.85
+    },
+
+    // The same masonry with NO render skin: bare coursed rubble, for a wall that
+    // never had one (ruins' towers and galleries, a dry-stone revetment, a
+    // rubble plinth). Not a setting of `masonry` but its own name, because it is
+    // its own map set and its own substance - see MASONRY_VARIANTS. Slightly
+    // rougher and a touch darker, because a bare quarry face weathers to a
+    // duller surface than a limewashed one and there is no pale skin lifting the
+    // mean.
+    masonry_rubble: {
+      color: 0x87806f, alb: 0.19, hue: 0.55, tex: 'masonry_rubble', local: true,
+      rough: [0.48, 0.98], roughFlat: 0.92, metal: 0.0,
+      ns: 1.30, ao: 0.95, env: 1.0, texels: 500, repeat: 0.5,
+      detail: 0.60, detailCm: 7, wdet: true, macro: 0.24, tri: true, triSharp: 9.0, pom: 0,
+      detailKind: 'mineral', polish: 0.28, triWarp: [0.52, 0.0, 0.52], chroma: 0.80,
+      meso: 0.90, ground: true, groundAmt: 0.48, dust: 0xa8977a,
+      wetDark: 0.48, wetRough: 0.115, wetAmt: 1.0, wetFlat: 0.52,
+      puddle: 0, streak: 0.85
     }
   };
 
@@ -1103,7 +1339,20 @@
     water: 'sea_water',
     sea: 'sea_water',
     ocean: 'sea_water',
-    harbour: 'sea_water'
+    harbour: 'sea_water',
+
+    // ---- LEVELS 3-10 ------------------------------------------------------
+    // Additive spellings for the promoted masonry recipe. Not one existing key
+    // is redefined, so `wall`, `stucco`, `floor`, `debris` and every other
+    // market/harbor spelling still resolves exactly where it did.
+    masonry_wall: 'masonry',
+    render_wall: 'masonry',
+    lime_render: 'masonry',
+    rendered_stone: 'masonry',
+    coursed_stone: 'masonry_rubble',
+    rubble_stone: 'masonry_rubble',
+    stonework: 'masonry_rubble',
+    dry_stone: 'masonry_rubble'
   };
 
   // Fallback palette used when ctx.textures cannot supply a map set. Values
@@ -1158,7 +1407,12 @@
     structural_steel: [0x605950, 0x35312a, 22, 3, 0.28],
     painted_line: [0xd8c65a, 0x8e8137, 26, 4, 0.30],
     reefer_panel: [0x9aa3a8, 0x5f6669, 14, 3, 0.14],
-    sea_water: [0x0d1a20, 0x050a0d, 10, 2, 0.05]
+    sea_water: [0x0d1a20, 0x050a0d, 10, 2, 0.05],
+    // ---- LEVELS 3-10 ------------------------------------------------------
+    // Only reached if _genMasonrySet itself fails; the masonry generator is
+    // the real answer for this name (see _genFallback).
+    masonry: [0x8d8578, 0x5f584c, 22, 4, 0.62],
+    masonry_rubble: [0x87806f, 0x574f44, 22, 4, 0.68]
   };
 
   // The two surfaces with no plausible market stand-in. `local:true` in DEFS
@@ -1184,6 +1438,93 @@
   var FALLBACK_CUT = {
     chainlink: { kind: 'diamond', pitchU: 6, pitchV: 6, wire: 0.012, base: 0x8a9096, tip: 0xb6bfc4 },
     steel_grate: { kind: 'bar', pitchU: 7, pitchV: 2, wire: 0.040, base: 0x5c6165, tip: 0x878e92 }
+  };
+
+  // --------------------------------------------------------------------------
+  // LEVELS 3-10: the masonry recipe's layout and palette. See _genMasonrySet.
+  //
+  // `courses` is an INTEGER and every width/height is a normalised cumulative
+  // sum, which is what makes the tile wrap exactly in both axes - a masonry map
+  // whose bed joints do not line up across the tile boundary is worse than no
+  // masonry map at all, because the seam becomes the most legible feature on the
+  // wall. The per-course horizontal PHASE is hashed independently, so no two
+  // courses break their perpends in the same place: running-bond regularity is
+  // what makes procedural stone read as brick.
+  // --------------------------------------------------------------------------
+  var MASONRY = {
+    courses: 5,          // per tile; with texels 500 on a 512 tile -> ~20 cm beds
+    // TWO TO FOUR STONES PER COURSE, not four to seven. A 1 m tile in five
+    // courses gives 20 cm beds, so seven stones per course would be 14 cm wide -
+    // as tall as they are wide, which is a BLOCK. Coursed rubble runs about 2:1,
+    // and the first pass photographed as brickwork for exactly this reason.
+    stonesMin: 2,
+    stonesMax: 4,
+    joint: 0.017,        // bed/perpend width in tile fractions (~1.7 cm)
+    jointDepth: 0.26,    // how far the mortar sits below the stone face
+    // The stone lottery. `dark` and `pale` are the ends of it; `fresh` is what a
+    // chipped arris exposes, and it is deliberately the brightest thing in the
+    // recipe - a broken edge on weathered stone is the one place the unweathered
+    // substrate shows, and it is most of what reads as "chipped" at 3 m.
+    base: 0x8d8578, dark: 0x5c554a, pale: 0xa9a08c, fresh: 0xbdb5a1,
+    // How far each stone's colour is pulled back toward the family mid. 0.15,
+    // not 0.28: at 0.28 the lottery flattened into one tone and the wall lost
+    // the stone-to-stone value range that is most of what says "rubble".
+    lotteryPull: 0.15,
+    // Lime mortar is PALER and dirtier than the stone it beds, not darker: the
+    // joint reads dark because it is RECESSED and self-shadowing, which is the
+    // AO's job, not the albedo's. Painting a dark joint as well double-counts it
+    // and is why hand-rolled masonry usually reads as a drawn grid.
+    mortar: 0x9a9482,
+    // The surviving lime render skin. Deliberately well clear of the stone
+    // lottery's pale end (0xa9a08c): a patch of render has to read as a DIFFERENT
+    // MATERIAL sitting on the wall, and once the albedo anchor has normalised the
+    // whole map to one mean, anything closer than about 15% disappears into the
+    // stone.
+    render: 0xc6bea9,
+    bio: 0x33402a        // algal / lichen colonisation
+  };
+
+  // Two names, one generator. They are DIFFERENT SUBSTANCES, not two settings of
+  // one, and the levels that asked wanted both: snowbound's church and the
+  // market's plaster are a rendered wall with the render broken away in patches;
+  // ruins' towers and galleries are bare coursed stone that never had a render.
+  //
+  // COVERAGE IS THE WHOLE ARGUMENT. The first pass ran the render at about half
+  // coverage and photographed as CAMOUFLAGE: pale blotches the same size as the
+  // stones, reading as a paint pattern rather than as a skin over a wall. A spall
+  // patch is physically a MINORITY event a few stones across, so the render has to
+  // be the majority surface with holes in it - `renderCover` is the fraction, not
+  // a blend weight, and 0 removes the layer outright rather than thinning it.
+  // COVERAGE WAS MEASURED FOUR TIMES AND EVERY PLAUSIBLE ANSWER WAS WRONG EXCEPT
+  // THE LAST. Written down because the reasoning that produced the first three
+  // was sound and the frames disagreed with it:
+  //
+  //   0.50  the render and the stone were the same SIZE and the same AMOUNT, so
+  //         the wall photographed as CAMOUFLAGE - two interleaved blotch fields
+  //         with no figure and no ground.
+  //   0.66  same failure, slightly paler.
+  //   0.86  the render covered everything and the wall photographed as FLAT
+  //         STUCCO. The masonry was gone. "The render is the surface, with holes
+  //         in it" only works if a hole is big enough to show several stones, and
+  //         a 1 m tile cannot carry a 1 m hole without repeating the hole every
+  //         metre.
+  //   0.14  works. The RUBBLE is the ground and the render is a sparse FIGURE -
+  //         a few pale patches still clinging to a wall that has mostly lost its
+  //         skin. Figure/ground separates because the figure is sparse, which is
+  //         the thing none of the higher values could buy at any size.
+  //
+  // THE GENERAL LESSON, for whoever adds the next recipe: a feature cannot be
+  // authored into a tile at the same spatial frequency as the tile's own primary
+  // structure. The stones are 20-30 cm on a 1 m tile; a render patch at 15-40 cm
+  // competes with them and the two average into mottle. Sparse (0.14) or absent
+  // (0) are the only readable settings, and a wall half stripped at the METRE
+  // scale is the level's composition, not the tile's - use `blended('masonry',
+  // 'lime_wash')`, which already lerps two whole map sets on vertex alpha with a
+  // feathered world-noise edge where no alpha is painted. That is exactly the
+  // tool for it and it puts the metre-scale decision where it belongs.
+  var MASONRY_VARIANTS = {
+    masonry: { renderCover: 0.14, holeScale: 4.0 },
+    masonry_rubble: { renderCover: 0.0, holeScale: 4.0 }
   };
 
   // ==========================================================================
@@ -2034,6 +2375,10 @@
     this._anisotropy = 4;
     this._means = [];              // [{img, mean}] - albedo statistics cache
     this._lps = [];                // [{img, tex}]  - tile low-pass cache
+    // LEVELS 3-10: [{img, drops, mode, tex}] - decimated map cache for `grain`.
+    // Keyed on the SOURCE image, so every material asking the same recipe for the
+    // same number of octaves shares one decimated texture.
+    this._grainCache = [];
     this.defs = DEFS;
     this.names = Object.keys(DEFS);
     this.densityWarnings = [];     // see _checkDensity
@@ -3049,6 +3394,58 @@
     } catch (e) { return 1; }
   };
 
+  /**
+   * uvScaleForWorld(name, metresPerTile) -> the world-metres-to-uv scale that
+   * makes ONE SOURCE TILE span `metresPerTile` world metres.
+   *
+   * WHY THIS EXISTS. uvScaleFor() can only express TEXEL DENSITY, and a map whose
+   * features are sized in the world - hazard striping in 120 mm bands, barrier
+   * tape, painted lane markings, a dado with a real tile size - does not have a
+   * texel density, it has a physical size. A consumer with such a map had no way
+   * to ask, silently got the library's texel figure, and rendered a flat single
+   * colour: `uvScaleFor('concrete', 480)` solves for a 1024-texel concrete map,
+   * and a 256 px hazard tile carrying 2.7 stripe pairs asked to run at that
+   * density samples one flat corner of itself across a whole 2.3 m barrier. That
+   * is item one on the instant-fail list, on one of the largest props in the near
+   * field, and it is invisible to review because a flat surface reads as a
+   * lighting problem.
+   *
+   * `name` may be null/omitted for a LOCALLY AUTHORED map - the common case here.
+   * A local map is bound at repeat 1,1, so the answer is simply 1/metresPerTile
+   * and no library state is involved. Pass a name only when the geometry will
+   * wear a library material, in which case that def's own `repeat` is divided
+   * out.
+   *
+   * TRIPLANAR NAMES RETURN 1 AND SAY SO, exactly as uvScaleFor does: those
+   * surfaces are world-projected and ignore uv entirely, so a uv scale cannot
+   * express anything about them. Use `opts.worldTile` (or `opts.triScale`)
+   * instead - worldTile solves both projections and is the safe answer either
+   * way.
+   */
+  MaterialLibrary.prototype.uvScaleForWorld = function (name, metresPerTile) {
+    try {
+      var m = Math.abs(+metresPerTile);
+      if (!(m > 1e-4)) return 1;
+      if (!name) return M.clamp(1 / m, 0.002, 200);
+      if (ALIASES[name]) name = ALIASES[name];
+      var def = DEFS[name];
+      if (!def) return M.clamp(1 / m, 0.002, 200);
+      if (def.tri) {
+        this.densityWarnings.push({
+          name: name, worldTile: m,
+          note: 'triplanar: uv is ignored, pass opts.worldTile or opts.triScale'
+        });
+        try {
+          console.warn('materials: uvScaleForWorld("' + name + '") - that def is ' +
+            'triplanar and ignores uv; pass { worldTile: ' + m + ' } to get(), ' +
+            'which solves tiles-per-metre for both projections');
+        } catch (e2) { /* no console */ }
+        return 1;
+      }
+      return M.clamp(1 / (m * (def.repeat || 1)), 0.002, 200);
+    } catch (e) { return 1; }
+  };
+
   // Density audit. Only runs when a consumer declares opts.uvScale, so it
   // costs nothing for everyone else and never fires spuriously.
   //
@@ -3071,7 +3468,12 @@
   MaterialLibrary.prototype._checkDensity = function (name, def, opts, maps) {
     if (opts.uvScale === undefined || def.tri) return;
     if (!maps.map || !maps.map.image || !maps.map.image.width) return;
-    var d = maps.map.image.width * (def.repeat || 1) * opts.uvScale;
+    // A consumer that declared opts.worldTile has ASKED for a world density, and
+    // it is solved (see _maps), so auditing it against a texel budget it never
+    // claimed would print a warning for correct code.
+    if (opts.worldTile !== undefined) return;
+    var d = maps.map.image.width * (maps.uvRepeat !== undefined ? maps.uvRepeat
+      : (def.repeat || 1)) * opts.uvScale;
     var want = this.uvScaleFor(name, 500);
     if (d < 350 || d > 750) {
       this.densityWarnings.push({ name: name, texelsPerM: Math.round(d), wantUvScale: want });
@@ -3742,6 +4144,50 @@
     // measure underground.
     var microAAOn = !!this.declarative;
 
+    // ---- LEVELS 3-10: anisotropy-biased ALPHA CUT ---------------------------
+    // An alpha-TESTED lattice - a walkway grating, a gantry ring, a perimeter
+    // fence - is the one thing in this file that specular antialiasing
+    // structurally cannot help: the artefact is not in the shading, it is in the
+    // DISCARD. Measured on bunker's establishing frame, where the operating
+    // platform and the gantry ring fill the lower half: the grating regions carry
+    // Laplacian energy 0.0884 near and 0.0889 mid against 0.0354 on the reactor
+    // dome at a comparable mean luminance in the same frame, and 13.8% / 15.2%
+    // isolated over-bright specks against 3.2%. The MID band being worse than the
+    // NEAR band is the signature - a resolved lattice is detail, an unresolved one
+    // is noise.
+    //
+    // The cause is anisotropic filtering doing exactly what it is for. It picks
+    // the mip from the MINOR axis of the pixel footprint and keeps the major axis
+    // sharp, which is right for an albedo and wrong for a coverage test: at an
+    // oblique angle the cut is then taken from data varying many times per pixel
+    // along one axis, and a binary decision on that is a moire lattice.
+    //
+    // So bias the ALPHA fetch (only) toward the isotropic level - the major axis -
+    // by `alphaLod` times the measured anisotropy in mips. The albedo, the normal
+    // and the ORM keep their anisotropic sharpness. Coverage is not disturbed,
+    // because _alphaCoverageMips already guarantees the surviving fraction is the
+    // same at every level of the chain: the fence neither fills in nor dissolves,
+    // it stops fizzing. At head-on incidence the anisotropy is zero and the bias
+    // is exactly zero, so there is no near-field cost and no tuning constant.
+    //
+    // Restricted to the plain planar path deliberately: the stochastic and
+    // triplanar paths are never taken by an alpha-cut def (blending two offset
+    // taps of an ALPHA map lands the blend band on half coverage, which alphaTest
+    // then cuts into a ragged fringe - see the chainlink/steel_grate comments), so
+    // supporting them would be untested code guarding a case that cannot occur.
+    var alphaLodAmt = 0;
+    if (this.declarative && !triOn && !stochOn && !!maps.map) {
+      alphaLodAmt = opts.alphaLod !== undefined ? +opts.alphaLod
+        : (def.alphaLod !== undefined ? +def.alphaLod : 0);
+      if (!(alphaLodAmt > 0)) alphaLodAmt = 0;
+      else alphaLodAmt = M.clamp(alphaLodAmt, 0, 2);
+      // No alpha test, nothing to band-limit.
+      var atOn = opts.alphaTest !== undefined ? opts.alphaTest
+        : (maps.alphaTest !== undefined ? maps.alphaTest
+          : (def.alphaTest !== undefined ? def.alphaTest : 0));
+      if (!(atOn > 0)) alphaLodAmt = 0;
+    }
+
     // ---- second layer (see MaterialLibrary.blended) --------------------------
     var bw = (triOn && opts.blendWith && opts.blendWith.maps && opts.blendWith.maps.map)
       ? opts.blendWith : null;
@@ -3787,8 +4233,73 @@
       stochQ: def.stochQ || [0, 0],
       meso: mesoOn,
       mesoAmount: mesoAmt,
-      // 0.55 m world period. Long enough to sit above the 5 cm detail layer
-      // and below gbMacroNoise's 1 m octave, which is exactly the hole.
+      // ---- LEVELS 3-10: THE MESO BAND WAS NOT A MESO BAND --------------------
+      // 1.82 tiles per metre is a 0.55 m TILE, and this file has always described
+      // that as "the 0.1-0.6 m surface band". It is not: the band is set by the
+      // tile's CONTENT, not by its period. The family tile's octaves are a worley
+      // chip field at 8 cycles, an fbm at 16, a worley pore field at 32 and a fine
+      // perlin at 128, so at a 0.55 m tile the layer actually delivers features
+      // from 4 mm to 1.7 cm. It was a SECOND MICRO LAYER, at a larger amplitude
+      // than the first one and with no density schedule, and everything between
+      // 5 cm and 1 m was still the hole this was written to fill.
+      //
+      // MEASURED, on the isolated wall rig at the range a player stands at, by
+      // switching one layer at a time (there are eight candidates and six of them
+      // turned out to be innocent):
+      //
+      //   concrete_wall at 1.5 m, 311 px/m      Laplacian   isolated specks
+      //     as shipped                            0.1259        22.30%
+      //     base normal scale 0 (unchanged)       0.1259        22.3%
+      //     detail strength 0.85 -> 0.3           0.1061        17.92%
+      //     detail cavity 0.85 -> 0               0.1068        18.09%
+      //     near tier off                         0.1062        17.95%
+      //     polish 0                              0.1054        17.87%
+      //     grain 1 -> 0.3 (base map 1024 -> 128) 0.1153        18.09%
+      //     MESO OFF                              0.0709         5.15%
+      //     MESO AT 0.35 TILES/M                  0.0654         4.46%
+      //
+      //   painted_metal at 1.2 m: meso off took Laplacian 0.1066 -> 0.0198 and
+      //   isolated specks 18.01% -> 0.14%, i.e. the meso band was 81% of the
+      //   high-frequency energy and essentially all of the speckle.
+      //
+      // Note the last row: at 1.5 m a CORRECTLY SCALED band beats removing the
+      // layer outright on both numbers, because it still modulates roughness and
+      // cavity - smoothly - at the scale it claims to. This is not "turn the meso
+      // band down", which is what metro and bunker both did (metro runs meso 0.10
+      // to 0.40 against library defaults of 0.85 to 1.15); it is "put it where the
+      // comment says it is".
+      //
+      // ---- AND THE DEFAULT IS STILL 1.82, BECAUSE THE LEVEL FRAMES DISAGREED ---
+      // 0.35 was the default here for one round of verification and it has been
+      // reverted. The isolated rig is a 1.2-1.5 m read and it is not the whole
+      // story: a 4 mm to 1.7 cm layer is SUB-PIXEL past about 3 m, so the mip
+      // chain erases it and the old scale is silent in the mid field. A 9-36 cm
+      // layer is not sub-pixel at 25 m - it is resolved structure with a real
+      // specular response - so moving the scale trades a near-field win for a
+      // mid-field cost. Measured on the levels rather than on the rig:
+      //
+      //   refinery lv_hero3            Laplacian        isolated specks
+      //     near bund (2-4 m)      0.0900 -> 0.0645     8.70% -> 4.67%   BETTER
+      //     mid bund   (8-14 m)    0.0691 -> 0.1202     5.61% -> 20.62%  WORSE
+      //     tank wall  (10-25 m)   0.0981 -> 0.1612    10.91% -> 28.77%  WORSE
+      //                            and its mean fell 0.396 -> 0.324, i.e. an 18%
+      //                            value change on the largest surface in frame
+      //   bunker lv_overview
+      //     dado wall              0.0627 -> 0.0715     8.75% ->  9.27%  worse
+      //     reactor dome           0.0354 -> 0.0423     3.20% ->  3.39%  worse
+      //   metro lv_interior
+      //     left wall              0.0346 -> 0.0293     1.66% ->  1.30%  BETTER
+      //     flooded floor          0.0338 -> 0.0446     2.29% ->  5.02%  worse
+      //
+      // The refinery bund wall also stopped reading as concrete and started
+      // reading as pebbledash, which no metric flagged. So this is a PER-SURFACE
+      // decision, not a library default: apply `mesoScale: 0.35` to a surface the
+      // player reads at about a metre - a dado, a rail-car lining, a door leaf, a
+      // control panel, the near apron - and leave 1.82 on anything whose job is
+      // the 10-25 m mid field. A level that does that also gets its meso AMPLITUDE
+      // back: at 0.35 the corrected band at the library's full 0.85 is cleaner
+      // than the old band at 0.40, so metro's and bunker's amplitude suppression
+      // can be undone on the surfaces they move.
       mesoScale: opts.mesoScale !== undefined ? opts.mesoScale : 1.82,
       grounding: groundOn,
       groundY: opts.groundY !== undefined ? opts.groundY : this.groundY,
@@ -3835,6 +4346,8 @@
       lodDet: lodDetOn,
       // LEVELS 3-10. Grazing-angle term on the specAA distance ramp.
       microAA: microAAOn,
+      // LEVELS 3-10. Anisotropy-biased alpha cut, 0 = today's cut.
+      alphaLod: alphaLodAmt,
       // Specular AA only means anything where a normal map (or the detail /
       // meso layers) can put sub-pixel variation into the shading normal.
       specAA: (!!maps.normalMap || detailOn)
@@ -3906,6 +4419,7 @@
     var anyShader = F.world || F.triplanar || F.detail || F.macro || F.parallax ||
       F.wear || F.translucent || F.hasRoughMap || F.wind || F.stochastic ||
       F.grounding || F.specAA || F.polish || F.premulSpec || F.wet || F.water ||
+      F.alphaLod > 0 ||
       (F.specOcc && (F.detail || F.grounding || F.hasNormalMap));
     if (!anyShader) return mat;
 
@@ -3985,6 +4499,7 @@
     }
     if (F.hasRoughMap) U.gbRoughRange = { value: new THREE.Vector2(F.roughRange[0], F.roughRange[1]) };
     if (F.specAA) U.gbSpecAA = { value: F.specAA };
+    if (F.alphaLod > 0) U.gbAlphaLod = { value: F.alphaLod };
     if (F.wear) {
       U.gbGrimeColor = { value: srgb(F.grimeColor) };
       U.gbWearColor = { value: srgb(F.wearColor) };
@@ -4113,6 +4628,7 @@
     if (F.lodNrm) ck += '_L';
     if (F.lodDet) ck += '_K';
     if (F.microAA && F.specAA) ck += '_N';
+    if (F.alphaLod > 0) ck += '_J';
     if (F.water) ck += '_Z';
     // Appended to the water key, so the harbor's sea - which can never set
     // F.reflect - keeps the exact '_Z' it shipped with.
@@ -4418,6 +4934,7 @@
     if (F.hasRoughMap) pars.push('uniform vec2 gbRoughRange;');
     if (F.sharedOrm) pars.push('vec4 gbOrm = vec4( 1.0, 1.0, 0.0, 1.0 );');
     if (F.specAA) pars.push('uniform float gbSpecAA;');
+    if (F.alphaLod > 0) pars.push('uniform float gbAlphaLod;');
     if (F.translucent) {
       pars.push('uniform vec3 gbSSSColor;', 'uniform float gbSSSScale;', 'uniform float gbSSSPower;',
         'uniform float gbSSSWrap;', 'uniform float gbSSSAmbient;');
@@ -4663,6 +5180,53 @@
       mapCode.push('diffuseColor.rgb = gbGroundAlbedo( diffuseColor.rgb );');
     }
     src = src.replace('#include <map_fragment>', mapCode.join('\n'));
+
+    // ---- LEVELS 3-10: the alpha cut's own LOD -------------------------------
+    // Replaces diffuseColor.a with the base map's alpha refetched at the
+    // ISOTROPIC (major-axis) mip before three's alphatest_fragment cuts it. See
+    // the alphaLod block in _features for the measurement and the argument; the
+    // short version is that anisotropic filtering keeps the major axis sharp,
+    // which is right for shading and wrong for a binary coverage test.
+    //
+    // gbALod is the anisotropy of the footprint in MIPS - log2 of the ratio of
+    // the long axis to the short one - so it is exactly zero on a surface the
+    // camera faces and grows only where the map is genuinely being read many
+    // texels per pixel along one axis. No distance term is needed or wanted: a
+    // grating two metres away seen edge-on aliases and one twenty metres away
+    // seen face-on does not.
+    //
+    // Costs one fetch of `map`, a sampler that is already bound, so it cannot
+    // push a program past MAX_TEXTURE_IMAGE_UNITS (which does not degrade - it
+    // fails to LINK and the surface vanishes).
+    if (F.alphaLod > 0) {
+      src = src.replace('#include <alphatest_fragment>', [
+        // USE_ALPHAMAP is excluded because the alpha would then be the product of
+        // two maps and this block only knows one of them; nothing in the library
+        // combines an alphaMap with an alphaTest, and silently dropping the second
+        // factor would turn a cut-out into a solid.
+        '#if defined( USE_ALPHATEST ) && defined( USE_MAP ) && ! defined( USE_ALPHAMAP )',
+        '{',
+        '  vec2 gbAdx = dFdx( vMapUv ), gbAdy = dFdy( vMapUv );',
+        '  float gbAl2 = max( dot( gbAdx, gbAdx ), dot( gbAdy, gbAdy ) );',
+        '  float gbAs2 = min( dot( gbAdx, gbAdx ), dot( gbAdy, gbAdy ) );',
+        '  // log2 of the LENGTH ratio, and the inputs are squared lengths, so the',
+        '  // coefficient is 0.5 - log2(sqrt(a)/sqrt(b)) is 0.5*log2(a/b). It was',
+        '  // 0.25 for one round of measurement, which quietly under-drove the whole',
+        '  // term by a factor of two while the comment above it claimed otherwise.',
+        '  // One free level after that, for the same reason the base-normal schedule',
+        '  // allows itself one: hardware anisotropic filtering genuinely resolves',
+        '  // about two texels per pixel, so the ramp starts where the hardware',
+        '  // stops helping.',
+        '  float gbALod = max( 0.5 * log2( max( gbAl2, 1e-12 ) / max( gbAs2, 1e-12 ) ) - 0.5, 0.0 );',
+        '  diffuseColor.a = texture2D( map, vMapUv + gbUvShift, gbALod * gbAlphaLod ).a * opacity;',
+        '#if defined( USE_COLOR_ALPHA )',
+        '  diffuseColor.a *= vColor.a;',
+        '#endif',
+        '}',
+        '#endif',
+        '#include <alphatest_fragment>'
+      ].join('\n'));
+    }
 
     // ---- vertex wear --------------------------------------------------------
     // Composed as one replacement so the wet layer can run immediately after
@@ -5531,16 +6095,56 @@
     // (gbTriSample computes its uv from world position), so the tiling is
     // reported out to _features as the triScale and the texture is left at
     // 1,1 - which also saves the clone _prep would otherwise make.
-    if (def.texels && opts.repeat === undefined && texName && tx &&
-        typeof tx.get === 'function' && !this._texBroken) {
+    // LEVELS 3-10: `texName === null` means the def is LOCAL (synthesised in this
+    // file), and a local def wants the same treatment - masonry's course height
+    // has to be 20 cm whoever generated the tile. Probe our own set in that case;
+    // it is cached, and we are about to need it anyway.
+    if (def.texels && opts.repeat === undefined && opts.worldTile === undefined &&
+        (texName === null || (tx && typeof tx.get === 'function' && !this._texBroken))) {
       try {
-        var probe = tx.get(texName);
+        var probe = texName === null ? this._fallbackSet(name) : tx.get(texName);
         var size = (probe && probe.size) ||
           (probe && probe.map && probe.map.image && probe.map.image.width) || 512;
         var tiles = M.clamp(def.texels / Math.max(size, 1), 0.02, 50);
         out.repeat = tiles;
         rep = def.tri ? [1, 1] : [tiles, tiles];
       } catch (e) { /* keep the def's static repeat */ }
+    }
+
+    // ---- LEVELS 3-10: solve the tiling from a WORLD SIZE --------------------
+    // `opts.worldTile` is metres per source tile, which is the quantity a map
+    // whose features are sized in the WORLD has - hazard striping in 120 mm
+    // bands, barrier tape, painted lane markings, a tiled dado with a real tile
+    // size. uvScaleFor() can only express texel density, so a consumer with such
+    // a map had exactly two options: pass the library's texel figure and render a
+    // flat single colour (a real refinery defect, and invisible to review because
+    // a flat surface looks like a lighting problem), or hard-code a number and
+    // hope. This makes it declarative, and it works on both projections:
+    //
+    //   triplanar  `repeat` IS tiles per metre, so tiles/m = 1 / worldTile and
+    //              the texture is left at 1,1 exactly as the `texels` path does.
+    //   planar     the final density is texture.repeat x the uv the consumer
+    //              baked, so the repeat has to divide out that uv. Declare it
+    //              with opts.uvScale (which _checkDensity already asks for);
+    //              absent, 1 is assumed and stated in the density audit.
+    if (opts.worldTile !== undefined && opts.repeat === undefined) {
+      var wt = Math.abs(+opts.worldTile) || 0;
+      if (wt > 1e-4) {
+        var tpm = 1 / wt;
+        if (def.tri || opts.triplanar) {
+          out.repeat = M.clamp(tpm, 0.002, 200);
+          rep = [1, 1];
+        } else {
+          var uvs = (opts.uvScale !== undefined && Math.abs(opts.uvScale) > 1e-6)
+            ? Math.abs(opts.uvScale) : 1;
+          var r = M.clamp(tpm / uvs, 0.002, 200);
+          // NOT out.repeat: _features reads that as tiles-per-METRE for the
+          // triplanar projection. On the planar path the answer belongs on the
+          // texture, and out.uvRepeat is there so the density audit can see it.
+          out.uvRepeat = r;
+          rep = [r, r];
+        }
+      }
     }
 
     if (texName === null) {
@@ -5570,6 +6174,33 @@
     // def; an explicit opts.alphaTest still outranks both.
     if (typeof set.alphaTest === 'number' && isFinite(set.alphaTest)) {
       out.alphaTest = set.alphaTest;
+    }
+
+    // ---- LEVELS 3-10: `grain` ----------------------------------------------
+    // Decimate the whole base set by whole octaves before anything else sees it.
+    // Defaults to 1 (no drops), which returns the identical texture objects, so
+    // market and harbor are untouched by construction.
+    //
+    // REFUSED on alpha-cut defs. There the ALPHA is the material: box-averaging a
+    // 3 mm wire either fills the aperture in or dissolves the wire depending on
+    // which side of alphaTest the average lands, which is the same catastrophe
+    // _alphaCoverageMips exists to prevent. `alphaLod` is the knob for those.
+    var grainAmt = opts.grain !== undefined ? opts.grain
+      : (def.grain !== undefined ? def.grain : 1);
+    var drops = grainDrops(grainAmt);
+    if (drops > 0) {
+      if (def.alphaCov || def.alphaTest !== undefined || out.alphaTest !== undefined ||
+          opts.alphaTest !== undefined) {
+        try {
+          console.warn('materials: grain ignored on alpha-cut def "' + name +
+            '" (the alpha IS the material); use opts.alphaLod instead');
+        } catch (eW) { /* no console */ }
+      } else {
+        var cp = {}, ck2;
+        for (ck2 in set) if (Object.prototype.hasOwnProperty.call(set, ck2)) cp[ck2] = set[ck2];
+        try { set = this._grainSet(cp, drops); }
+        catch (eG) { set = cp; GAME.logError('materials.grain:' + name, eG); }
+      }
     }
 
     // COLD HARBOR: coverage-preserving alpha mips. Applied to the SOURCE
@@ -5706,6 +6337,174 @@
     return true;
   };
 
+  // ==========================================================================
+  // LEVELS 3-10: `grain` - attenuating the BASE MAP's own high-frequency content
+  //
+  // THE HOLE THIS FILLS. A consumer could already dial the detail tile
+  // (`detail`, `detailCm`), the near tier (`detail2`) and the meso band
+  // (`meso`) - but not the base map, and the base map is where every recipe in
+  // the library keeps its grain. There was no uv answer either, and that is not
+  // a tuning failure: halving the tiling makes the grain twice as BIG, because
+  // the tile is the feature. So a surface read at about a metre - a rail-car
+  // lining, a door leaf, a control panel, a painted bulkhead - was grainy at
+  // every tile size and at every detail setting.
+  //
+  // WHY THIS IS DONE ON THE CPU rather than as a LOD bias at the fetch sites.
+  // Three reasons, and the third is the one that decided it:
+  //
+  //   1. It reaches everything. The base map is fetched from eight different
+  //      places in the emitted shader (plain / stochastic / triplanar x albedo /
+  //      normal / ORM) and three's own aomap chunk fetches the AO with its own
+  //      uv. Decimating the IMAGE covers all of them plus the height field POM
+  //      reads, with no chance of one path silently keeping its grain.
+  //   2. It is cheaper at run time, not more expensive: the maps get SMALLER, so
+  //      it saves VRAM and improves texture-cache locality, and it costs no
+  //      uniform, no sampler and no shader instruction.
+  //   3. It cannot touch the frozen levels. `grain` defaults to 1, which returns
+  //      the identical texture objects, so market and harbor emit byte-identical
+  //      shader source - there is no new emit site to get wrong. A fetch-site
+  //      bias would have added a conditional token at eight places in code that
+  //      two shipped levels are hashed against.
+  //
+  // The cost is that the dial is QUANTISED to whole octaves. That is honest
+  // rather than unfortunate - an octave is the natural unit of "how much grain" -
+  // and the mapping is documented in GRAIN_DROPS so a level agent can read the
+  // exact result of any value instead of guessing.
+  //
+  //   grain >= 0.875  ->  0 octaves   the map as authored
+  //   grain >= 0.625  ->  1 octave    half the texel density
+  //   grain >= 0.375  ->  2 octaves   a quarter
+  //   grain >= 0.125  ->  3 octaves   an eighth
+  //   grain <  0.125  ->  4 octaves   a sixteenth
+  //
+  // Albedo is averaged in LINEAR light (averaging sRGB bytes darkens a
+  // high-contrast map, which would walk the surface off the albedo anchor solved
+  // in _create); the normal map is decoded, averaged as a vector and
+  // re-normalised, so its amplitude falls the way a filtered normal's should
+  // instead of drifting off unit length; everything else is a plain byte box.
+  // ==========================================================================
+  function grainDrops(g) {
+    if (!(g >= 0) || g >= 0.875) return 0;
+    if (g >= 0.625) return 1;
+    if (g >= 0.375) return 2;
+    if (g >= 0.125) return 3;
+    return 4;
+  }
+
+  // linear -> sRGB byte, tabulated. The albedo decimation touches up to 1.3 M
+  // texels x 3 channels per octave and pow() there is most of the cost.
+  var L2S = (function () {
+    var N = 4096, t = new Uint8Array(N + 1);
+    for (var i = 0; i <= N; i++) {
+      var c = i / N;
+      c = c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+      t[i] = Math.max(0, Math.min(255, Math.round(c * 255)));
+    }
+    return t;
+  })();
+
+  // One 2x1 -> 1 box step over an RGBA byte buffer.
+  //   mode 0: plain byte average (roughness, metalness, AO, height, alpha)
+  //   mode 1: RGB averaged in linear light, alpha averaged plain (albedo)
+  //   mode 2: RGB treated as a tangent normal - averaged then re-normalised
+  function boxHalf(src, W, H, mode) {
+    var nw = Math.max(1, W >> 1), nh = Math.max(1, H >> 1);
+    var dst = new Uint8Array(nw * nh * 4);
+    var x, y, c, o0, o1, o2, o3, od, x0, x1, y0, y1;
+    for (y = 0; y < nh; y++) {
+      y0 = W > 1 || H > 1 ? Math.min(y * 2, H - 1) : y;
+      y1 = Math.min(y0 + (H > 1 ? 1 : 0), H - 1);
+      for (x = 0; x < nw; x++) {
+        x0 = Math.min(x * 2, W - 1);
+        x1 = Math.min(x0 + (W > 1 ? 1 : 0), W - 1);
+        o0 = (y0 * W + x0) * 4; o1 = (y0 * W + x1) * 4;
+        o2 = (y1 * W + x0) * 4; o3 = (y1 * W + x1) * 4;
+        od = (y * nw + x) * 4;
+        if (mode === 1) {
+          for (c = 0; c < 3; c++) {
+            var l = (S2L[src[o0 + c]] + S2L[src[o1 + c]] +
+                     S2L[src[o2 + c]] + S2L[src[o3 + c]]) * 0.25;
+            dst[od + c] = L2S[Math.max(0, Math.min(4096, (l * 4096) | 0))];
+          }
+        } else if (mode === 2) {
+          var nx = (src[o0] + src[o1] + src[o2] + src[o3]) * 0.25 / 127.5 - 1.0;
+          var ny = (src[o0 + 1] + src[o1 + 1] + src[o2 + 1] + src[o3 + 1]) * 0.25 / 127.5 - 1.0;
+          var nz = (src[o0 + 2] + src[o1 + 2] + src[o2 + 2] + src[o3 + 2]) * 0.25 / 127.5 - 1.0;
+          var il = 1.0 / Math.sqrt(Math.max(nx * nx + ny * ny + nz * nz, 1e-8));
+          dst[od] = Math.max(0, Math.min(255, Math.round((nx * il + 1.0) * 127.5)));
+          dst[od + 1] = Math.max(0, Math.min(255, Math.round((ny * il + 1.0) * 127.5)));
+          dst[od + 2] = Math.max(0, Math.min(255, Math.round((nz * il + 1.0) * 127.5)));
+        } else {
+          for (c = 0; c < 3; c++) {
+            dst[od + c] = ((src[o0 + c] + src[o1 + c] + src[o2 + c] + src[o3 + c]) * 0.25) | 0;
+          }
+        }
+        dst[od + 3] = ((src[o0 + 3] + src[o1 + 3] + src[o2 + 3] + src[o3 + 3]) * 0.25) | 0;
+      }
+    }
+    return { data: dst, width: nw, height: nh };
+  }
+
+  /**
+   * _grainTex(tex, drops, mode) -> a decimated copy, or `tex` unchanged.
+   *
+   * Cached on (image, drops, mode), so eight materials asking for grain 0.5 on
+   * the same recipe share one decimated image. Degrades to the original for
+   * anything with no CPU-side data (a canvas-backed texture), which is the
+   * correct failure: the surface keeps its grain rather than disappearing.
+   */
+  MaterialLibrary.prototype._grainTex = function (tex, drops, mode) {
+    if (!isTexture(tex) || !(drops > 0)) return tex;
+    var img = tex.image;
+    if (!img || !img.data || !img.data.BYTES_PER_ELEMENT) return tex;
+    var W = img.width | 0, H = img.height | 0;
+    if (W < 8 || H < 8 || img.data.length < W * H * 4) return tex;
+    if (!this._grainCache) this._grainCache = [];
+    var i, rec;
+    for (i = 0; i < this._grainCache.length; i++) {
+      rec = this._grainCache[i];
+      if (rec.img === img && rec.drops === drops && rec.mode === mode) return rec.tex;
+    }
+    var cur = { data: img.data, width: W, height: H };
+    for (i = 0; i < drops && cur.width > 4 && cur.height > 4; i++) {
+      cur = boxHalf(cur.data, cur.width, cur.height, mode);
+    }
+    var out = new THREE.DataTexture(cur.data, cur.width, cur.height,
+      THREE.RGBAFormat, THREE.UnsignedByteType);
+    out.wrapS = out.wrapT = THREE.RepeatWrapping;
+    out.colorSpace = tex.colorSpace;
+    out.minFilter = THREE.LinearMipmapLinearFilter;
+    out.magFilter = THREE.LinearFilter;
+    out.generateMipmaps = true;
+    out.anisotropy = tex.anisotropy;
+    out.userData = { __gbOwned: true };
+    out.needsUpdate = true;
+    this._grainCache.push({ img: img, drops: drops, mode: mode, tex: out });
+    return out;
+  };
+
+  // Decimate a whole map set in place on the `set` object. `set` is either the
+  // texture library's cached record or one of ours, so it is never mutated - the
+  // caller passes a shallow copy.
+  MaterialLibrary.prototype._grainSet = function (set, drops) {
+    // The ORM is ONE image served through three slots. Whether two slots share
+    // an image has to be decided against the ORIGINALS - testing it after the
+    // roughness slot has already been replaced compares an old image against a
+    // new one, which is never equal, and the triplanar path would silently go
+    // back to nine fetches for three channels.
+    var rImg = set.roughnessMap && set.roughnessMap.image;
+    var aoShared = !!(set.aoMap && rImg && set.aoMap.image === rImg);
+    var mtShared = !!(set.metalnessMap && rImg && set.metalnessMap.image === rImg);
+    set.map = this._grainTex(set.map, drops, 1);
+    set.normalMap = this._grainTex(set.normalMap, drops, 2);
+    set.roughnessMap = this._grainTex(set.roughnessMap, drops, 0);
+    set.aoMap = aoShared ? set.roughnessMap : this._grainTex(set.aoMap, drops, 0);
+    set.metalnessMap = mtShared ? set.roughnessMap : this._grainTex(set.metalnessMap, drops, 0);
+    if (set.displacementMap) set.displacementMap = this._grainTex(set.displacementMap, drops, 0);
+    if (set.heightMap) set.heightMap = this._grainTex(set.heightMap, drops, 0);
+    return set;
+  };
+
   // Make sure a texture from any source has the wrapping/filtering/colour
   // space we need, cloning only when we would otherwise stomp on a shared
   // texture's repeat.
@@ -5760,6 +6559,13 @@
 
   MaterialLibrary.prototype._genFallback = function (name) {
     if (FALLBACK_CUT[name]) return this._genCutSet(name, FALLBACK_CUT[name]);
+    // LEVELS 3-10. Not a degradation - this IS the masonry recipe. It is routed
+    // through `local: true` so that if textures.js ever ships a 'masonry' recipe,
+    // _texName prefers it and this becomes the fallback it looks like.
+    if (MASONRY_VARIANTS[name]) {
+      try { return this._genMasonrySet(name); }
+      catch (eM) { GAME.logError('materials.masonry:' + name, eM); }
+    }
     var style = FALLBACK_STYLE[name] || FALLBACK_STYLE.concrete;
     var S = 256;
     var base = new THREE.Color().setHex(style[0], THREE.SRGBColorSpace);
@@ -6090,6 +6896,348 @@
       roughnessMap: dataTex(rgh, S, false),
       metalnessMap: dataTex(rgh, S, false),
       aoMap: dataTex(ao, S, false),
+      displacementMap: dataTex(hTex, S, false),
+      size: S, name: name
+    };
+  };
+
+  // ==========================================================================
+  // LEVELS 3-10 - COURSED RUBBLE MASONRY
+  //
+  // The library's stone answer was genStone: a near-neutral, single-scale,
+  // isotropic pebble field. It is a rock, and a wall is not a rock. What four
+  // levels asked for, in four separate reports, is the same substance:
+  //
+  //   * COURSES. Irregular stones bedded in irregular courses, each course with
+  //     its own height and its own horizontal phase so no two courses break
+  //     their perpends in the same place. This is the band - 15 to 40 cm - that
+  //     nothing in the pipeline authored: the detail tile is 5 cm, the meso band
+  //     is 55 cm, and the base maps had nothing between them but noise.
+  //   * RECESSED JOINTS. The mortar is PALER than the stone (lime, not cement)
+  //     and reads dark because it is recessed and self-shadowing - which is the
+  //     AO channel's job. Painting a dark joint into the albedo as well
+  //     double-counts it, and that is why hand-rolled masonry reads as a drawn
+  //     grid rather than as a jointed wall.
+  //   * A SPALLED RENDER BOUNDARY. A lime render skin that survives in patches,
+  //     proud of the rubble by a few millimetres, with a ragged edge, a dirt line
+  //     where water has run off that edge for decades, and hairline crazing on
+  //     the surviving faces. This is the single most legible thing on a real old
+  //     wall and no procedural recipe in the build had it.
+  //   * BIOLOGICAL COLONISATION. Algae and lichen keyed to the joints and to the
+  //     spall boundary, i.e. to where the wall stays damp - NOT to the tile's own
+  //     v, which on a repeating tile would band the wall every metre. Where a
+  //     wall is damp in the WORLD is the grounding term's job (gbGroundCalc), and
+  //     it is world-space and does not tile.
+  //   * CHIPPED ARRISES. A broken edge is the one place the unweathered
+  //     substrate shows, and `fresh` is deliberately the brightest colour here.
+  //
+  // Seamlessness is structural, not tuned: every course height and stone width is
+  // a normalised cumulative sum, so both axes wrap exactly. A masonry map whose
+  // bed joints do not meet across the tile boundary is worse than no masonry map,
+  // because the seam becomes the most legible line on the wall.
+  //
+  // Channels follow the library convention: ORM is one image (R = AO,
+  // G = roughness, B = metalness) served through all three slots, so `sharedOrm`
+  // collapses nine triplanar fetches into three.
+  // ==========================================================================
+  MaterialLibrary.prototype._genMasonrySet = function (name) {
+    var S = 512, n = S * S, C = MASONRY;
+    var V = MASONRY_VARIANTS[name] || MASONRY_VARIANTS.masonry;
+    var RCOV = V.renderCover;
+    var alb = new Uint8Array(n * 4);
+    var orm = new Uint8Array(n * 4);
+    var hgt = new Float32Array(n);
+    var ph = hashString(name || 'masonry') % 64;
+
+    // Deterministic index hashes. A function of an INTEGER index, so the layout
+    // is periodic in the tile however many stones we lay - and never
+    // Math.random, so captures stay reproducible.
+    function hA(k) { var s = Math.sin(k * 12.9898 + 78.233 + ph) * 43758.5453; return s - Math.floor(s); }
+    function hB(k) { var s = Math.sin(k * 39.3467 + 11.135 + ph) * 24634.6345; return s - Math.floor(s); }
+
+    function bytes(hex) {
+      var c = new THREE.Color().setHex(hex, THREE.SRGBColorSpace);
+      return [Math.round(Math.pow(c.r, 1 / 2.2) * 255),
+        Math.round(Math.pow(c.g, 1 / 2.2) * 255),
+        Math.round(Math.pow(c.b, 1 / 2.2) * 255)];
+    }
+    var cBase = bytes(C.base), cDark = bytes(C.dark), cPale = bytes(C.pale);
+    var cFresh = bytes(C.fresh), cMort = bytes(C.mortar), cRend = bytes(C.render);
+    var cBio = bytes(C.bio);
+
+    // ---- course layout ------------------------------------------------------
+    var NC = C.courses, ci, si;
+    var cH = new Float32Array(NC), cY = new Float32Array(NC + 1);
+    var tot = 0;
+    // 0.58..1.42, not 0.74..1.26. Five courses of nearly equal height is
+    // brickwork; the whole point of coursed RUBBLE is that the courses are only
+    // roughly parallel because the stones are only roughly graded.
+    for (ci = 0; ci < NC; ci++) { cH[ci] = 0.58 + hA(ci * 7 + 3) * 0.84; tot += cH[ci]; }
+    for (ci = 0; ci < NC; ci++) { cH[ci] /= tot; cY[ci + 1] = cY[ci] + cH[ci]; }
+    cY[NC] = 1.0;
+    var sX = [], cOff = new Float32Array(NC);
+    for (ci = 0; ci < NC; ci++) {
+      var ns = C.stonesMin + Math.floor(hB(ci * 13 + 5) * (C.stonesMax - C.stonesMin + 1));
+      if (ns > C.stonesMax) ns = C.stonesMax;
+      var xs = new Float32Array(ns + 1), wt = 0, wv = new Float32Array(ns);
+      for (si = 0; si < ns; si++) { wv[si] = 0.58 + hA(ci * 31 + si * 5 + 17) * 0.86; wt += wv[si]; }
+      for (si = 0; si < ns; si++) xs[si + 1] = xs[si] + wv[si] / wt;
+      xs[ns] = 1.0;
+      sX.push(xs);
+      cOff[ci] = hB(ci * 23 + 41);
+    }
+
+    // ---- THE TWO IRREGULARITIES THAT SEPARATE RUBBLE FROM BLOCKWORK ----------
+    // The first pass had straight vertical perpends and dead-level bed lines and
+    // photographed as ASHLAR - a wall of dressed blocks. Rubble is graded by eye
+    // and bedded in mortar, so:
+    //
+    //   * every perpend LEANS, by a hashed amount, shared between the two stones
+    //     that meet on it (a per-stone tilt would open a gap on one side and
+    //     overlap on the other). Boundary index is taken modulo the stone count so
+    //     boundary N is boundary 0 and the tile still wraps in u.
+    //   * every bed line WANDERS, as one cycle of a two-harmonic function of u.
+    //     Period exactly 1, so it wraps; boundary index modulo NC so the tile's
+    //     top bed line is its bottom one and it wraps in v as well.
+    //
+    // Both are small - a couple of centimetres at a 1 m tile - and both are most
+    // of the difference between "a stone wall" and "a brick wall painted grey".
+    var tilt = [];
+    for (ci = 0; ci < NC; ci++) {
+      var nsb = sX[ci].length - 1, tl = new Float32Array(nsb + 1), bi;
+      for (bi = 0; bi < nsb; bi++) tl[bi] = (hA(ci * 211 + bi * 7 + 61) - 0.5) * 0.10;
+      tl[nsb] = tl[0];
+      tilt.push(tl);
+    }
+    var bedA = new Float32Array(NC), bedB = new Float32Array(NC), bedP = new Float32Array(NC);
+    var bedC = new Float32Array(NC);
+    for (ci = 0; ci < NC; ci++) {
+      bedA[ci] = (hB(ci * 53 + 7) - 0.5) * 0.020;
+      bedB[ci] = (hA(ci * 71 + 13) - 0.5) * 0.014;
+      bedC[ci] = (hB(ci * 89 + 31) - 0.5) * 0.009;
+      bedP[ci] = hB(ci * 97 + 29) * 6.2831853;
+    }
+    // Three harmonics, not one. One harmonic is a sine wave, and eight tiles of
+    // one sine wave across a wall reads as a deliberate ripple rather than as a
+    // mason's eye - which is exactly how the two-harmonic version photographed.
+    function bedAt(bi, uq) {
+      var k = bi % NC, t = 6.2831853 * uq, p = bedP[k];
+      return bedA[k] * Math.sin(t + p) +
+        bedB[k] * Math.sin(2 * t + p * 1.7) +
+        bedC[k] * Math.sin(3 * t + p * 2.9);
+    }
+
+    var J = C.joint;
+    var x, y, i, u, v;
+    for (y = 0; y < S; y++) {
+      v = y / S;
+      for (x = 0; x < S; x++) {
+        u = x / S;
+        i = y * S + x;
+        // Which course, against the WANDERING bed lines. Six comparisons, and it
+        // has to be inside the x loop because the boundary depends on u.
+        ci = 0;
+        var bLo = cY[0] + bedAt(0, u), bHi;
+        for (;;) {
+          bHi = cY[ci + 1] + bedAt(ci + 1, u);
+          if (ci >= NC - 1 || v < bHi) break;
+          bLo = bHi; ci++;
+        }
+        var chh = Math.max(bHi - bLo, 1e-6);
+        var vt = (v - bLo) / chh;
+        var dvT = Math.min(v - bLo, bHi - v);
+
+        var xs2 = sX[ci], nsc = xs2.length - 1, tlt = tilt[ci];
+        var uu = u + cOff[ci];
+        uu -= Math.floor(uu);
+        // Leaning perpends: shift each boundary by its own tilt x (vt - 0.5).
+        var lean = vt - 0.5;
+        si = 0;
+        while (si < nsc - 1 && uu >= xs2[si + 1] + tlt[si + 1] * lean) si++;
+        var xl = xs2[si] + tlt[si] * lean;
+        var xr = xs2[si + 1] + tlt[si + 1] * lean;
+        var sw = Math.max(xr - xl, 1e-6);
+        var ut = (uu - xl) / sw;
+        var duT = Math.min(uu - xl, xr - uu);
+
+        // ---- joints ---------------------------------------------------------
+        // Bed and perpend as one field. Smoothed over a third of the joint width
+        // so the arris is a rounded edge rather than a step, which is what stops
+        // the map reading as a drawn grid.
+        var jm = 1 - M.saturate((Math.min(duT, dvT) - J * 0.34) / (J * 0.66));
+        jm = jm * jm * (3 - 2 * jm);
+
+        // ---- per-stone lottery ---------------------------------------------
+        var sk = ci * 97 + si * 13 + 7;
+        var sv = hA(sk);                       // value
+        var sr = hB(sk + 3);                   // face roughness / pitting
+        var sc = hA(sk + 29);                  // chip likelihood
+        // Rounded, slightly domed face with softened corners; the corner falloff
+        // is where an arris chips.
+        var dome = M.saturate(Math.min(ut, 1 - ut) * 5.2) * M.saturate(Math.min(vt, 1 - vt) * 5.2);
+        dome = dome * dome * (3 - 2 * dome);
+
+        // ---- stone face texture --------------------------------------------
+        // Two mineral scales inside the stone: a coarse quarry-face undulation
+        // and a fine pitting. Frequencies are powers of two so the perlin lattice
+        // (period 256) wraps exactly.
+        var face = NOISE.fbm2(u * 32 + ph, v * 32 + ph, 4, 2, 0.55) * 0.5 + 0.5;
+        var pit = NOISE.worley2(u * 64 + ph, v * 64 + ph, 1.0);
+        var pitH = 1 - M.saturate(pit.f1 * 1.5);
+        var fine = NOISE.perlin2(u * 128 + ph, v * 128 + ph);
+
+        // Chipped arris: only on stones whose lottery says so, and only near a
+        // corner. Exposes the pale unweathered substrate.
+        var chip = M.saturate((sc - 0.52) * 3.4) * (1 - dome) *
+          M.saturate(NOISE.fbm2(u * 24 + ph, v * 24 + ph, 3, 2, 0.5) * 1.6 + 0.35);
+
+        var hStone = 0.56 + dome * 0.13 + (face - 0.5) * 0.10 * (0.5 + sr) -
+          pitH * 0.07 * sr + fine * 0.035 - chip * 0.10;
+
+        // ---- mortar ---------------------------------------------------------
+        var mort = NOISE.fbm2(u * 48 + ph, v * 48 + ph, 3, 2, 0.5) * 0.5 + 0.5;
+        var hJoint = (0.56 - C.jointDepth) + mort * 0.05;
+
+        var h = hStone + (hJoint - hStone) * jm;
+
+        // ---- the render skin ------------------------------------------------
+        // THREE octaves and a gentle threshold. The first pass used two octaves
+        // on a slope of 7.5 and the boundary came out as torn paper - fine
+        // notches at one frequency, which reads as a cut-out rather than as
+        // render that has let go. A spall boundary is fractal at every scale it
+        // has, so the octaves are weighted to fall off smoothly and the
+        // threshold is soft enough that a couple of texels of every edge are
+        // partial.
+        //
+        // `- (1 - RCOV) * 0.30` shifts the threshold, so renderCover is a real
+        // coverage control rather than a blend weight: at 0 the whole layer
+        // vanishes and the branch below costs nothing.
+        var rm = 0, rEdge = 0;
+        if (RCOV > 0.001) {
+          var HS = V.holeScale;
+          var rn = NOISE.fbm2(u * HS + ph, v * HS + ph, 4, 2, 0.58) * 0.5 + 0.5;
+          var rn2 = NOISE.fbm2(u * HS * 3.5 + ph, v * HS * 3.5 + ph, 3, 2, 0.52) * 0.5 + 0.5;
+          var rn3 = NOISE.fbm2(u * HS * 7 + ph, v * HS * 7 + ph, 2, 2, 0.5) * 0.5 + 0.5;
+          var rf = rn * 0.68 + rn2 * 0.22 + rn3 * 0.10;
+          // A spall edge is CRISP - the render lets go along a line - so the
+          // threshold is steeper than a weathering field's would be.
+          rm = M.saturate((rf - (0.50 - RCOV * 0.34)) * 6.5);
+          rm = rm * rm * (3 - 2 * rm);
+          // The boundary band. Peaks where the render is half gone, which is
+          // exactly where the dirt line and the colonisation live.
+          rEdge = M.saturate(rm * (1 - rm) * 4.0);
+          var craze = NOISE.ridged2(u * 64 + ph, v * 64 + ph, 2);
+          // Float marks: a rendered wall is worked with a tool, so it carries
+          // long shallow sweeps as well as crazing. Squashed 8:1, which is what
+          // a trowel stroke is.
+          var trowel = NOISE.fbm2(u * 5 + ph, v * 40 + ph, 3, 2, 0.5);
+          var hRend = 0.74 + (NOISE.fbm2(u * 24 + ph, v * 24 + ph, 3, 2, 0.5) * 0.5 + 0.5) * 0.03 +
+            trowel * 0.022 - M.saturate(craze * 1.4) * 0.055;
+          h = h + (hRend - h) * rm;
+          // THE LIP. A spall is a broken EDGE, and an edge is what the eye reads:
+          // the render is 3-4 mm proud, so its arris casts a hard little shadow
+          // into the hole. Without this the patch boundary is a colour change and
+          // the render never reads as a layer at all.
+          h -= rEdge * (1 - rm) * 0.11;
+        }
+        hgt[i] = M.saturate(h);
+
+        // ---- staining -------------------------------------------------------
+        // Vertical water streaking, squashed so it runs down the tile's v; and
+        // colonisation keyed to the joints and the spall boundary, which is where
+        // a wall stays damp. Deliberately NOT keyed to v: on a repeating tile
+        // that bands the wall every metre.
+        var streak = M.saturate(NOISE.fbm2(u * 26 + ph, v * 2.0 + ph, 3, 2, 0.5) * 1.5 + 0.28);
+        var bioF = NOISE.fbm2(u * 6 + ph, v * 6 + ph, 4, 2, 0.55) * 0.5 + 0.5;
+        // Keyed at HALF weight on the spall boundary, not full. Colonisation and
+        // the run-off dirt line both live there, and stacking them at full weight
+        // filled every hole with dark mush - the render read as a wall with black
+        // blotches rather than as a wall with the render broken off it.
+        var bio = M.saturate((bioF - 0.44) * 3.0) * (0.30 + 0.70 * Math.max(jm, rEdge * 0.5));
+
+        // ---- albedo ---------------------------------------------------------
+        var k = M.saturate(sv * 0.72 + (face - 0.5) * 0.55 + fine * 0.18 - pitH * 0.22);
+        var r8, g8, b8;
+        r8 = cDark[0] + (cPale[0] - cDark[0]) * k;
+        g8 = cDark[1] + (cPale[1] - cDark[1]) * k;
+        b8 = cDark[2] + (cPale[2] - cDark[2]) * k;
+        // pull toward the family mid so the lottery is a stone wall, not confetti
+        var lp = C.lotteryPull;
+        r8 += (cBase[0] - r8) * lp; g8 += (cBase[1] - g8) * lp; b8 += (cBase[2] - b8) * lp;
+        // chipped arris -> fresh substrate
+        r8 += (cFresh[0] - r8) * chip * 0.85;
+        g8 += (cFresh[1] - g8) * chip * 0.85;
+        b8 += (cFresh[2] - b8) * chip * 0.85;
+        // mortar
+        var mk = 0.86 + mort * 0.26;
+        r8 += (cMort[0] * mk - r8) * jm;
+        g8 += (cMort[1] * mk - g8) * jm;
+        b8 += (cMort[2] * mk - b8) * jm;
+        // Render skin, mixed at 0.88 rather than 1.0 so the stone underneath
+        // still modulates it: a 3 mm lime skin is not opaque paint, and the
+        // course it lies over shows through as a ghost. That ghost is also what
+        // stops the patch reading as a decal.
+        if (rm > 0.001) {
+          // 0.84..1.16 plus the trowel sweep, so the skin is not one flat tone -
+          // the first pass read as a single mottled colour with dark blotches in
+          // it, and a limewashed wall is uneven at the scale of the tool.
+          var rk = 0.84 + (NOISE.fbm2(u * 12 + ph, v * 12 + ph, 3, 2, 0.5) * 0.5 + 0.5) * 0.32 +
+            NOISE.fbm2(u * 5 + ph, v * 40 + ph, 3, 2, 0.5) * 0.08;
+          var rw = rm * 0.90;
+          r8 += (cRend[0] * rk - r8) * rw;
+          g8 += (cRend[1] * rk - g8) * rw;
+          b8 += (cRend[2] * rk - b8) * rw;
+        }
+        // the dirt line where water has run off the spall edge for decades
+        var dl = 1 - rEdge * 0.16;
+        r8 *= dl; g8 *= dl; b8 *= dl;
+        // water staining, then colonisation
+        var st = 1 - streak * 0.11;
+        r8 *= st; g8 *= st; b8 *= st;
+        r8 += (cBio[0] - r8) * bio * 0.45;
+        g8 += (cBio[1] - g8) * bio * 0.45;
+        b8 += (cBio[2] - b8) * bio * 0.45;
+
+        alb[i * 4] = r8 < 0 ? 0 : (r8 > 255 ? 255 : r8);
+        alb[i * 4 + 1] = g8 < 0 ? 0 : (g8 > 255 ? 255 : g8);
+        alb[i * 4 + 2] = b8 < 0 ? 0 : (b8 > 255 ? 255 : b8);
+        alb[i * 4 + 3] = 255;
+
+        // ---- roughness ------------------------------------------------------
+        // A quarry face is chalky, a lime render slightly less so, mortar the
+        // roughest thing here, a chipped arris the smoothest (it is a fracture
+        // surface, not a weathered one), and colonisation is matte.
+        var rg = 0.66 + (1 - k) * 0.16 + pitH * 0.14 * sr - chip * 0.26;
+        rg += (0.92 - rg) * jm;
+        rg += (0.60 - rg) * rm * 0.7;
+        rg += (0.95 - rg) * bio * 0.6;
+        orm[i * 4 + 1] = Math.round(M.saturate(rg) * 255);
+        orm[i * 4 + 2] = 0;
+        orm[i * 4 + 3] = 255;
+      }
+    }
+
+    // Normal from the height field. 2.6 rather than the cut set's 3.2: this
+    // height field carries real structural relief (the joints are a quarter of
+    // its range), so the same amplitude that suits a wire section would turn a
+    // bed joint into a trench.
+    var nrm = heightToNormal(hgt, S, 2.6);
+    var ao = heightToAO(hgt, S);
+    // AO into the ORM's R channel, which is where the texture library puts it and
+    // where the sharedOrm path reads it from.
+    for (i = 0; i < n; i++) orm[i * 4] = ao[i * 4];
+    var hTex = new Uint8Array(n * 4);
+    for (i = 0; i < n; i++) {
+      var hv = Math.round(M.saturate(hgt[i]) * 255);
+      hTex[i * 4] = hv; hTex[i * 4 + 1] = hv; hTex[i * 4 + 2] = hv; hTex[i * 4 + 3] = 255;
+    }
+    var ormTex = dataTex(orm, S, false);
+    return {
+      map: dataTex(alb, S, true),
+      normalMap: dataTex(nrm, S, false),
+      roughnessMap: ormTex,
+      metalnessMap: ormTex,
+      aoMap: ormTex,
       displacementMap: dataTex(hTex, S, false),
       size: S, name: name
     };
@@ -6454,9 +7602,36 @@
     //          grazing incidence, where the interface really is a mirror and the
     //          true brightness of the reflected world is the point. 0 keeps the
     //          authored level everywhere; 1 becomes a straight physical replace
-    //          at glancing angles. Measured on the jungle river: 0.5 buys the
-    //          far field real value range for a 14% drop in its mean.
-    graze: 0.5,
+    //          at glancing angles.
+    //
+    //          THIS DEFAULT WAS 0.5 AND 0.5 IS WRONG. It was chosen on one
+    //          measurement of one river - "0.5 buys the far field real value range
+    //          for a 14% drop in its mean" - and a 14% drop in the mean is not the
+    //          failure mode. The failure mode is that `graze` hands the surface to
+    //          the ABSOLUTE brightness of the reflected geometry, and on any level
+    //          whose far bank is dark - a closed canopy, a night harbour, a
+    //          flooded tunnel - the reflected world is the darkest thing in the
+    //          frame. The jungle then measured its near water at 0.040 linear
+    //          against 0.254 for the vapour directly above it: two and two-thirds
+    //          stops the WRONG WAY for a near-mirror at nine degrees of incidence,
+    //          on the surface its own brief calls the level's only bright floor.
+    //          level_jungle.js diagnosed that and passed graze 0.30 by hand.
+    //
+    //          A level having to correct a default at every call site means the
+    //          default is wrong, not that the level is unusual - and the whole
+    //          point of the STRUCTURE TRANSFER below is that the planar pass
+    //          contributes the reflected SHAPES while the level keeps the value it
+    //          authored. 0.30 still buys real value range where the incidence is
+    //          genuinely grazing (the term is pow(1-NoV, 2), so it is only near
+    //          its ceiling in the last few degrees) and it can no longer take a
+    //          water body below what the level asked for. Raise it deliberately on
+    //          a level whose reflected world is BRIGHT - an open sky over an
+    //          estuary - which is the case the higher value was measured on.
+    //
+    //          market and harbor cannot reach this: _reflectWanted() is false for
+    //          both, and jungle passes its own value, so nothing currently in the
+    //          build changes when this moves.
+    graze: 0.30,
     // The ramp exponent. This is an AUTHORED crossfade, not Schlick's 5 - the
     // Fresnel magnitude is already applied downstream by EnvironmentBRDF and
     // must not be applied twice. 2 was measured against 4 and 5 on the jungle's

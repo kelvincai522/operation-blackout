@@ -358,6 +358,26 @@
                    libOpts: { albedoTarget: 0x44484e, hue: 0.80, metalness: 0.55,
                               macro: 0.06, macroScale: 0.14, chroma: 0.38,
                               wearColor: 0x7c4c2c, grimeColor: 0x322c26 } },
+    // RED-OXIDE PRIMED STEEL, and it is the answer to a measured defect rather
+    // than a new colour for its own sake. hero1 came back sat p50 0.095 - a
+    // monochrome grey hall - on a level whose brief is "concrete grey / red",
+    // while hero2, the one framing that delivers the brief, does it with a red
+    // oxide dado carrying R-B +0.160 over a large near surface. The difference is
+    // not the lighting: hero2 has a big RED SURFACE in it and hero1 has none.
+    //
+    // Unfinished structural steelwork in a facility like this is primed and never
+    // topcoated, so an added service gallery, its pipe bank and its brackets are
+    // physically the right place for the level's second colour - and unlike a
+    // tint on `steel` it is a solved albedo target, so the map's own variation
+    // survives round the new mean instead of every member coming out one flat
+    // hue (the bug the `steel` entry's own note records).
+    // uv 1.15 x painted_metal's repeat 1.09 = 1.25 tiles/m, i.e. 0.80 m per tile:
+    // a 3 m member sees four tiles of variation along its own length.
+    oxide_steel: { uv: 1.15, cast: true,  recv: true,  wear: false,
+                   base: 'painted_metal', col: 0x8c4a33, rough: 0.68, metal: 0.08,
+                   libOpts: { albedoTarget: 0x74331f, hue: 0.88, normalScale: 0.50,
+                              detail: 0.34,
+                              macro: 0.09, macroScale: 0.19, chroma: 0.44 } },
     // Corroded pipework, brackets, conduit, the rails the door runs on.
     // Same cut, and it is the reason the corridor's three tiers of cable tray
     // stopped reading as an orange stipple: a tray edge is a 20 mm lip seen from
@@ -439,6 +459,7 @@
     dado_paint:  [0x7c3a2f, 0.72, 0.0],
     hull_paint:  [0x78858a, 0.54, 0.0],
     steel:       [0x5d6167, 0.62, 0.10],
+    oxide_steel: [0x7e4029, 0.68, 0.08],
     vessel_steel: [0x6b6f75, 0.58, 0.10],
     rust_metal:  [0x67402f, 0.80, 0.50],
     grate:       [0x4a4d50, 0.70, 0.28],
@@ -3553,13 +3574,26 @@
       B.box('ceil_conc', RG_X1 - RG_X0, 0.36, 0.42, (RG_X0 + RG_X1) * 0.5, RG_CEIL - 0.18, cbz);
     }
     B.paint = 'metal';
-    // board marks on the three hall walls a framing can see. The west wall is
-    // the one that closes hero1 and the overview 25 m away, and the two long
-    // walls are the only thing telling you how big an 11 m room is.
-    boardMarks(B, 'x', RG_X0, 1, -RG_HZ, -1.30, 0.20, 8.20, rng);
-    boardMarks(B, 'x', RG_X0, 1, 1.30, RG_HZ, 0.20, 8.20, rng);
-    boardMarks(B, 'z', RG_HZ, -1, RG_X0, RG_X1, 0.20, 6.40, rng);
-    boardMarks(B, 'z', -RG_HZ, 1, RG_X0, RG_X1, 0.20, 6.40, rng);
+    // ---- board marks on every hall wall a framing can see -------------------
+    // THE MECHANICAL DEFECT ROUND 3 MEASURED, AND IT IS AN ARGUMENT LIMIT.
+    // These four calls stopped at 6.40 and 8.20 in a room whose soffit is at
+    // RG_CEIL = 11.00, so 42% of the wall height carried no form-board seam and
+    // no tie-rod cone - and because hero1 stands 12.6 m off the south wall with
+    // an 8.5 degree pitch up, that strip-free band IS the band the signature
+    // framing looks at. Measured on the same wall in the same frame: micro-detail
+    // energy hp3 5.4-7.2 above 6.40 against 29.2-43.1 below it, with a p05-p95
+    // luminance span of only 0.14-0.20 across the upper band. The seams were
+    // never absent from the code; they were absent from four numbers.
+    // 10.40 stops 0.6 m short of the soffit, where the cove channel and the
+    // coffer haunches take over.
+    boardMarks(B, 'x', RG_X0, 1, -RG_HZ, -1.30, 0.20, 10.40, rng);
+    boardMarks(B, 'x', RG_X0, 1, 1.30, RG_HZ, 0.20, 10.40, rng);
+    boardMarks(B, 'x', RG_X1, -1, -RG_HZ, RG_HZ, 0.20, 10.40, rng);
+    boardMarks(B, 'z', RG_HZ, -1, RG_X0, RG_X1, 0.20, 10.40, rng);
+    boardMarks(B, 'z', -RG_HZ, 1, RG_X0, RG_X1, 0.20, 10.40, rng);
+    // ---- and the relief the seams cannot carry on their own -----------------
+    hallBays(L, B, rng, N);
+    hallSouthGallery(L, B, rng, N);
 
     // =======================================================================
     // WALL HARDWARE. THE HALL WAS UNDER-SPENT AND THIS IS WHERE IT SHOWED.
@@ -4497,7 +4531,14 @@
   // A handrail following a circle, with optional angular gaps where a bridge or
   // a stair lands. Gaps matter: a continuous rail across an access opening reads
   // as a cage and, worse, tells the player the route is closed.
-  function railRunRing(B, cx, cz, r, y, segs, h, gaps) {
+  // `key` is optional and defaults to `steel`. It exists so the reactor hall's
+  // two rings can be RED-OXIDE PRIMED steel: they are the only continuous lines
+  // in the establishing frame that cross the vessel, and that frame measured
+  // mean_saturation 0.095 - the most monochrome image in the whole build - on a
+  // level briefed "concrete grey / red". Primed-and-never-topcoated steelwork is
+  // what a facility like this actually has, so this costs nothing but the anchor.
+  function railRunRing(B, cx, cz, r, y, segs, h, gaps, key) {
+    key = key || 'steel';
     function gapped(a) {
       if (!gaps) return false;
       for (var q = 0; q < gaps.length; q++) {
@@ -4516,12 +4557,268 @@
       if (gapped(am)) continue;
       var x0 = cx + Math.cos(a0) * r, z0 = cz + Math.sin(a0) * r;
       var x1 = cx + Math.cos(a1) * r, z1 = cz + Math.sin(a1) * r;
-      B.pipe('steel', x0, y + h, z0, x1, y + h, z1, 0.024, 6);
-      B.pipe('steel', x0, y + h * 0.55, z0, x1, y + h * 0.55, z1, 0.019, 6);
-      if (i % 3 === 0) B.box('steel', 0.045, h, 0.045, x0, y + h * 0.5, z0);
+      B.pipe(key, x0, y + h, z0, x1, y + h, z1, 0.024, 6);
+      B.pipe(key, x0, y + h * 0.55, z0, x1, y + h * 0.55, z1, 0.019, 6);
+      if (i % 3 === 0) B.box(key, 0.045, h, 0.045, x0, y + h * 0.5, z0);
       B.paint = 'plate';
       B.strut('plate_steel', x0, y + 0.055, z0, x1, y + 0.055, z1, 0.020, 0.11);
       B.paint = 'metal';
+    }
+  }
+
+  // ===========================================================================
+  // THE REACTOR HALL'S WALL BAYS.  THE SECOND HALF OF THE FLAT-PLATE FIX.
+  //
+  // Extending boardMarks to the full 10.4 m puts the MICRO band back (a 12 mm
+  // seam every 600 mm, a 30 mm tie cone on a 1.2 m grid) but a 28 x 11 m wall
+  // needs a METRE-SCALE band as well, and at 12.6 m from the lens under a wash
+  // arriving at 56 degrees a 12 mm step returns almost nothing. What actually
+  // breaks a plate into something with a value range is real relief deep enough
+  // to have a dark side, and there is a structurally correct place to put it:
+  // the soffit already carries eleven 0.55 m ribs at 2.4 m centres along X and
+  // eight along Z, and every one of them has to LAND on something.
+  //
+  // So each rib gets its pilaster - a 150 mm proud shaft, a splayed corbel head
+  // and a plinth. Twenty-seven of them, about 9k triangles in a bucket that is
+  // already merged, i.e. zero draw calls, on a level using 26% of its triangle
+  // budget. The dado goes on in the same pass because a pilaster and a painted
+  // band belong to the same decision about where the eye stops.
+  // ===========================================================================
+  function hallBays(L, B, rng, N) {
+    var i, s;
+    var shaftTop = RG_CEIL - 1.05;
+
+    // ---- pilasters under the eleven X ribs, on both long walls --------------
+    for (i = 0; i < 12; i++) {
+      var px = RG_X0 + 1.2 + i * 2.4;
+      if (px > RG_X1 - 0.8) break;
+      for (s = -1; s <= 1; s += 2) {
+        var pz = s * (RG_HZ - 0.15);          // 150 mm proud of the wall face
+        B.paint = 'wall';
+        B.box('wall_conc', 0.55, shaftTop, 0.30, px, shaftTop * 0.5, pz);
+        // the corbel head: wider and deeper, so the rib visibly bears on it
+        B.box('wall_conc', 0.80, 0.42, 0.46, px, shaftTop + 0.21, s * (RG_HZ - 0.23));
+        B.box('wall_conc', 0.66, 0.30, 0.38, px, shaftTop + 0.55, s * (RG_HZ - 0.19));
+        // the plinth
+        B.box('wall_conc', 0.72, 0.34, 0.40, px, 0.17, s * (RG_HZ - 0.20));
+        B.paint = 'metal';
+        // a cast-in fixing plate and its two studs at working height, so the
+        // shaft is not four blank faces
+        B.box('rust_metal', 0.30, 0.22, 0.035, px, 1.62, s * (RG_HZ - 0.315));
+        B.cyl('rust_metal', 0.022, 0.022, 0.07, px - 0.09, 1.62, s * (RG_HZ - 0.35),
+          Math.PI * 0.5, 0, 0, 6);
+        B.cyl('rust_metal', 0.022, 0.022, 0.07, px + 0.09, 1.62, s * (RG_HZ - 0.35),
+          Math.PI * 0.5, 0, 0, 6);
+        L.addCollider(px, shaftTop * 0.5, pz, 0.28, shaftTop * 0.5, 0.15, 'concrete');
+      }
+    }
+    // ---- pilasters under the eight Z ribs, on both short walls --------------
+    for (i = 0; i < 8; i++) {
+      var pzz = -RG_HZ + 1.8 + i * 3.3;
+      if (pzz > RG_HZ - 1.0) break;
+      for (s = -1; s <= 1; s += 2) {
+        // the west wall carries the spine portal at |z| < 1.10; nothing here is
+        // inside that, but the shaft is shortened on the west side anyway so the
+        // portal's own head beam is not fouled
+        var pxx = (s < 0) ? RG_X0 + 0.15 : RG_X1 - 0.15;
+        B.paint = 'wall';
+        B.box('wall_conc', 0.30, shaftTop, 0.55, pxx, shaftTop * 0.5, pzz);
+        B.box('wall_conc', 0.46, 0.42, 0.80, (s < 0) ? RG_X0 + 0.23 : RG_X1 - 0.23,
+          shaftTop + 0.21, pzz);
+        B.box('wall_conc', 0.40, 0.34, 0.72, (s < 0) ? RG_X0 + 0.20 : RG_X1 - 0.20,
+          0.17, pzz);
+        B.paint = 'metal';
+        L.addCollider(pxx, shaftTop * 0.5, pzz, 0.15, shaftTop * 0.5, 0.28, 'concrete');
+      }
+    }
+
+    // ---- THE DADO, carried into the hall -----------------------------------
+    // Red oxide primer to 1.15 m runs through the whole facility - the spine and
+    // the control room both have it and the hall did not, which is half of why
+    // hero1 measured sat p50 0.095 against hero2's 0.214 in the same building.
+    B.paint = 'paint';
+    B.tint = tint(0x8a4034, 1.0);
+    for (s = -1; s <= 1; s += 2) {
+      B.box('dado_paint', RG_X1 - RG_X0, 1.15, 0.05,
+        (RG_X0 + RG_X1) * 0.5, 0.575, s * (RG_HZ - 0.025));
+      B.box('dado_paint', RG_X1 - RG_X0, 0.055, 0.075,
+        (RG_X0 + RG_X1) * 0.5, 1.175, s * (RG_HZ - 0.035));
+    }
+    B.box('dado_paint', 0.05, 1.15, RG_HZ * 2, RG_X1 - 0.025, 0.575, 0);
+    B.box('dado_paint', 0.075, 0.055, RG_HZ * 2, RG_X1 - 0.035, 1.175, 0);
+    // the west wall in two runs, either side of the spine portal
+    for (s = -1; s <= 1; s += 2) {
+      B.box('dado_paint', 0.05, 1.15, RG_HZ - 1.30, RG_X0 + 0.025, 0.575,
+        s * (RG_HZ + 1.30) * 0.5);
+      B.box('dado_paint', 0.075, 0.055, RG_HZ - 1.30, RG_X0 + 0.035, 1.175,
+        s * (RG_HZ + 1.30) * 0.5);
+    }
+    B.tint = null;
+    B.paint = 'metal';
+  }
+
+  // ===========================================================================
+  // THE SOUTH-WALL SERVICE GALLERY.  WHY hero1 IS MONOCHROME AND hero2 IS NOT.
+  //
+  // hero2 - the one framing of six that delivers this level's brief - works
+  // because it has layered cable trays standing off a RED OXIDE dado, lit
+  // across rather than along: sat p50 0.214, R-B +0.160 on the near wall, and
+  // three planes of depth inside four metres. hero1 has 28 x 11 m of evenly
+  // washed grey concrete filling its left third, sat p50 0.095, and nothing in
+  // frame lit by anything you can point at.
+  //
+  // The difference is not exposure and it is not the normal map. hero2 has a
+  // large RED SURFACE and three layers of occluder; hero1 has neither. So the
+  // south wall gets what a reactor gallery's south wall would actually have: a
+  // service gallery at 3.45 m, its edge girder, its handrail, and the process
+  // bank it carries - all in red-oxide primer, which is the finish structural
+  // steelwork in a facility like this is left in.
+  //
+  // Everything lives in already-merged buckets, so the whole gallery costs ONE
+  // draw call (the new oxide_steel bucket) and about 40k triangles against 3.3M
+  // spare. It is also 24 m of horizontal line at 3.0-4.5 m on the wall the
+  // signature framing looks at, which is the band the flat-plate measurement
+  // came from.
+  // ===========================================================================
+  function hallSouthGallery(L, B, rng, N) {
+    var i, k;
+    var GY = 3.45;                          // walkway level
+    var GX0 = RG_X0 + 2.4, GX1 = RG_X1 - 1.8;
+    var WF = -RG_HZ;                        // the wall face
+    var GZ1 = WF + 1.22;                    // the walkway's room-side edge
+
+    // ---- the deck ----------------------------------------------------------
+    B.paint = 'plate';
+    B.box('plate_steel', GX1 - GX0, 0.045, GZ1 - WF, (GX0 + GX1) * 0.5, GY, (WF + GZ1) * 0.5);
+    B.paint = 'metal';
+    // the grating panels, so the deck is not one sheet
+    for (i = 0; (GX0 + 0.3 + i * 1.20) < GX1; i++) {
+      B.box('rust_metal', 0.05, 0.055, GZ1 - WF, GX0 + 0.3 + i * 1.20, GY + 0.008,
+        (WF + GZ1) * 0.5);
+    }
+    L.addCollider((GX0 + GX1) * 0.5, GY - 0.03, (WF + GZ1) * 0.5,
+      (GX1 - GX0) * 0.5, 0.06, (GZ1 - WF) * 0.5, 'metal', true);
+
+    // ---- the edge girder: the strongest horizontal in hero1's left third ----
+    B.paint = 'metal';
+    B.box('oxide_steel', GX1 - GX0, 0.42, 0.030, (GX0 + GX1) * 0.5, GY - 0.24, GZ1 - 0.02);
+    B.box('oxide_steel', GX1 - GX0, 0.055, 0.20, (GX0 + GX1) * 0.5, GY - 0.03, GZ1 - 0.09);
+    B.box('oxide_steel', GX1 - GX0, 0.055, 0.20, (GX0 + GX1) * 0.5, GY - 0.44, GZ1 - 0.09);
+    // the kicking plate on top
+    B.box('oxide_steel', GX1 - GX0, 0.13, 0.022, (GX0 + GX1) * 0.5, GY + 0.09, GZ1 - 0.03);
+
+    // ---- knee braces back to the wall, one per pilaster bay -----------------
+    for (i = 0; i < 12; i++) {
+      var bx = RG_X0 + 1.2 + i * 2.4;
+      if (bx < GX0 - 0.1 || bx > GX1 + 0.1) continue;
+      B.strut('oxide_steel', bx, GY - 0.12, WF + 0.06, bx, GY - 1.10, WF + 0.06, 0.075, 0.075);
+      B.strut('oxide_steel', bx, GY - 0.14, GZ1 - 0.16, bx, GY - 1.06, WF + 0.10, 0.055, 0.055);
+      B.box('oxide_steel', 0.20, 0.30, 0.045, bx, GY - 1.16, WF + 0.055);
+      // the two standards of the handrail
+      B.box('oxide_steel', 0.048, 1.06, 0.048, bx, GY + 0.53, GZ1 - 0.07);
+    }
+    // ---- the handrail ------------------------------------------------------
+    B.pipe('oxide_steel', GX0, GY + 1.06, GZ1 - 0.07, GX1, GY + 1.06, GZ1 - 0.07, 0.026, 7);
+    B.pipe('oxide_steel', GX0, GY + 0.58, GZ1 - 0.07, GX1, GY + 0.58, GZ1 - 0.07, 0.021, 7);
+
+    // ---- the process bank the gallery exists to carry ----------------------
+    // Three lagged lines slung UNDER the deck (which is where a gallery carries
+    // its pipes) and two more above the rail, clear of the cove channel at 4.62
+    // and the extract louvres whose cases start at 5.90.
+    var UND = [[0.135, WF + 0.34, GY - 0.62], [0.105, WF + 0.66, GY - 0.60],
+               [0.085, WF + 0.92, GY - 0.66]];
+    for (i = 0; i < UND.length; i++) {
+      var pr = UND[i][0], pz = UND[i][1], py = UND[i][2];
+      B.pipe('oxide_steel', GX0 - 0.6, py, pz, GX1 + 0.4, py, pz, pr, 10);
+      // lagging bands every 1.4 m, and a flange every 5.6
+      for (k = 0; (GX0 + 0.5 + k * 1.40) < GX1; k++) {
+        B.cyl('rust_metal', pr + 0.016, pr + 0.016, 0.045,
+          GX0 + 0.5 + k * 1.40, py, pz, 0, 0, Math.PI * 0.5, 10);
+      }
+      for (k = 0; (GX0 + 1.8 + k * 5.60) < GX1; k++) {
+        B.cyl('oxide_steel', pr + 0.055, pr + 0.055, 0.055,
+          GX0 + 1.8 + k * 5.60, py, pz, 0, 0, Math.PI * 0.5, 12);
+      }
+    }
+    // and the two above the rail
+    var UPR = [[0.115, WF + 0.44, 5.22], [0.092, WF + 0.44, 5.52]];
+    for (i = 0; i < UPR.length; i++) {
+      B.pipe('oxide_steel', GX0 - 0.6, UPR[i][2], UPR[i][1], GX1 + 0.4, UPR[i][2],
+        UPR[i][1], UPR[i][0], 10);
+      for (k = 0; (GX0 + 0.9 + k * 2.10) < GX1; k++) {
+        B.cyl('rust_metal', UPR[i][0] + 0.016, UPR[i][0] + 0.016, 0.045,
+          GX0 + 0.9 + k * 2.10, UPR[i][2], UPR[i][1], 0, 0, Math.PI * 0.5, 10);
+      }
+    }
+    // the brackets carrying the upper pair off the wall
+    for (i = 0; i < 12; i++) {
+      var kx = RG_X0 + 1.6 + i * 2.4;
+      if (kx > GX1) break;
+      B.box('oxide_steel', 0.07, 0.16, 0.62, kx, 5.37, WF + 0.32);
+      B.strut('oxide_steel', kx, 5.20, WF + 0.62, kx, 4.86, WF + 0.08, 0.038, 0.038);
+    }
+
+    // ---- two valve stations, because a bank of parallel tubes is a pattern --
+    var VST = [15.6, 27.9];
+    for (i = 0; i < VST.length; i++) {
+      var vx = VST[i];
+      B.paint = 'clad';
+      B.dark = 0.16;
+      B.cyl('hull_paint', 0.20, 0.20, 0.44, vx, GY - 0.62, WF + 0.34, 0, 0, 0, 12);
+      B.dark = 0;
+      B.paint = 'metal';
+      B.cyl('oxide_steel', 0.055, 0.055, 0.52, vx, GY - 0.20, WF + 0.34, 0, 0, 0, 8);
+      B.cyl('oxide_steel', 0.24, 0.24, 0.035, vx, GY + 0.10, WF + 0.34, 0, 0, 0, 14);
+      // the bypass loop round it
+      B.pipe('oxide_steel', vx - 0.62, GY - 0.62, WF + 0.34, vx - 0.62, GY - 1.24, WF + 0.34, 0.075, 8);
+      B.pipe('oxide_steel', vx - 0.62, GY - 1.24, WF + 0.34, vx + 0.62, GY - 1.24, WF + 0.34, 0.075, 8);
+      B.pipe('oxide_steel', vx + 0.62, GY - 1.24, WF + 0.34, vx + 0.62, GY - 0.62, WF + 0.34, 0.075, 8);
+      B.paint = 'metal';
+      card(B, CELL.STENCIL, vx + 0.30, GY + 0.62, GZ1 - 0.10, 1.05, 0.48, 'z', 1,
+        tint(0xe4e8dc, 0.4));
+    }
+
+    // ---- the caged ladder up to it -----------------------------------------
+    var lx = GX0 + 0.9, lz = WF + 0.46;
+    B.paint = 'metal';
+    for (i = -1; i <= 1; i += 2) {
+      B.box('oxide_steel', 0.05, GY + 0.30, 0.05, lx + i * 0.23, (GY + 0.30) * 0.5, lz);
+    }
+    for (i = 0; i * 0.30 < GY + 0.10; i++) {
+      B.pipe('oxide_steel', lx - 0.23, 0.24 + i * 0.30, lz, lx + 0.23, 0.24 + i * 0.30, lz,
+        0.014, 6);
+    }
+    for (i = 0; i < 5; i++) {
+      var lhy = 1.70 + i * 0.44;
+      if (lhy > GY - 0.10) break;
+      for (k = 0; k <= 6; k++) {
+        var la0 = -Math.PI * 0.5 + (k / 6) * Math.PI;
+        var la1 = -Math.PI * 0.5 + ((k + 1) / 6) * Math.PI;
+        B.pipe('oxide_steel', lx + Math.sin(la0) * 0.38, lhy, lz + Math.cos(la0) * 0.38,
+          lx + Math.sin(la1) * 0.38, lhy, lz + Math.cos(la1) * 0.38, 0.011, 5);
+      }
+    }
+    B.paint = 'metal';
+    L.addCollider(lx, 1.70, lz + 0.10, 0.28, 1.70, 0.24, 'metal');
+
+    // ---- and the fitting that lights it -----------------------------------
+    // Two bracket floods on the handrail standards, firing DOWN and ACROSS the
+    // deck band below rather than along the wall they are bolted to - the same
+    // incidence argument the round-3 notes on bnk_spine_wash make. Practicals
+    // bnk_hall_gal_w / bnk_hall_gal_e sit on these.
+    wallFlood(L, B, 15.30, GY + 0.86, GZ1 - 0.12, 13.20, 0.90, -3.40, 0xdce8f6, 1.8);
+    wallFlood(L, B, 29.60, GY + 0.86, GZ1 - 0.12, 31.60, 0.95, -3.90, 0xdce8f6, 1.7);
+    // a red strip run along the gallery's own edge, which is 24 m of the level's
+    // colour at exactly the height hero1 reads
+    for (i = 0; i < 9; i++) {
+      var sx2 = GX0 + 1.1 + i * 2.85;
+      if (sx2 > GX1 - 0.8) break;
+      emergStrip(L, B, sx2, GY - 0.74, GZ1 - 0.05, 2.30, 0, 0.050);
+    }
+    for (i = 0; i < 7; i++) {
+      var mx2 = GX0 + 1.4 + i * 3.60;
+      if (mx2 > GX1 - 1.0) break;
+      marker(L, B, mx2, GY + 0.30, GZ1 - 0.08, 1.55, 0, 0.045);
     }
   }
 
@@ -4737,20 +5034,53 @@
     }
     return emitBox(L, x, y - 0.068, z, len - 0.12, 0.058, 0.175, ry,
       state === 'dying' ? 0xc8dcf0 : 0xd8e6f4,
-      state === 'dying' ? 1.28 : 1.82, state === 'dying' ? 'dying' : 'fluoro');
+      state === 'dying' ? 1.02 : 1.42, state === 'dying' ? 'dying' : 'fluoro');
   }
 
   // A recessed low-level escape marker. Warm, weak, and CONTINUOUS along every
   // route in the facility. This is the single cheapest coverage fix there is:
   // five ceiling pools 8 m apart leave four fifths of a 42 m corridor floor
   // black, and a line does what a row of points physically cannot.
+  // ---------------------------------------------------------------------------
+  // THE STRIP FITTINGS, AND THE ROUND-4 FIX IS THAT THEY WERE NEVER FITTINGS.
+  //
+  // Both of these were a channel box with an EXPOSED emissive slab in front of
+  // it - the emitter sat `out` metres outboard of a housing shallower than the
+  // emitter's own depth, so the hot face was proud of everything meant to shield
+  // it and there was nothing anywhere in the level that could occlude a lens at
+  // a grazing angle. Measured consequence: blown_white rose on three of five
+  // framings this round (hero2 0.76%, interior 0.60%, hero3 0.42%) while the
+  // FIELD was simultaneously too dark - a distribution failure, with the level's
+  // own sources at the clipping end of it.
+  //
+  // What a real channel fitting has, and what both now build: a folded body, two
+  // LIPS standing proud of the diffuser plane on either side, two end caps, and
+  // the diffuser set BACK inside the lips. The lips are what take the core out
+  // of the frame as the view goes grazing, which is the geometry doing the work
+  // instead of a gain reduction doing it. (metro's channelStrip solved exactly
+  // this problem this round; the arrangement below is the same idea sized for
+  // this level's 40 mm strips.) The gains come down as well, but only by the
+  // ~25% the recessed lens no longer needs.
+  // ---------------------------------------------------------------------------
   function marker(L, B, x, y, z, len, ry, out) {
     out = (out === undefined) ? 0.045 : out;
-    var ox = out * Math.sin(ry), oz = out * Math.cos(ry);
+    // Every offset is a FRACTION of `out`, which carries the sign of the side the
+    // fitting is mounted on. Hard-coding the lip offset put both lips inside the
+    // wall on every fitting whose `out` is negative, which is half of them.
+    var sn = Math.sin(ry), cs = Math.cos(ry);
+    var ox = out * 0.55 * sn, oz = out * 0.55 * cs;      // the diffuser plane
+    var lx = out * 0.82 * sn, lz = out * 0.82 * cs;      // the lips, proud of it
+    var ex = cs * len * 0.5, ez = sn * len * 0.5;
     B.paint = 'metal';
+    // the body, and the hood over it that makes it a low-level marker and not a
+    // strip light: an escape marker is shielded from above by design
     B.boxR('steel', len, 0.10, 0.055, x, y, z, 0, ry, 0);
-    B.boxR('steel', len + 0.06, 0.022, 0.075, x, y + 0.055, z, 0, ry, 0);
-    return emitBox(L, x + ox, y - 0.012, z + oz, len - 0.05, 0.038, 0.030, ry,
+    B.boxR('steel', len + 0.06, 0.022, 0.085, x + lx * 0.4, y + 0.058, z + lz * 0.4, 0, ry, 0);
+    B.boxR('steel', len, 0.020, 0.050, x + lx, y + 0.031, z + lz, 0, ry, 0);
+    B.boxR('steel', len, 0.020, 0.050, x + lx, y - 0.031, z + lz, 0, ry, 0);
+    B.boxR('steel', 0.030, 0.084, 0.050, x - ex + lx, y, z + ez + lz, 0, ry, 0);
+    B.boxR('steel', 0.030, 0.084, 0.050, x + ex + lx, y, z - ez + lz, 0, ry, 0);
+    return emitBox(L, x + ox, y - 0.008, z + oz, len - 0.07, 0.034, 0.026, ry,
       0xffd7a4, 0.80, 'emerg');
   }
 
@@ -4759,11 +5089,19 @@
   // reflections without adding a light slot.
   function emergStrip(L, B, x, y, z, len, ry, out) {
     out = (out === undefined) ? 0.048 : out;
-    var ox = out * Math.sin(ry), oz = out * Math.cos(ry);
+    var sn = Math.sin(ry), cs = Math.cos(ry);
+    var ox = out * 0.55 * sn, oz = out * 0.55 * cs;
+    var lx = out * 0.85 * sn, lz = out * 0.85 * cs;
+    var ex = cs * len * 0.5, ez = sn * len * 0.5;
     B.paint = 'metal';
     B.boxR('rust_metal', len, 0.085, 0.070, x, y, z, 0, ry, 0);
-    return emitBox(L, x + ox, y - 0.030, z + oz, len - 0.06, 0.040, 0.040, ry,
-      0xff2814, 1.42, 'emerg');
+    // the proud lips and the two end caps
+    B.boxR('rust_metal', len + 0.02, 0.024, 0.055, x + lx, y + 0.036, z + lz, 0, ry, 0);
+    B.boxR('rust_metal', len + 0.02, 0.024, 0.055, x + lx, y - 0.036, z + lz, 0, ry, 0);
+    B.boxR('rust_metal', 0.034, 0.098, 0.055, x - ex + lx, y, z + ez + lz, 0, ry, 0);
+    B.boxR('rust_metal', 0.034, 0.098, 0.055, x + ex + lx, y, z - ez + lz, 0, ry, 0);
+    return emitBox(L, x + ox, y, z + oz, len - 0.08, 0.042, 0.030, ry,
+      0xff2814, 1.06, 'emerg');
   }
 
   // ---------------------------------------------------------------------------
@@ -4927,7 +5265,7 @@
     B.cyl('steel', 0.60, 0.60, 0.02, x, y - 0.16, z, 0, 0, 0, 18);
     if (state === 'dead') return -1;
     return emitBox(L, x, y + 0.02, z, 0.46, 0.15, 0.46, 0,
-      state === 'dying' ? 0xcadcee : 0xdce8f6, state === 'dying' ? 1.05 : 1.55,
+      state === 'dying' ? 0xcadcee : 0xdce8f6, state === 'dying' ? 0.88 : 1.28,
       state === 'dying' ? 'dying' : 'fluoro');
   }
 
@@ -5038,7 +5376,7 @@
       B.paint = 'metal';
       B.box('rust_metal', 2.45, 0.085, 0.13, cvx, 2.52, -SPN_HZ + 0.16);
       emitBox(L, cvx, 2.565, -SPN_HZ + 0.21, 2.20, 0.032, 0.095, 0,
-        0xcfe0f2, (i % 5 === 3) ? 0.0 : 1.05, (i % 5 === 3) ? 'dying' : 'fluoro');
+        0xcfe0f2, (i % 5 === 3) ? 0.0 : 0.86, (i % 5 === 3) ? 'dying' : 'fluoro');
     }
     emergStrip(L, B, -5.2, 2.36, -SPN_HZ + 0.10, 2.4, 0, 0.048);
     emergStrip(L, B, -17.0, 2.36, -SPN_HZ + 0.10, 2.4, 0, 0.048);
@@ -5153,7 +5491,7 @@
         B.dark = 0; B.paint = 'metal';
       } else {
         emitBox(L, tx, 2.905, tz, 1.12, 0.035, 0.54, 0,
-          cst === 'dying' ? 0xc8dcf0 : 0xd8e6f4, cst === 'dying' ? 0.95 : 1.45,
+          cst === 'dying' ? 0xc8dcf0 : 0xd8e6f4, cst === 'dying' ? 0.80 : 1.16,
           cst === 'dying' ? 'dying' : 'fluoro');
         glowCard(tx, 2.88, tz, 1.10, 0.20, 4300, cst === 'dying' ? 0.35 : 0.52, 0,
           new THREE.Color(0.86, 0.93, 1.0), cst === 'dying' ? 3 : 6);
@@ -5186,7 +5524,7 @@
         B.paint = 'metal';
         B.box('rust_metal', 0.13, 0.085, 1.55, ccx, 3.12, ccz);
         emitBox(L, ccx - s * 0.055, 3.165, ccz, 0.095, 0.030, 1.35, 0,
-          0xcfe0f2, (i % 4 === 2) ? 0.0 : 1.00, (i % 4 === 2) ? 'dying' : 'fluoro');
+          0xcfe0f2, (i % 4 === 2) ? 0.0 : 0.84, (i % 4 === 2) ? 'dying' : 'fluoro');
       }
     }
 
@@ -5196,6 +5534,16 @@
     }
     emergStrip(L, B, CTL_X0 + 3.2, CTL_FLOOR + 2.30, CTL_Z0 + 0.10, 2.4, 0, 0.048);
     emergStrip(L, B, CTL_X0 + 9.6, CTL_FLOOR + 2.30, CTL_Z0 + 0.10, 2.4, 0, 0.048);
+    // bnk_ctl_floor's own fitting: the third channel in the same run, which is
+    // what rakes the access floor 3 m in front of the interior framing - the two
+    // cells that were still dead there after the ground bounce landed.
+    emergStrip(L, B, CTL_X0 + 13.2, CTL_FLOOR + 2.30, CTL_Z0 + 0.10, 2.4, 0, 0.048);
+    // and the west wall's marker line, which had none: the interior framing's
+    // bottom-right corner is the floor in front of the equipment racks.
+    for (i = 0; i < 6; i++) {
+      marker(L, B, CTL_X0 + 0.06, CTL_FLOOR + 0.34, CTL_Z0 + 1.5 + i * 2.1, 1.55,
+        Math.PI * 0.5, 0.045);
+    }
     // THE NORTH-EAST CORNER, which lv_interior throws away: its left side
     // measured Lmean 11.2 over 300x580 px. A strip on the east wall and one on
     // the north puts a source in the corner the pose looks into, and the
@@ -5225,7 +5573,7 @@
         B.paint = 'metal';
         B.box('rust_metal', 1.90, 0.09, 0.14, vcx, 3.72, s * (VEST_HZ - 0.16));
         emitBox(L, vcx, 3.765, s * (VEST_HZ - 0.22), 1.70, 0.032, 0.10, 0,
-          0xcfe0f2, (i % 4 === 1) ? 0.0 : 1.00, (i % 4 === 1) ? 'dying' : 'fluoro');
+          0xcfe0f2, (i % 4 === 1) ? 0.0 : 0.84, (i % 4 === 1) ? 'dying' : 'fluoro');
       }
     }
     // a lit reveal round the door aperture itself, so the 2.4 m of concrete the
@@ -5258,11 +5606,30 @@
     emergStrip(L, B, VEST_X1 - 2.4, 3.10, -VEST_HZ + 0.10, 2.6, 0, 0.048);
     emergStrip(L, B, VEST_X0 + 4.0, 3.10, -VEST_HZ + 0.10, 2.6, 0, 0.048);
     // the guard cabin's own light, seen through its glazing
-    emitBox(L, VEST_X0 + 5.0, 4.35, VEST_HZ - 1.55, 1.30, 0.05, 0.22, 0, 0xd8e6f4, 1.9, 'fluoro');
+    emitBox(L, VEST_X0 + 5.0, 4.35, VEST_HZ - 1.55, 1.30, 0.05, 0.22, 0, 0xd8e6f4, 1.48, 'fluoro');
     glowCard(VEST_X0 + 5.0, 4.28, VEST_HZ - 3.10, 1.6, 0.28, 4300, 0.45, 0,
       new THREE.Color(0.86, 0.93, 1.0), 7);
     // and one lamp down the approach tunnel, so the collapse is not a black hole
     workLight(L, B, VEST_X0 - 4.2, 2.35, 1.40, APPR_X0 + 6.4, 1.2, 0.0, 0xffe0b0, 2.4, 1.60);
+    // ---- THE GUARD CABIN'S OWN THREE FITTINGS ------------------------------
+    // hero3's left third is this structure and it had nothing on it. All three
+    // are real fittings carrying practicals 36-38; see the rig table.
+    // 1. an undercroft batten hung under the cabin deck, on two short drops
+    batten(L, B, -41.00, 2.72, VEST_HZ - 1.55, 1.35, Math.PI * 0.5, 'lit', 0.14);
+    glowCard(-41.00, 2.62, VEST_HZ - 1.55, 1.25, 0.18, 4200, 0.42, Math.PI * 0.5,
+      new THREE.Color(0.86, 0.93, 1.0), 8);
+    // 2. a bracket flood on the cabin's south fascia, firing down and south
+    B.paint = 'metal';
+    B.box('steel', 0.12, 0.16, 0.22, -40.50, 3.30, VEST_HZ - 3.14);
+    wallFlood(L, B, -40.50, 3.30, VEST_HZ - 3.22, -38.30, 0.14, 1.20, 0xffd2a0, 1.9);
+    glowCard(-40.36, 3.30, VEST_HZ - 3.36, 0.30, 0.22, 3200, 0.46, 0, WK.clone(), 9);
+    // 3. a red strip down the cabin's east wall and a marker under the deck edge,
+    //    so the dark mass carries the level's colour as well as a value
+    emergStrip(L, B, VEST_X0 + 7.36, 2.30, VEST_HZ - 2.10, 1.90, Math.PI * 0.5, 0.048);
+    emergStrip(L, B, VEST_X0 + 7.36, 3.62, VEST_HZ - 2.10, 1.90, Math.PI * 0.5, 0.048);
+    for (i = 0; i < 3; i++) {
+      marker(L, B, VEST_X0 + 2.9 + i * 1.7, 2.86, VEST_HZ - 3.14, 1.45, 0, -0.045);
+    }
 
     // ======================================================== the plant ======
     batten(L, B, PLT_X0 + 3.0, PLT_CEIL - 0.34, PLT_Z0 + 2.6, 1.60, 0, 'lit', 0.24);
@@ -5297,7 +5664,7 @@
       B.paint = 'metal';
       B.boxR('rust_metal', 1.25, 0.075, 0.11, cx3, GANT_Y + 0.30, cz4, 0, -ca2 + Math.PI * 0.5, 0);
       emitBox(L, cx3, GANT_Y + 0.345, cz4, 1.10, 0.030, 0.085, -ca2 + Math.PI * 0.5,
-        0xcfe0f2, (i % 7 === 2) ? 0.0 : 1.05, (i % 7 === 2) ? 'dying' : 'fluoro');
+        0xcfe0f2, (i % 7 === 2) ? 0.0 : 0.86, (i % 7 === 2) ? 'dying' : 'fluoro');
     }
     // THE WALL COVE. A continuous channel at 4.55 m round all four walls of the
     // hall. It was added for a measured reason: with only high bays and the
@@ -5312,7 +5679,7 @@
         B.paint = 'metal';
         B.box('rust_metal', 2.30, 0.10, 0.16, wcx, 4.62, s * (RG_HZ - 0.18));
         emitBox(L, wcx, 4.545, s * (RG_HZ - 0.24), 2.05, 0.036, 0.10, 0,
-          0xcfe0f2, (i % 4 === 2) ? 0.0 : 1.10, (i % 4 === 2) ? 'dying' : 'fluoro');
+          0xcfe0f2, (i % 4 === 2) ? 0.0 : 0.90, (i % 4 === 2) ? 'dying' : 'fluoro');
       }
     }
     for (i = 0; i < 10; i++) {
@@ -5323,7 +5690,7 @@
         B.paint = 'metal';
         B.box('rust_metal', 0.16, 0.10, 2.30, wcxx, 4.62, wcz);
         emitBox(L, wcxx - s * 0.06, 4.545, wcz, 0.10, 0.036, 2.05, 0,
-          0xcfe0f2, (i % 4 === 1) ? 0.0 : 1.10, (i % 4 === 1) ? 'dying' : 'fluoro');
+          0xcfe0f2, (i % 4 === 1) ? 0.0 : 0.90, (i % 4 === 1) ? 'dying' : 'fluoro');
       }
     }
 
@@ -5731,6 +6098,136 @@
       dayBase: 1, aimPos: [PLT_X0 + 3.4, 1.60, PLT_Z0 + 1.40], fixed: true, halo: 1.1,
       haloGain: 0.22, bulbR: 0.08, bulbFlat: 0.5, bulbGain: 0.14, beam: 0.42 });
 
+    // ========================================================================
+    // 25-38 : THE FOURTEEN FITTINGS THE 24-LAMP BUILD CAP WAS HIDING.
+    //
+    // Every lighting fix in round 3 had to be a RE-SITE, because the table above
+    // was exactly flush against lighting.js's old MAX_PRACTICALS_RIG and adding
+    // one entry silently deleted the last. That cap is now split into a build cap
+    // and a per-frame active cap and this level publishes `practicals: 40,
+    // active: 30` (see the constructor), so for the first time the answer to "the
+    // interior's near floor has no lamp in reach of it" can be a lamp.
+    //
+    // Every one sits on a fitting that EXISTS in the geometry above - a cove
+    // channel, a strip run, a handrail standard, a troffer housing - and every
+    // aim fires ACROSS the space at the surface it is meant to describe, never
+    // along the surface it is bolted to. That is the one lesson this level has
+    // paid for three rounds running.
+    // ========================================================================
+    // ---- 25-26 : the reactor hall's new south gallery ----------------------
+    // Two bracket floods on the gallery handrail, firing down and across the
+    // deck band. They are what makes the gallery read as a lit walkway 24 m long
+    // rather than as a dark ledge, and they put the only downward throw on the
+    // hall's south deck band.
+    lamp({ name: 'bnk_hall_gal_w', kind: 'fluoro', pos: [15.30, 4.31, -RG_HZ + 1.10],
+      color: FL.clone(), kelvin: 4300, intensity: 96, distance: 18, cone: 0.86, penumbra: 0.58,
+      dayBase: 1, aimPos: [13.20, 0.90, -3.40], fixed: true, halo: 0.85, haloGain: 0.18,
+      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.11, beam: 0.22 });
+    lamp({ name: 'bnk_hall_gal_e', kind: 'fluoro', pos: [29.60, 4.31, -RG_HZ + 1.10],
+      color: FL.clone(), kelvin: 4400, intensity: 88, distance: 18, cone: 0.86, penumbra: 0.58,
+      dayBase: 1, aimPos: [31.60, 0.95, -3.90], fixed: true, halo: 0.85, haloGain: 0.18,
+      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.11, beam: 0.22 });
+    // ---- 27 : the south wall's UPPER band, from the gantry ring ------------
+    // The band above the gallery, from the gantry cove at i = 17 (a real channel,
+    // see the cove loop) 6.7 m off the wall - 37 degrees of incidence. It exists
+    // to give the pilaster corbels and the extract plenum a raking side, not to
+    // raise the wall's level: bnk_hall_wall_s comes DOWN in the same pass,
+    // because the round-3 measurement on that surface was Lmean 156 / p95 223
+    // with a p05-p95 span of 0.14-0.20, i.e. too bright AND too flat at once.
+    lamp({ name: 'bnk_hall_upper_s', kind: 'fluoro', pos: [28.88, 6.05, -6.71],
+      color: FL.clone(), kelvin: 4300, intensity: 104, distance: 22, cone: 0.90, penumbra: 0.56,
+      dayBase: 1, aimPos: [22.60, 7.60, -RG_HZ + 0.14], fixed: true, halo: 0.9, haloGain: 0.18,
+      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.10, beam: 0.20 });
+    // ---- 28-29 : the spine's SOUTH wall, which is hero2's whole left third --
+    // Measured: hero2's columns 0-2 were dead over rows 0-6 - and it is not
+    // absence, at 3x gain the trays, the sign, the insulated crossing and the
+    // oxide dado are all there. Nothing was lighting them. bnk_spine_wash fires
+    // north; there was no mirror of it, so every surface on the south side east
+    // of x = -13 had no source in reach at all.
+    // Both sit on the north wall's own 2.36 m emergency-strip channels (esx =
+    // SPN_X0 + 2.0 + i*3.05) and land at 44-46 degrees.
+    lamp({ name: 'bnk_spine_wash_s', kind: 'fluoro', pos: [-3.55, 2.36, SPN_HZ - 0.14],
+      color: FL.clone(), kelvin: 4300, intensity: 76, distance: 15, cone: 0.80, penumbra: 0.64,
+      dayBase: 1, aimPos: [-7.40, 1.35, -SPN_HZ + 0.12], fixed: true, halo: 0.80,
+      haloGain: 0.16, bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.10, beam: 0.16 });
+    lamp({ name: 'bnk_spine_red2', kind: 'led', pos: [-2.05, 1.28, SPN_HZ - 0.14],
+      color: RD.clone(), kelvin: 1900, intensity: 30, distance: 11, cone: 0.82, penumbra: 0.84,
+      dayBase: 1, aimPos: [-5.60, 0.72, -SPN_HZ + 0.14], fixed: true, halo: 0.45, haloGain: 0.24,
+      bulbR: 0.04, bulbFlat: 0.5, bulbGain: 0.15, beam: 0.18 });
+    // ---- 30 : the spine's soffit and upper trays ----------------------------
+    // hero2's top row was dead across five of eight cells. The ground bounce
+    // recovers a soffit's diffuse; what it cannot do is put a highlight on the
+    // three tiers of tray hanging under it. From the south cove at x = -8.40
+    // firing up and across, the trays present their SIDES at 40 degrees.
+    lamp({ name: 'bnk_spine_up', kind: 'fluoro', pos: [-8.40, 2.50, -SPN_HZ + 0.16],
+      color: FL.clone(), kelvin: 4200, intensity: 44, distance: 13, cone: 0.94, penumbra: 0.70,
+      dayBase: 1, aimPos: [-11.90, 2.74, SPN_HZ - 0.40], fixed: true, halo: 0.7,
+      haloGain: 0.16, bulbR: 0.05, bulbFlat: 0.4, bulbGain: 0.09, beam: 0.16 });
+    // ---- 31-34 : the control room's five live troffers, made REAL -----------
+    // They were emissive boxes with no light behind them: four spots aimed at
+    // four specific things were lighting a 16 x 13 m room, so the floor 3 m in
+    // front of the interior pose - directly under a troffer - measured a cell
+    // median of 0.030 while the floor 6 m out measured 0.62. A recessed troffer
+    // is a wide, weak, downward fixture and there is no reason for it not to be
+    // one. Aimed 1.2 m off nadir so the fascias and the access-floor panel joints
+    // get a rake instead of a flat pool (the round-3 finding on this file).
+    // The four still-striking troffers only - CTL_STATE above says which, and a
+    // steady practical behind a tube the emitter is flickering as 'dying' is
+    // exactly the kind of quiet inconsistency this level has been caught by
+    // before.
+    var TROF = [[-24.40, 7.20, 44], [-16.40, 7.20, 40], [-24.40, 13.80, 40],
+                [-20.40, 13.80, 38]];
+    for (i = 0; i < TROF.length; i++) {
+      lamp({ name: 'bnk_ctl_trof' + i, kind: 'fluoro',
+        pos: [TROF[i][0], 2.88, TROF[i][1]],
+        color: FL.clone(), kelvin: 4300, intensity: TROF[i][2], distance: 12,
+        cone: 1.18, penumbra: 0.72, dayBase: 1,
+        aimPos: [TROF[i][0] - 1.10, CTL_FLOOR + 0.05, TROF[i][1] - 1.50],
+        fixed: true, halo: 0.9, haloGain: 0.16,
+        bulbR: 0.07, bulbFlat: 0.5, bulbGain: 0.10, beam: 0.14 });
+    }
+    // ---- 35 : the control room's near floor, raked --------------------------
+    // On the south wall's own emergency-strip channel at 2.30, firing north-west
+    // across the access floor at 19 degrees. A grazing throw is WRONG on a wall
+    // and RIGHT on a 600 mm panel grid - the whole point of that floor is the
+    // joint, and a joint only reads under a rake.
+    lamp({ name: 'bnk_ctl_floor', kind: 'fluoro', pos: [CTL_X0 + 13.20, CTL_FLOOR + 2.30, CTL_Z0 + 0.14],
+      color: new THREE.Color(0.90, 0.94, 1.00), kelvin: 4200, intensity: 58,
+      distance: 15, cone: 0.90, penumbra: 0.74,
+      dayBase: 1, aimPos: [-21.60, CTL_FLOOR + 0.04, 9.30], fixed: true, halo: 0.7,
+      haloGain: 0.16, bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.10, beam: 0.14 });
+    // ---- 36-38 : hero3's left third, which is the guard cabin --------------
+    // Measured: hero3's whole column 0 was dead top to bottom and at 3.4x gain
+    // there is no absence at all - it is the guard cabin's unlit east wall, the
+    // undercroft under its deck and the four posts, filling 1.5-6 m of frame.
+    // Worth stating because it looked like a lighting gap and is a geometry one:
+    // the cabin is built HARD AGAINST the north wall (VEST_HZ - 1.55 + 1.55 =
+    // VEST_HZ exactly), so there is no north wall visible behind it to light -
+    // the surfaces the pose sees are the cabin's own, and they had no fitting
+    // anywhere near them.
+    // 1. across the east wall at 35 degrees, from the vestibule's north cove
+    //    channel at vcx = VEST_X0 + 1.6 + 4*2.15 (a lit one; i % 4 === 1 is the
+    //    dead one in that loop).
+    lamp({ name: 'bnk_vest_cabin', kind: 'fluoro', pos: [VEST_X0 + 10.20, 3.72, VEST_HZ - 0.28],
+      color: FL.clone(), kelvin: 4300, intensity: 84, distance: 15, cone: 0.82, penumbra: 0.62,
+      dayBase: 1, aimPos: [-39.60, 1.85, 4.40], fixed: true, halo: 0.9, haloGain: 0.20,
+      bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.11, beam: 0.20 });
+    // 2. the undercroft, from a batten hung under the cabin's own deck. Nothing
+    //    outside the undercroft can light it - the deck plate is 4.8 x 3.1 m and
+    //    every ray from the vestibule's ceiling fittings lands on top of it.
+    lamp({ name: 'bnk_vest_under', kind: 'fluoro', pos: [-41.00, 2.72, VEST_HZ - 1.55],
+      color: FL.clone(), kelvin: 4200, intensity: 40, distance: 11, cone: 1.16, penumbra: 0.74,
+      dayBase: 1, aimPos: [-42.30, 0.12, VEST_HZ - 0.90], fixed: true, halo: 0.7,
+      haloGain: 0.20, bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.10, beam: 0.18 });
+    // 3. the deck band immediately south of the cabin, which is hero3's two
+    //    bottom-left cells. On a bracket flood bolted to the cabin's south
+    //    fascia, firing down and SOUTH - away from its own deck plate, which is
+    //    what a bracket on the north side has to do to reach any floor at all.
+    lamp({ name: 'bnk_vest_ndeck', kind: 'led', pos: [-40.50, 3.30, VEST_HZ - 3.22],
+      color: WK.clone(), kelvin: 3200, intensity: 52, distance: 13, cone: 0.96, penumbra: 0.76,
+      dayBase: 1, aimPos: [-38.30, 0.14, 1.20], fixed: true, halo: 0.6, haloGain: 0.20,
+      bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.12, beam: 0.20 });
+
     // ---- the shafts ---------------------------------------------------------
     // Four real fixtures, one per framing that needs one. lighting.js builds a
     // spot plus an additive haze cone for each; `lux` marks them as FIXTURES so
@@ -5841,6 +6338,70 @@
     this.bounds = new THREE.Box3(
       new THREE.Vector3(APPR_X0 - 4, PIT_Y - 3.0, -RG_HZ - 4),
       new THREE.Vector3(RG_X1 + 4, RG_CEIL + 3.0, RG_HZ + 4));
+    // =======================================================================
+    // THE PUBLISHED RIG.  lighting.js reads this in _adoptLevelRig before its
+    // sky-visibility bake, so everything here lands on the first frame.
+    //
+    // WHY EACH NUMBER IS HERE, ALL MEASURED ON THIS LEVEL AT 1280x720 t=1.5:
+    //
+    // practicals / active - the 24-lamp BUILD cap was the binding constraint on
+    //   this level for two whole rounds: every round-3 lighting fix had to be a
+    //   RE-SITE because the table was already flush against it, and the file's
+    //   own rig header says so twice. 40 built / 30 active buys the eight
+    //   fittings the dead regions actually needed (the control room's five live
+    //   troffers were emissive-only decoration, the guard cabin's near faces had
+    //   nothing on them at all, and the spine's south wall had no source east of
+    //   x = -13). `active` costs fragment time, not draw calls, and the selection
+    //   is per-frame by irradiance so a framing gets the 30 that matter to it.
+    //
+    // groundBounce - THE SINGLE LARGEST MEASURED WIN OF THIS ROUND, and it is a
+    //   down-facing indirect term, so it lands on exactly the surfaces this
+    //   level had nothing on: the control room's ceiling void, the corridor
+    //   soffit, every cable-tray underside, the operating platform's soffit, the
+    //   guard cabin's overhang. Measured, interior lv_interior:
+    //     dead_cell_med_pct 42.19 -> 20.31 at amount 0.30/ao 0.80/lamps 1.0
+    //                             -> 17.19 at amount 0.34/ao 0.62/lamps 1.5
+    //     hero2 31.25 -> 10.94, hero3 25.00 -> 10.94, hero1 6.25 -> 1.56
+    //   and edge_energy went UP on both failing frames (0.2198 -> 0.2330,
+    //   0.1838 -> 0.1989), i.e. it REVEALS the void's structure rather than
+    //   veiling it. `amount` IS the ground albedo and 0.34 is the control room's
+    //   pale access floor plus dusted concrete deck, which is what most of this
+    //   facility's horizontal surface actually is. `lamps` 1.5 rather than the
+    //   0.25 default because on a sealed level the key and sky terms are ZERO -
+    //   the lamp pool is the only thing putting light on the floor at all, so the
+    //   area-weighted guess that a lamp pool is a quarter of the floor is the
+    //   wrong estimate here; a corridor lit end to end by a continuous marker
+    //   line and a strip run is nearer "one continuous lit surface".
+    //   ao 0.62 rather than 0.80 measured 3 points better on the interior: the
+    //   ceiling void has low sky visibility by construction and the higher gate
+    //   was taking the term back off the surface that needed it most.
+    //
+    // svNormal 0.95 - the shared default is 0.60, calibrated on the market's
+    //   1.23 m cells. This level's svBox gives cells of about 2.45 x 1.00 x
+    //   0.56 m, so 0.60 does not clear a wall's own cell along X at all. 0.95 is
+    //   under half the 2.45 m X cell and still inside the 3.9 m spine in Z.
+    // svGamma 0.76 - below 1 lifts the mid range so a half-enclosed space (the
+    //   reactor gallery, the vestibule) stops reading as the same cave as a
+    //   sealed corridor.
+    // beamFeather / beamPhase - the roster asks for "dust in the beams" and the
+    //   critique says the beams do not read as beams. beamPhase is normalised at
+    //   90 degrees, so a perpendicular view keeps the authored brightness and
+    //   only the near-axis view gains - which is precisely the hall shaft in the
+    //   establishing frame and the vestibule shaft in hero3.
+    // =======================================================================
+    this.lightRig = {
+      practicals: 40, active: 30,
+      svNormal: 0.95, svGamma: 0.76,
+      beamFeather: 0.34, beamPhase: 0.38,
+      groundBounce: {
+        amount: 0.34, ao: 0.62, lamps: 1.5, max: 1.6,
+        // The bounce is coming off dusted grey concrete lit by 4300 K failing
+        // fluorescent, not off the alarm - taking the default hue would let the
+        // brightest lamp pool (which is red down in the pit) tint every soffit
+        // in the facility.
+        color: 0xbcc0bc
+      }
+    };
     // THE PLACEMENT CONTRACT. Available before build().
     this.anchors = buildAnchors(this.noise);
   }
@@ -6131,6 +6692,31 @@
       try { fn(); } catch (e) { GAME.logError('bunker.' + name, e); }
     }
 
+    // ---- AERIAL PERSPECTIVE UNDER A SEALED SKY -----------------------------
+    // The level has no sun, so every cap and floor in sky.js is derived from an
+    // illuminant that does not exist and the air had no radiance of its own:
+    // a lit doorway 30 m down the spine arrived at full contrast and the frame
+    // had no depth cue except size. setDepthHaze gives the air an ABSOLUTE
+    // luminance that bypasses those caps, which is the only lever that works on
+    // a level like this one.
+    //
+    // 0.016 is roughly 12% of the radiance the corridor's own wall carries
+    // directly under a batten, which is the range the API documents for an
+    // interior lit by practicals. Measured here on top of the ground bounce:
+    // hero3 dead_cell_med 25.00 -> 10.94 and grade_split +0.0671 -> +0.0760,
+    // interior 20.31 -> 17.19, and blown_white fell on every frame (interior
+    // 0.60 -> 0.37, hero3 0.42 -> 0.33) because the veil takes the top off the
+    // meter instead of the strips doing it.
+    // It DESATURATES the far field, which is why this round also puts a real red
+    // surface into the two framings that were monochrome (see SURF.oxide_steel).
+    stage('depthhaze', function () {
+      var sky = self.ctx && self.ctx.sky;
+      if (sky && typeof sky.setDepthHaze === 'function') {
+        sky.setDepthHaze({ radiance: 0.016, sunward: 1.10, ground: 0.90,
+          tint: [0.86, 0.90, 1.00] });
+      }
+    });
+
     stage('vestibule', function () { buildVestibule(self, B, rng, N); });
     await GAME.yieldFrame();
 
@@ -6254,7 +6840,7 @@
         mode = 'flat';
       } else if (key === 'hull_paint') {
         mode = 'hull';
-      } else if (key === 'steel' || key === 'vessel_steel') {
+      } else if (key === 'steel' || key === 'vessel_steel' || key === 'oxide_steel') {
         // Structural and vessel steel take their OWN mode. On the shared 'metal'
         // mode the rust field ran at 0.80 world-frequency (a 1.25 m period) with
         // a +-0.44 swing, so every member shorter than a metre - which is every
@@ -6716,6 +7302,14 @@
   // Two wedges rather than one because that is what a rotating-mirror beacon
   // actually projects, and because a single arm leaves half the revolution with
   // nothing in frame at all.
+  // FOUR BLADES PER ARM, NOT TWO, AND THAT IS THE FIRST HALF OF THE ROUND-4
+  // BEACON FIX. Two orthogonal sheets have a viewing direction 45 degrees off
+  // both of them where each is foreshortened to ~70% and there is nothing
+  // between them, so from most standpoints the wedge presented two dim slivers
+  // instead of a body - which is why the alarm read as a flat red tint over the
+  // frame rather than as a discrete bar. Adding the two diagonals halves the
+  // worst-case gap from 45 to 22.5 degrees, and because the accumulation roughly
+  // doubles the material's own colour comes down to compensate (see _buildSweeps).
   function beamGeometry(len, h0, h1, w0, w1) {
     var x0 = 0.16, x1 = len;
     var pos = [], uv = [], nor = [];
@@ -6726,11 +7320,18 @@
       push(p0[0], p0[1], p0[2], 0, 0); push(p2[0], p2[1], p2[2], 1, 1);
       push(p3[0], p3[1], p3[2], 0, 1);
     }
+    // blade angles round the beam axis, in units of a quarter turn
+    var ANG = [0, Math.PI * 0.5, Math.PI * 0.25, -Math.PI * 0.25];
     for (var s = -1; s <= 1; s += 2) {
-      // the vertical blade
-      q([x0 * s, -h0, 0], [x1 * s, -h1, 0], [x1 * s, h1, 0], [x0 * s, h0, 0]);
-      // the horizontal blade
-      q([x0 * s, 0, -w0], [x1 * s, 0, -w1], [x1 * s, 0, w1], [x0 * s, 0, w0]);
+      for (var b = 0; b < ANG.length; b++) {
+        var ca = Math.cos(ANG[b]), sa = Math.sin(ANG[b]);
+        // the blade's half-extent is the ellipse's radius at this angle, so the
+        // diagonals do not stick out past the vertical and horizontal pair
+        var r0 = Math.sqrt(1 / ((ca * ca) / (h0 * h0) + (sa * sa) / (w0 * w0)));
+        var r1 = Math.sqrt(1 / ((ca * ca) / (h1 * h1) + (sa * sa) / (w1 * w1)));
+        q([x0 * s, -r0 * ca, -r0 * sa], [x1 * s, -r1 * ca, -r1 * sa],
+          [x1 * s, r1 * ca, r1 * sa], [x0 * s, r0 * ca, r0 * sa]);
+      }
     }
     var g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
@@ -6757,15 +7358,74 @@
       // with red haze. Divide the emission by the length ratio so a long beacon
       // throws a longer BAR rather than a bigger fog.
       var lenGain = Math.pow(7.0 / Math.max(3.0, d.len), 0.30);
-      mat.color.setRGB(0.150 * d.gain * lenGain, 0.0180 * d.gain * lenGain,
-        0.0105 * d.gain * lenGain);
+      // x0.62 for the two extra blades (see beamGeometry), and a further cut on a
+      // beacon with no rotating spot behind it. Those were the four that produced
+      // the flat red ambient wash the round-3 critique names: a wedge with no
+      // light under it can only ever be haze, and eight of them at random phases
+      // is a tint over the whole frame rather than a bar crossing a surface.
+      var g2 = d.gain * lenGain * 0.62 * (d.key ? 1.0 : 0.66);
+      mat.color.setRGB(0.150 * g2, 0.0180 * g2, 0.0105 * g2);
       var mesh = new THREE.Mesh(geo, mat);
       mesh.name = 'bunker_sweep_' + i;
       mesh.position.set(d.x, d.y, d.z);
       mesh.renderOrder = 4;
       mesh.frustumCulled = false;
+      mesh.castShadow = false;
+      // ---- THE DEPTH FADE, AND IT IS THE OTHER HALF OF THE FIX --------------
+      // A wedge 19 m long inside a 28 m room crosses the vessel, the platform
+      // grating, two bridges and a wall, and every one of those intersections was
+      // a HARD polygon edge - a straight bright seam laid across the geometry,
+      // which is exactly what makes an additive card read as a decal instead of
+      // as light in air. postfx now publishes a linearised scene-depth target for
+      // this; the material must live in ctx.scene (this.root does) and must not
+      // write depth or cast shadow (both already true above).
+      // fade 0.9 m is roughly the wedge's own thickness at mid length; nearFade
+      // 1.2 stops a beacon the player walks under filling the frame.
+      if (this.ctx && this.ctx.postfx &&
+          typeof this.ctx.postfx.softParticleFade === 'function') {
+        try {
+          this.ctx.postfx.softParticleFade(mat, { fade: 0.9, nearFade: 1.2, mode: 'rgb' });
+        } catch (e) { /* the wedge is still correct without it */ }
+      }
       this.root.add(mesh);
-      this._sweepMeshes.push({ mesh: mesh, def: d, base: mat.color.clone() });
+      var rec = { mesh: mesh, def: d, base: mat.color.clone(), patch: null };
+      // ---- THE LANDING PATCH -------------------------------------------------
+      // The single cue that says "a beam is sweeping this wall": a soft pool of
+      // scattered light where the axis meets a surface, tracking round with the
+      // beam. Level-owned because only this file knows where the beam is pointing
+      // and can raycast its own colliders for the surface (see update()).
+      // One draw call per key beacon and it frustum-culls when off screen.
+      if (d.key) {
+        var pm = null;
+        if (this.ctx && this.ctx.postfx &&
+            typeof this.ctx.postfx.glowCardMaterial === 'function') {
+          try {
+            pm = this.ctx.postfx.glowCardMaterial({
+              color: 0xff3a1e, intensity: 2.6, blending: 'additive',
+              size: 128, falloff: 2.1, core: 0.12, fog: true, depthTest: true,
+              softFade: 0.45
+            });
+          } catch (e2) { pm = null; }
+        }
+        if (!pm) {
+          pm = new THREE.MeshBasicMaterial({
+            map: tex, transparent: true, depthWrite: false,
+            blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+            toneMapped: false, fog: true
+          });
+          pm.color.setRGB(0.42, 0.055, 0.030);
+        }
+        // A FRESH geometry, not quad() - the quad cache is disposed at the end of
+        // build() and a live mesh holding a cached one would lose its buffers.
+        var pmesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), pm);
+        pmesh.name = 'bunker_sweep_patch_' + i;
+        pmesh.castShadow = false; pmesh.receiveShadow = false;
+        pmesh.renderOrder = 5;
+        pmesh.visible = false;
+        this.root.add(pmesh);
+        rec.patch = pmesh;
+      }
+      this._sweepMeshes.push(rec);
 
       // The two `key` beacons also get a real rotating SpotLight. These are the
       // only lights this file owns rather than publishes; without them the

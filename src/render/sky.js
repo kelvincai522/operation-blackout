@@ -2596,6 +2596,150 @@
   }
 
   // ==========================================================================
+  // OPTION-BAG VALIDATION
+  //
+  // Every setter in this file used to drop what it did not recognise in
+  // silence, and one instance of that cost two rounds of work on a level whose
+  // author had done everything right except spell the key inside the object:
+  //
+  //   for (var k in opts) if (k in this.fog) this.fog[k] = opts[k];
+  //
+  // level_highrise.js documented `density: 0.0019` in three separate comment
+  // blocks and quoted three solved path opacities to the per cent, and the key
+  // was never in the literal, so the level ran on the DEFAULT 0.0150 - the
+  // market street's fog, eight times thicker - for two rounds. At that level's
+  // baseY (-174) and heightScale (380) that put 32% haze across 40 m of floor
+  // plate and pinned everything past 250 m at the opacity cap. It was found by
+  // elimination, not by reading.
+  //
+  // So: an unrecognised key, an unusable value and a value the active weather
+  // preset is about to overrule are all LOUD now. console.warn, deliberately
+  // behind no flag at all, and deliberately NOT GAME.logError - shoot.py and
+  // playtest.py both read that channel as a real fault, so a diagnostic there
+  // fails a capture on a healthy build.
+  //
+  // De-duplicated per (method, message) so a setter called every frame cannot
+  // flood the console, and so the warning survives being read.
+  // ==========================================================================
+  var _skyWarned = Object.create(null);
+  function skyWarn(where, msg) {
+    var key = where + '|' + msg;
+    if (_skyWarned[key]) return;
+    _skyWarned[key] = 1;
+    try {
+      if (typeof console !== 'undefined' && console.warn) {
+        console.warn('[sky.' + where + '] ' + msg);
+      }
+    } catch (e) { /* a console that throws is not our problem */ }
+  }
+
+  // Cheap "did you mean" - one pass of a bounded Levenshtein against the known
+  // keys, case-insensitive. The dropped-key bug was a MISSING key rather than a
+  // misspelt one, but the same warning has to catch `heightscale`, `maxOpactiy`
+  // and `tintamount`, which are the three shapes this class of typo takes.
+  function _editDist(a, b) {
+    var la = a.length, lb = b.length, i, j, prev, cur, tmp;
+    if (Math.abs(la - lb) > 3) return 99;
+    prev = new Array(lb + 1);
+    cur = new Array(lb + 1);
+    for (j = 0; j <= lb; j++) prev[j] = j;
+    for (i = 1; i <= la; i++) {
+      cur[0] = i;
+      for (j = 1; j <= lb; j++) {
+        var c = (a.charCodeAt(i - 1) === b.charCodeAt(j - 1)) ? 0 : 1;
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + c);
+      }
+      tmp = prev; prev = cur; cur = tmp;
+    }
+    return prev[lb];
+  }
+  function _suggest(key, known) {
+    var lk = String(key).toLowerCase(), best = null, bd = 99, i;
+    for (i = 0; i < known.length; i++) {
+      var d = _editDist(lk, known[i].toLowerCase());
+      if (d < bd) { bd = d; best = known[i]; }
+    }
+    return (bd <= 3) ? best : null;
+  }
+
+  // Warn about any own key of `opts` that is not in `known`. Returns nothing:
+  // the caller has already decided what to do with the keys it does recognise,
+  // and an unknown key can only ever be ignored.
+  function checkOpts(where, opts, known) {
+    if (!opts || typeof opts !== 'object') return;
+    for (var k in opts) {
+      if (!Object.prototype.hasOwnProperty.call(opts, k)) continue;
+      if (known.indexOf(k) >= 0) continue;
+      var s = _suggest(k, known);
+      skyWarn(where, 'unknown option "' + k + '" was IGNORED' +
+        (s ? ' - did you mean "' + s + '"?' : '.') +
+        ' Recognised: ' + known.join(', '));
+    }
+  }
+
+  // ---- the fog bag's schema -------------------------------------------------
+  // Ranges are the ones the uniform path already enforces downstream, so an
+  // in-range value behaves exactly as it did before this existed and an
+  // out-of-range one is clamped WITH a warning instead of silently landing on a
+  // different number several hundred lines away. Every value any shipped level
+  // passes today is inside these bounds, so no current capture moves.
+  var FOG_KEYS = {
+    density: [0.0, 0.5],
+    heightScale: [0.5, 40000.0],
+    baseY: [-100000.0, 100000.0],
+    startDistance: [0.0, 500.0],
+    maxOpacity: [0.0, 1.0],
+    mieG: [0.0, 0.92],
+    glowGain: [0.0, 8.0],
+    desaturate: [0.0, 1.0],
+    tintAmount: [0.0, 1.0],
+    tint: 'rgb',
+    enabled: 'bool'
+  };
+  var FOG_KEY_LIST = Object.keys(FOG_KEYS);
+
+  // Which fog keys the non-clear presets REPLACE, and with what. This is the
+  // second silent drop in the same method and it is the one that had already
+  // been discovered the hard way by a second level: level_jungle.js records
+  // "glowGain is the one aerial-perspective control the overcast deck does NOT
+  // override", which is an accurate observation arrived at by experiment. Under
+  // 'overcast', 'drizzle' or 'none', _fogParam() blended the authored value all
+  // the way to the preset's at weight 1.0 - i.e. threw it away completely - so
+  // five of the nine numeric keys did nothing at all on four of the eight new
+  // levels. See _fogParam for the fix (an explicitly authored key now wins) and
+  // the warning below for the ones that are still overridden.
+  // Keys the preset REPLACED outright (fixed by the authored-wins rule, so this
+  // list is now only used to explain what the default would have been).
+  var FOG_PRESET_KEYS = {
+    storm: ['heightScale', 'maxOpacity', 'mieG', 'startDistance', 'desaturate'],
+    overcast: ['heightScale', 'maxOpacity', 'mieG', 'startDistance', 'desaturate'],
+    drizzle: ['heightScale', 'maxOpacity', 'mieG', 'startDistance', 'desaturate'],
+    none: ['heightScale', 'maxOpacity', 'mieG', 'startDistance', 'desaturate']
+  };
+  // `density` is different in kind and is NOT fixed by the authored-wins rule,
+  // deliberately: under a deck the authored number is a BASE that the preset
+  // SCALES (x2.2 overcast, x1.36 drizzle, x1.15 enclosed) rather than replaces,
+  // because snowbound and jungle share one preset and need to scale their own
+  // weather. That is documented in _scheduleHaze and jungle depends on it, so
+  // the only thing to fix is that nobody was told. A caller that sets density
+  // under a deck now gets the multiplier reported once.
+  var FOG_DENSITY_K = { storm: 0, overcast: 2.2, drizzle: 1.36, none: 1.15 };
+
+  // Every key a level's declarative env profile may carry. The first group is
+  // consumed by THIS module; the second is routed by main.js's applyEnv to
+  // weather.js, postfx and lighting.js and is listed here only so validating
+  // the bag does not produce a false warning for a key that is somebody
+  // else's. A key in neither group is read by nothing at all.
+  var ENV_KEYS = [
+    // sky.js
+    'timeOfDay', 'sky', 'turbidity', 'groundAlbedo', 'twilight', 'zenithTint',
+    'depthHaze', 'sunElevation', 'solarArc', 'dust', 'dustGain', 'fog',
+    'fogTint', 'fogTintAmount',
+    // other systems (see main.js applyEnv)
+    'weather', 'grade', 'exposure', 'lightRig', 'interior'
+  ];
+
+  // ==========================================================================
   // Sky
   // ==========================================================================
   function Sky(ctx) {
@@ -2674,6 +2818,33 @@
     this._twiDim = TWI_DIM;
     this._twiAway = TWI_AWAY;
     this._twiAzP = TWI_AZ_P;
+    // ---- cool upper dome, at ANY sun elevation (see setZenithTint) ----------
+    // _ztF is this block's single gate and it is 0 here, so market, harbor and
+    // every level that does not opt in run the identical LUT arithmetic.
+    //
+    // WHY IT IS NOT setTwilight. The twilight rotation above is multiplied by
+    // `afterglow`, a window that is only open between +9 and -13 degrees of sun
+    // elevation - so it is INERT on any level whose sun is properly up, and
+    // measured on Meridian Tower (which the roster calls a sunset and which
+    // actually runs at +8.8 degrees after its own level module re-pins the hour
+    // to t = 0.712) afterglow is 0.0017. setTwilight cannot reach that level at
+    // all. This is the same luminance-preserving rotation with the solar-window
+    // gate removed and the elevation window authored in degrees.
+    this._ztF = 0;
+    this._ztChroma = [TWI_ZENITH[0], TWI_ZENITH[1], TWI_ZENITH[2]];
+    this._ztLo = TWI_LO;             // sin(elevation) where the rotation starts
+    this._ztHi = TWI_HI;             // ...and where it is complete
+    this._ztAway = TWI_AWAY;
+    this._ztAzP = TWI_AZ_P;
+    this._ztDim = 0.0;               // gradient is opt-in on top of the hue
+    // ---- interior aerial perspective (see setDepthHaze) --------------------
+    // _dhF is this block's single gate. 0 for every existing caller, and the
+    // whole block is skipped rather than multiplied by zero.
+    this._dhF = 0;
+    this._dhRad = 0;                 // absolute linear radiance of the lit air
+    this._dhHue = null;              // null = keep the hue the model solved
+    this._dhSun = 1.25;              // sunward lobe, x radiance
+    this._dhGnd = 0.80;              // downward lobe, x radiance
 
     // ---- fog parameters (world units are metres) ---------------------------
     //
@@ -2716,6 +2887,11 @@
       tintAmount: 0,
       enabled: true
     };
+    // Which fog keys a caller has EXPLICITLY authored through setFog() or an
+    // env profile. Empty for market and harbor, which never call it, and that
+    // is what makes the authored-wins rule in _fogParam a strict no-op for
+    // them. See _fogParam and FOG_PRESET_KEYS.
+    this._fogSet = Object.create(null);
 
     // ---- published atmosphere state (see _scheduleHaze) --------------------
     // The fog block above is the AUTHORED BASE and stays exactly where a caller
@@ -2849,6 +3025,9 @@
     this._lutCData = new Float32Array(np);
     this._lutSunY = 999;             // sin(elevation) the LUT was built for
     this._lutReady = false;
+    // Latched by _reLut the first time the integral throws, so a persistent
+    // fault costs one log line rather than one per setter call for ever.
+    this._lutFailed = false;
     this._built = false;
     this._envDirty = true;
     this._envSunY = 999;
@@ -2926,6 +3105,7 @@
     }
     opts = opts || {};
     try {
+      checkOpts('applyFogTo', opts, ['additive', 'exclude']);
       if (opts.exclude) {
         material.fog = false;
         material.needsUpdate = true;
@@ -3364,8 +3544,32 @@
   // Blend one authored fog parameter toward its storm counterpart. Returns the
   // authored value EXACTLY (not a lerp by zero) when there is no storm, so the
   // market's uniforms are untouched down to the last bit.
+  //
+  // ---- AN EXPLICITLY AUTHORED VALUE NOW WINS OVER THE PRESET ---------------
+  // This was the second half of the dropped-key finding and it is the more
+  // expensive half, because it does not need a typo to bite.
+  //
+  // _stormF / _overcastF are 1.0, not a fraction, so `M.lerp(base, preset, of)`
+  // returned the PRESET EXACTLY and discarded `base` entirely. Five of the nine
+  // numeric fog keys - heightScale, maxOpacity, mieG, startDistance, desaturate
+  // - therefore did nothing whatsoever on any level running 'overcast',
+  // 'drizzle' or 'none', which is snowbound, jungle, metro and bunker: four of
+  // the eight new levels. level_jungle.js had already discovered the shape of
+  // this empirically and written it down ("glowGain is the one aerial-
+  // perspective control the overcast deck does NOT override"), which is exactly
+  // right and exactly the wrong thing for a level author to have to find out by
+  // experiment.
+  //
+  // The preset value is a DEFAULT for a level that has not said otherwise, so
+  // that is what it is now: consulted only when the key is absent from
+  // this._fogSet. Nothing in the frozen path can reach it - market and harbor
+  // never call setFog, so _fogSet is empty for both and every lookup takes the
+  // identical branch it always did - and no current caller changes either,
+  // because every level that calls setFog today is on the clear path where the
+  // authored value was already being returned unchanged.
   Sky.prototype._fogParam = function (key) {
     var base = this.fog[key];
+    if (this._fogSet && this._fogSet[key]) return base;
     var sf = M.saturate(this._stormF);
     if (sf > 0) {
       var storm = STORM_FOG[key];
@@ -3440,7 +3644,37 @@
   // the dome is a light source as well as a picture, and a hue change must not
   // move the irradiance it delivers. Hoisted to module scope and allocation-free
   // because it runs 16,384 times per LUT generation.
+  // ENERGY NORMALISER for a zenith-dimming gradient over an elevation window.
+  //
+  // The cosine-weighted mean of (1 - dim * smoothstep(lo, hi, s)) over the upper
+  // hemisphere, inverted, so a dome that is dimmed overhead REDISTRIBUTES its
+  // irradiance toward the horizon instead of losing it. Without this the
+  // gradient is a light cut, and 64% of the sky's irradiance lives above the
+  // window - the first version of the twilight layer measured a third of the
+  // level's skylight gone and the whole frame printing 16% down.
+  //
+  // 32 steps of the actual expression rather than a closed form, because a
+  // closed form stops being true the moment the window moves and both callers
+  // now author their own window. The weight for cos(el) sin(el) del is s ds.
+  //
+  // `pay` is how much of the redistribution is actually paid back (TWI_NORM for
+  // the twilight layer): at 1.0 the low sky came out 1.72x its authored level
+  // and printed at saturation 0.029, i.e. the golden band was pushed so far up
+  // the AgX shoulder it went neutral - the cure eating the patient.
+  function dimNorm(dim, lo, hi, pay) {
+    if (!(dim > 1e-6)) return 1.0;
+    var acc = 0, w8 = 0, q;
+    for (q = 0; q < 32; q++) {
+      var s = (q + 0.5) / 32;
+      acc += (1.0 - dim * M.smoothstep(lo, hi, s)) * s;
+      w8 += s;
+    }
+    if (!(acc > 1e-6)) return 1.0;
+    return 1.0 + (w8 / acc - 1.0) * M.saturate(pay);
+  }
+
   var _twiChroma = [1, 1, 1];
+  var _ztChromaN = [1, 1, 1];
   function twiRotate(x, chroma, w, dim) {
     var xl = 0.2126 * x[0] + 0.7152 * x[1] + 0.0722 * x[2];
     if (!(xl > 0.0)) { x[0] *= dim; x[1] *= dim; x[2] *= dim; return; }
@@ -3448,6 +3682,39 @@
     x[1] = (x[1] + (xl * chroma[1] - x[1]) * w) * dim;
     x[2] = (x[2] + (xl * chroma[2] - x[2]) * w) * dim;
   }
+
+  // ==========================================================================
+  // Re-solve the LUT from a public setter, ONCE, and never again if it throws.
+  //
+  // Two things this protects, and the second one only exists because of the
+  // first. build() now sets _built even when a stage failed (see build) - which
+  // is right, because every public setter checks _built to decide whether to
+  // APPLY a change or merely record it, and leaving it false silently discarded
+  // a level's whole declarative profile. But it means a persistently broken
+  // integral is now re-entered from setTimeOfDay, setTurbidity, setGroundAlbedo
+  // and friends, and GAME.logError is UNCAPPED (util.js pushes to an array for
+  // ever), so a level that re-times its sun every frame against a broken LUT
+  // would grow that array without bound.
+  //
+  // So the failure is latched: one report, then every later caller quietly keeps
+  // the last good LUT and still gets its _pushUniforms and its probe. That is
+  // strictly better than both previous behaviours - the frame keeps its fog and
+  // its grade, and a repeated fault costs one log line rather than ninety a
+  // second.
+  //
+  // Returns true if the LUT is current.
+  // ==========================================================================
+  Sky.prototype._reLut = function () {
+    if (this._lutFailed) return false;
+    try {
+      this._buildLut();
+      return true;
+    } catch (e) {
+      this._lutFailed = true;
+      GAME.logError('sky.lut', e);
+      return false;
+    }
+  };
 
   // ==========================================================================
   // Sky-view LUT
@@ -3510,23 +3777,35 @@
       twC[0] = this._twiZenith[0] / tzl;
       twC[1] = this._twiZenith[1] / tzl;
       twC[2] = this._twiZenith[2] / tzl;
-      // ENERGY NORMALISER for the gradient factor: the cosine-weighted mean of
-      // (1 - dim*twEl) over the upper hemisphere, divided back out, so the dome
-      // redistributes its irradiance toward the horizon instead of losing it.
-      // Without this the gradient is a light cut, and 64% of the sky's
-      // irradiance lives above the elevation window - the first version of this
-      // measured a third of the level's skylight gone. Closed form would stop
-      // being true the moment the window moved, so it is 32 steps of the actual
-      // expression: the weight for cos(el)sin(el) del is s ds.
-      var twAcc = 0, twW8 = 0, q;
-      for (q = 0; q < 32; q++) {
-        var sq = (q + 0.5) / 32;
-        twAcc += (1.0 - twiDim * M.smoothstep(TWI_LO, TWI_HI, sq)) * sq;
-        twW8 += sq;
-      }
-      if (twAcc > 1e-6) {
-        twiNorm = 1.0 + (twW8 / twAcc - 1.0) * M.saturate(TWI_NORM);
-      }
+      // ENERGY NORMALISER for the gradient factor. See dimNorm.
+      twiNorm = dimNorm(twiDim, TWI_LO, TWI_HI, TWI_NORM);
+    }
+
+    // ---- cool upper dome, sun-elevation independent (opt-in) ----------------
+    // Zero for market, harbor and every level that has not called
+    // setZenithTint(). Identical machinery to the twilight rotation above -
+    // luminance-preserving chromaticity rotation, azimuthally confined warm
+    // band, energy-normalised gradient - with the `afterglow` gate removed and
+    // the elevation window authored per instance. A deck is opaque to a
+    // Rayleigh belt exactly as it is to the airglow, so storm and overcast
+    // switch it off the same way. See setZenithTint.
+    var ztF = M.saturate(this._ztF) *
+      (1.0 - M.saturate(Math.max(this._stormF, this._overcastF)));
+    var ztC = _ztChromaN;
+    var ztLo = this._ztLo, ztHi = this._ztHi;
+    var ztAway = M.saturate(this._ztAway);
+    var ztAzP = M.clamp(this._ztAzP, 1.0, 40.0);
+    var ztDim = M.saturate(this._ztDim) * ztF;
+    var ztNorm = 1.0;
+    if (ztF > 0.001) {
+      if (!(ztHi > ztLo + 1e-3)) { ztLo = TWI_LO; ztHi = TWI_HI; }
+      var zl = 0.2126 * this._ztChroma[0] + 0.7152 * this._ztChroma[1] +
+               0.0722 * this._ztChroma[2];
+      if (!(zl > 1e-6)) zl = 1;
+      ztC[0] = this._ztChroma[0] / zl;
+      ztC[1] = this._ztChroma[1] / zl;
+      ztC[2] = this._ztChroma[2] / zl;
+      ztNorm = dimNorm(ztDim, ztLo, ztHi, TWI_NORM);
     }
 
     // Shoulder target for the physical daylight terms, in the same HDR units as
@@ -3774,6 +4053,42 @@
           }
         }
 
+        // --- COOL UPPER DOME (opt-in, any sun elevation) -----------------------
+        // The sibling of the block above with the solar window removed, and the
+        // reason it has to be a separate term rather than a wider `afterglow` is
+        // measured: on Meridian Tower - which the roster calls a sunset and whose
+        // own level module re-pins the hour to t = 0.712 because at the profile's
+        // 0.80 the direct key collapses - the sun sits at +8.81 degrees and
+        // afterglow evaluates to 0.0017. setTwilight() multiplies its entire
+        // rotation by that number, so the shipped twilight lever is inert on the
+        // one level that asked for a cool zenith. Widening the afterglow window
+        // instead would have dragged the authored dusk/night layers (which are
+        // multiplied by the same factor) into full daylight.
+        //
+        // Same contract as the twilight rotation: luminance-preserving at
+        // ztDim = 0, so the IBL, the hemisphere fill, keyRef and every fog cap
+        // are untouched by a pure hue change, and ONE separate factor owns the
+        // zenith-to-horizon gradient.
+        if (ztF > 0.001) {
+          var ztUp = M.smoothstep(-0.02, 0.03, l);
+          if (ztUp > 0.0) {
+            var ztEl = M.smoothstep(ztLo, ztHi, l > 0.0 ? l : 0.0);
+            var ztAz = 1.0 - Math.pow(Math.max(0.0, Math.cos(az)), ztAzP);
+            var ztS = ztF * ztUp * (ztEl + (1.0 - ztEl) * ztAz * ztAway);
+            var ztD = 1.0 + ztUp * (ztNorm * (1.0 - ztDim * ztEl) - 1.0);
+            twiRotate(Rr, ztC, ztS, ztD);
+            twiRotate(Mm, ztC, ztS, ztD);
+            var ztL = 0.2126 * iso0 + 0.7152 * iso1 + 0.0722 * iso2;
+            if (ztL > 0.0) {
+              iso0 = (iso0 + (ztL * ztC[0] - iso0) * ztS) * ztD;
+              iso1 = (iso1 + (ztL * ztC[1] - iso1) * ztS) * ztD;
+              iso2 = (iso2 + (ztL * ztC[2] - iso2) * ztS) * ztD;
+            } else {
+              iso0 *= ztD; iso1 *= ztD; iso2 *= ztD;
+            }
+          }
+        }
+
         var o = (j * W + i) * 4;
         A[o] = Rr[0]; A[o + 1] = Rr[1]; A[o + 2] = Rr[2]; A[o + 3] = 1.0;
         B[o] = Mm[0]; B[o + 1] = Mm[1]; B[o + 2] = Mm[2]; B[o + 3] = 1.0;
@@ -4006,6 +4321,81 @@
     // ...and its daylight counterpart. Mutually exclusive with the above, and
     // an immediate return when _overcastF is 0.
     this._applyOvercastAmbient();
+    // ...and after BOTH, because it is the only term in the file that is allowed
+    // to sit above the keyRef cap on purpose. Immediate return when _dhF is 0,
+    // which is every level that has not called setDepthHaze().
+    this._applyDepthHaze();
+  };
+
+  // --------------------------------------------------------------------------
+  // INTERIOR AERIAL PERSPECTIVE  (opt-in; see setDepthHaze)
+  //
+  // WHY EVERY CAP IN THIS FILE IS WRONG FOR AN ENCLOSED LEVEL, and the number
+  // that proves it.
+  //
+  // Every inscatter colour above is derived off the atmosphere and then capped
+  // against keyRef, "so the haze can never out-brighten the brightest surface
+  // in the frame". keyRef is KEY_ALBEDO * sunIntensity * max(sunY, 0.12) / pi
+  // with a floor of fillRadiance * 0.55. Under the 'none' preset sunIntensity is
+  // exactly 0 and fillRadiance is the void IBL, so on metro the whole chain
+  // collapses to keyRef = 0.00362, the cap on the anti-sun lobe is
+  // 0.35 * 2.6 * 0.00362 = 0.0033, and the haze lands there - PINNED AT THE CAP,
+  // measured in-engine at fogSky = (0.00341, 0.00352, 0.00363).
+  //
+  // The brightest surface in metro is not a grey card under a dead sun, it is a
+  // tiled wall under a fluorescent, which measures around linear 0.18 in the
+  // print. So the air is capped two and a half DECADES under the thing it is
+  // supposed to sit behind, and the consequence is exactly what the level
+  // reported: at 38 m its east arch prints L = 0.386 against a near floor at
+  // 0.349 and a near wall at 0.463 - i.e. the far end of a 38 m hall is
+  // BRIGHTER than the floor in front of the lens and there is no value ramp
+  // with depth anywhere in the frame. The fog is attenuating (47% at 38 m) but
+  // it is not VEILING, and a multiply with no additive term preserves every
+  // contrast ratio it touches: that is precisely "it arrives at full contrast".
+  //
+  // This is the same defect NIGHT_HAZE_K was added to fix for the market's night
+  // street ("the brightest thing on a night street is not a moonlit grey card,
+  // it is the pavement under a sodium head, which measures roughly twenty times
+  // higher") and it was never fixed for the enclosed profile, where the error is
+  // fifty times larger because there is no key at all.
+  //
+  // It cannot be fixed by raising the cap, because the cap is derived from a sun
+  // that does not exist. The level is the only thing that knows what its
+  // practicals put on a wall, so the level supplies the number - as an ABSOLUTE
+  // linear radiance, the way the storm deck's constants are, and for the same
+  // stated reason: "referencing the deck to a key that is itself a floor value
+  // would make the sky's level an accident of the floor".
+  //
+  // Applied AFTER every cap and every floor, deliberately, and it is the only
+  // place in this file that does that.
+  // --------------------------------------------------------------------------
+  var _dhHueTmp = [1, 1, 1];
+  Sky.prototype._applyDepthHaze = function () {
+    var f = M.saturate(this._dhF);
+    if (!(f > 0)) return;
+    var rad = this._dhRad;
+    if (!isFinite(rad) || rad <= 0) return;
+    var hue = _dhHueTmp, c;
+    if (this._dhHue) {
+      hue[0] = this._dhHue[0]; hue[1] = this._dhHue[1]; hue[2] = this._dhHue[2];
+    } else {
+      // No authored hue: keep the chromaticity the model already solved for the
+      // anti-sun lobe, so a level that only wants the LEVEL raised does not also
+      // get a colour it did not ask for.
+      hue[0] = this._fogSky[0]; hue[1] = this._fogSky[1]; hue[2] = this._fogSky[2];
+    }
+    var hl = 0.2126 * hue[0] + 0.7152 * hue[1] + 0.0722 * hue[2];
+    if (!(hl > 1e-9)) { hue[0] = hue[1] = hue[2] = 1; hl = 1; }
+    // Luminance-targeted, so `radiance` means exactly what it says: the linear
+    // luminance a fully-veiled surface converges to.
+    var kSky = rad / hl;
+    var kSun = rad * Math.max(0, this._dhSun) / hl;
+    var kGnd = rad * Math.max(0, this._dhGnd) / hl;
+    for (c = 0; c < 3; c++) {
+      this._fogSky[c] += (hue[c] * kSky - this._fogSky[c]) * f;
+      this._fogSun[c] += (hue[c] * kSun - this._fogSun[c]) * f;
+      this._fogGnd[c] += (hue[c] * kGnd - this._fogGnd[c]) * f;
+    }
   };
 
   // --------------------------------------------------------------------------
@@ -4655,7 +5045,7 @@
       if (a[0] === n0 && a[1] === n1 && a[2] === n2) return;
       a[0] = n0; a[1] = n1; a[2] = n2;
       if (this._built) {
-        this._buildLut();
+        this._reLut();
         this._pushUniforms();
         this._regenerateEnvironment();
       }
@@ -4664,36 +5054,87 @@
 
   // ==========================================================================
   // Build
+  //
+  // EVERY STAGE IS INDEPENDENTLY GUARDED, and that is a fix rather than a
+  // stylistic preference. During round 3 a level agent's captures twice failed
+  // with a ReferenceError raised inside _buildLut, and BOTH TIMES the whole
+  // frame lost its exposure, its grade and its fog - far more than the sky.
+  //
+  // The mechanism was the single try/catch this used to be. _buildLut is the
+  // second of six steps, so one throw there skipped _pushUniforms (the gbFog*
+  // uniforms keep their constructed zeros, so gbFogA.x = 0 and every material
+  // in the game silently falls back to three's stock FogExp2 branch),
+  // _installScene (no scene.fog at all, so USE_FOG is never even defined, and
+  // the dome and the dust field are never added to the scene), _built = false
+  // (so every later setFog / setTimeOfDay / setWeather call lands its state and
+  // returns without applying it - main.js's applyEnv pass runs AFTER build, so
+  // the level's entire declarative profile evaporates) and _regenerateEnvironment
+  // (scene.environment stays null, so every metal and every wet surface in the
+  // level has nothing to reflect). postfx then meters a black frame and opens
+  // its exposure all the way, which is what "exposure and grade were wrong" is.
+  //
+  // Nothing about that cascade is inherent. The LUT and the scene installation
+  // are independent, the uniform push does not need the LUT to have succeeded
+  // (the constructor already ran _solar and _computeLightingTerms, so a sane
+  // sun, a sane fog schedule and a sane published ambient exist before build is
+  // even called), and _built means "this instance has finished building", not
+  // "every stage succeeded". So each stage stands on its own and a failure
+  // costs exactly that stage.
+  //
+  // Confirmed by inspection for the specific report: `twiF` is declared with
+  // `var` at the top of _buildLut and read only at two points inside the same
+  // function body, so `var` hoisting puts it in scope for the whole function
+  // and no path through this file can reference it out of scope. The observed
+  // "twiF is not defined" was a concurrent agent's mid-edit read of the file,
+  // and it is the CONSEQUENCE that is fixed here, not the cause.
   // ==========================================================================
   Sky.prototype.build = async function (ctx) {
     ctx = ctx || this.ctx;
     this.ctx = ctx;
-    try {
-      this._makeLutTextures();
-      this._makeDome();
-      // Resolve the weather BEFORE the first LUT build, so the derived ambient,
-      // every fog colour and the IBL are all generated once, in the right
-      // condition, instead of being generated clear and then thrown away.
-      this._resolveWeather(ctx);
-      if (GAME.yieldFrame) await GAME.yieldFrame();
-
-      this._buildLut();
-      this._pushUniforms();
-      if (GAME.yieldFrame) await GAME.yieldFrame();
-
-      this._makeDust(ctx);
-      this._installScene(ctx);
-      // 'none' only: pulls the dome out of the scene and puts the same dim
-      // neutral behind it as a background, so an opening onto nothing prints a
-      // void rather than the renderer's black clear colour. A no-op for every
-      // other preset.
-      this._applyVoidVisibility();
-      this._built = true;
-
-      this._regenerateEnvironment();
-    } catch (e) {
-      GAME.logError('sky.build', e);
+    var self = this;
+    // A named stage, so a failure says which one and the rest still run.
+    function stage(name, fn) {
+      try { fn(); return true; }
+      catch (e) { GAME.logError('sky.build.' + name, e); return false; }
     }
+
+    stage('lutTextures', function () { self._makeLutTextures(); });
+    stage('dome', function () { self._makeDome(); });
+    // Resolve the weather BEFORE the first LUT build, so the derived ambient,
+    // every fog colour and the IBL are all generated once, in the right
+    // condition, instead of being generated clear and then thrown away.
+    stage('weather', function () { self._resolveWeather(ctx); });
+    if (GAME.yieldFrame) await GAME.yieldFrame();
+
+    // Latched on failure, so a broken integral is reported ONCE with its stage
+    // name and every later setter quietly keeps the last good LUT instead of
+    // re-entering it and pushing another entry onto GAME.errors (which util.js
+    // never caps). See _reLut.
+    if (!stage('lut', function () { self._buildLut(); })) this._lutFailed = true;
+    // Runs even if the LUT threw: _scheduleHaze and the published sun/ambient
+    // are already valid from the constructor, so this is what keeps the frame's
+    // fog and haze correct when the atmosphere integral is the thing that broke.
+    stage('uniforms', function () { self._pushUniforms(); });
+    if (GAME.yieldFrame) await GAME.yieldFrame();
+
+    stage('dust', function () { self._makeDust(ctx); });
+    // The most important one to reach: without scene.fog three never defines
+    // USE_FOG, so the patched chunks have nowhere to land and NO material in
+    // the game is fogged - a whole-frame failure caused by a sky that could not
+    // integrate its own dome.
+    stage('scene', function () { self._installScene(ctx); });
+    // 'none' only: pulls the dome out of the scene and puts the same dim
+    // neutral behind it as a background, so an opening onto nothing prints a
+    // void rather than the renderer's black clear colour. A no-op for every
+    // other preset.
+    stage('voidVis', function () { self._applyVoidVisibility(); });
+    // Set unconditionally. It means "build() has run", and the public setters
+    // check it to decide whether to APPLY a change or merely record it - so
+    // leaving it false after a partial failure is what silently discarded a
+    // level's whole env profile.
+    this._built = true;
+
+    stage('env', function () { self._regenerateEnvironment(); });
   };
 
   Sky.prototype._makeLutTextures = function () {
@@ -5480,7 +5921,12 @@
    */
   Sky.prototype.setTimeOfDay = function (t) {
     try {
-      if (!isFinite(t)) return;
+      if (!isFinite(t)) {
+        skyWarn('setTimeOfDay', String(t) + ' is not a finite number and was ' +
+          'IGNORED (still at ' + this.timeOfDay + '). 0 = solar midnight, ' +
+          '0.25 = sunrise, 0.5 = noon, 0.75 = sunset.');
+        return;
+      }
       t = t - Math.floor(t);
       this.timeOfDay = t;
       this._solar(t);
@@ -5504,7 +5950,7 @@
       // a caller can legitimately see twice.
       var sunY = Math.sin(this.sunElevation);
       if (!this._lutReady || Math.abs(sunY - this._lutSunY) > 0.0022) {
-        this._buildLut();
+        this._reLut();
       }
       this._pushUniforms();
 
@@ -5572,7 +6018,19 @@
       else if (name === 'none' || name === 'void' || name === 'enclosed' ||
                name === 'interior' || name === 'underground') {
         name = 'none'; ov = 1.0; vd = 1.0; thick = 1.0;
-      } else name = 'clear';
+      } else {
+        // Same silent-drop class as an unknown setFog key, and worse in effect:
+        // a misspelt preset does not fail, it quietly returns the market's
+        // clear golden-hour sky, which is a plausible-looking frame and
+        // therefore very hard to notice.
+        if (name !== 'clear') {
+          skyWarn('setWeather', 'unknown preset "' + preset + '" - fell back to ' +
+            '"clear" (the market\'s golden-hour sky). Recognised: clear, storm, ' +
+            'overcast, drizzle, none (aliases: void, enclosed, interior, ' +
+            'underground).');
+        }
+        name = 'clear';
+      }
 
       if (this.weatherPreset === name && this._built) return;
       this.weatherPreset = name;
@@ -5601,7 +6059,7 @@
       // but _deriveAmbient hangs off it and now has to run the storm override,
       // so go through _buildLut rather than calling _deriveAmbient directly -
       // _buildLut is also what re-runs the haze schedule the caps depend on.
-      this._buildLut();
+      this._reLut();
       this._pushUniforms();
       // Depends on _fogSky, which _buildLut -> _deriveAmbient has just written.
       this._applyVoidVisibility();
@@ -5672,7 +6130,15 @@
                name === 'interior' || name === 'underground') {
         name = 'none'; ov = 1.0; vd = 1.0;
       }
-      if (f <= 0 && ov <= 0) return;
+      if (f <= 0 && ov <= 0) {
+        if (name !== 'clear') {
+          skyWarn('resolveWeather', 'level/profile asked for sky "' + want +
+            '", which is not a preset - the level is rendering the market\'s ' +
+            'CLEAR golden-hour sky. Recognised: clear, storm, overcast, ' +
+            'drizzle, none.');
+        }
+        return;
+      }
       this.weatherPreset = name;
       this._stormF = f;
       this._overcastF = ov;
@@ -5701,6 +6167,13 @@
       var def = ctx && ctx.levelDef;
       var env = def && def.env;
       if (!env) return;
+
+      // The env profile is an options bag like any other, and it drops
+      // unrecognised keys exactly as setFog used to. The known set is the union
+      // of what THIS module consumes and what main.js's applyEnv routes to
+      // other systems - a key in neither list is a key nothing will ever read,
+      // which is the same failure as `density` missing from a setFog literal.
+      checkOpts('env', env, ENV_KEYS);
 
       if (isFinite(env.turbidity) && env.turbidity > 0) {
         // _built is false here, so this only re-tabulates transmittance; the
@@ -5731,6 +6204,42 @@
       // ?twilight=1 on the capture URL, same QA-hook contract as ?weather=.
       if (GAME.params && GAME.params.twilight != null) {
         this.setTwilight(parseFloat(GAME.params.twilight));
+      }
+
+      // Cool upper dome. Same contract: a profile value, then the URL hook.
+      // Absent for every level, so this is inert until one asks. It is a LUT
+      // layer like the twilight rotation, so it has to land before the first
+      // _buildLut or the ambient, the fog colours and the probe are generated
+      // once against the wrong dome and thrown away.
+      if (env.zenithTint != null) this.setZenithTint(env.zenithTint);
+      if (GAME.params) {
+        if (GAME.params.zenithTint != null) {
+          this.setZenithTint(parseFloat(GAME.params.zenithTint));
+        }
+        // ?ztFrom=14&ztTo=46&ztDim=0.3&ztAway=0.4 - so the window can be
+        // photographed and graded before it is committed to a profile.
+        var zt = null;
+        if (GAME.params.ztFrom != null) {
+          zt = zt || {}; zt.fromDeg = parseFloat(GAME.params.ztFrom);
+        }
+        if (GAME.params.ztTo != null) {
+          zt = zt || {}; zt.toDeg = parseFloat(GAME.params.ztTo);
+        }
+        if (GAME.params.ztDim != null) {
+          zt = zt || {}; zt.dim = parseFloat(GAME.params.ztDim);
+        }
+        if (GAME.params.ztAway != null) {
+          zt = zt || {}; zt.away = parseFloat(GAME.params.ztAway);
+        }
+        if (zt) this.setZenithTint(zt);
+      }
+
+      // Interior aerial perspective. Not a LUT layer - it overrides the solved
+      // fog colours - so it only has to land before the first _pushUniforms,
+      // but resolving it here keeps every env key in one place.
+      if (env.depthHaze != null) this.setDepthHaze(env.depthHaze);
+      if (GAME.params && GAME.params.depthHaze != null) {
+        this.setDepthHaze(parseFloat(GAME.params.depthHaze));
       }
 
       // Peak solar elevation, in DEGREES. Must land BEFORE the time of day: the
@@ -6100,7 +6609,7 @@
       setTurbidity(v);
       buildTransmittanceTable();
       if (this._built) {
-        this._buildLut();
+        this._reLut();
         this._pushUniforms();
         this._regenerateEnvironment();
       }
@@ -6129,11 +6638,94 @@
    * pre-sunrise sky actually scatters away from the sun.
    *
    * Never throws; an unreadable tint degrades to no tint.
+   *
+   * ---- WHAT IS LOUD NOW, AND WHY -------------------------------------------
+   * Three things this method used to do in silence, all three of which have
+   * cost a level agent a round:
+   *
+   *   1. AN UNRECOGNISED KEY IS IGNORED. It still is - there is nothing else
+   *      it could be - but it warns through console.warn, with a "did you
+   *      mean" against the recognised set. `density` documented in three
+   *      comment blocks and absent from the literal is what this exists for.
+   *   2. AN UNUSABLE VALUE IS REJECTED rather than stored. `density: undefined`
+   *      used to be written straight into the bag and then read back by
+   *      _scheduleHaze as `!isFinite -> 0`, i.e. it switched the fog off two
+   *      hundred lines away from the call. Out-of-range values are clamped to
+   *      the bounds the uniform path enforces anyway, with a warning, instead
+   *      of arriving at a different number somewhere downstream.
+   *   3. A VALUE THE ACTIVE PRESET WOULD OVERRULE now says so. See _fogParam:
+   *      an explicitly authored key now WINS over the preset default, which is
+   *      the actual fix; the warning is for `density`, which is deliberately
+   *      still scaled by the preset because two levels share one deck.
+   *
+   * console.warn, behind no flag, and never GAME.logError - shoot.py and
+   * playtest.py read that channel as a real fault.
    */
   Sky.prototype.setFog = function (opts) {
     try {
       if (!opts) return;
-      for (var k in opts) if (k in this.fog) this.fog[k] = opts[k];
+      if (typeof opts !== 'object') {
+        skyWarn('setFog', 'expects an options object, got ' + (typeof opts) +
+          '. Recognised keys: ' + FOG_KEY_LIST.join(', '));
+        return;
+      }
+      checkOpts('setFog', opts, FOG_KEY_LIST);
+      var preset = this.weatherPreset;
+      var overridden = FOG_PRESET_KEYS[preset] || null;
+      var densK = FOG_DENSITY_K[preset] || 0;
+      for (var k in opts) {
+        if (!Object.prototype.hasOwnProperty.call(opts, k)) continue;
+        var spec = FOG_KEYS[k];
+        if (!spec) continue;                       // already warned by checkOpts
+        var v = opts[k];
+        if (spec === 'rgb') {
+          // tint: null clears it; anything readRGB can parse is kept verbatim
+          // (it is re-read and normalised every _pushUniforms), and anything
+          // else is refused rather than left to become NaN in the shader.
+          if (v == null) { this.fog[k] = null; this._fogSet[k] = true; continue; }
+          if (!readRGB(v, _tintTmp)) {
+            skyWarn('setFog', '"tint" could not be read as a colour and was ' +
+              'IGNORED. Give [r,g,b] linear, a THREE.Color, or 0xRRGGBB.');
+            continue;
+          }
+          this.fog[k] = v;
+          this._fogSet[k] = true;
+          continue;
+        }
+        if (spec === 'bool') {
+          this.fog[k] = !!v;
+          this._fogSet[k] = true;
+          continue;
+        }
+        var n = +v;
+        if (!isFinite(n)) {
+          skyWarn('setFog', '"' + k + '" = ' + String(v) + ' is not a finite ' +
+            'number and was IGNORED (kept ' + this.fog[k] + '). This used to be ' +
+            'stored and then silently read back as 0 by the haze schedule.');
+          continue;
+        }
+        if (n < spec[0] || n > spec[1]) {
+          var c = M.clamp(n, spec[0], spec[1]);
+          skyWarn('setFog', '"' + k + '" = ' + n + ' is outside ' + spec[0] +
+            '..' + spec[1] + ' and was CLAMPED to ' + c + '.');
+          n = c;
+        }
+        this.fog[k] = n;
+        this._fogSet[k] = true;
+        if (k === 'density' && densK > 0) {
+          skyWarn('setFog', 'weather preset "' + preset + '" SCALES density by ' +
+            densK + 'x, so the effective extinction is ' + (n * densK).toFixed(5) +
+            '/m, not ' + n + '/m. That is deliberate (see _scheduleHaze) - the ' +
+            'authored number is a base the deck scales.');
+        } else if (k === 'density' && preset === 'storm') {
+          skyWarn('setFog', 'weather preset "storm" takes its density from ' +
+            'weather.js, so the authored value is not used.');
+        } else if (overridden && overridden.indexOf(k) >= 0) {
+          skyWarn('setFog', '"' + k + '" would have been overruled by weather ' +
+            'preset "' + preset + '" before this round; an explicitly authored ' +
+            'value now WINS. Your ' + n + ' is what the frame uses.');
+        }
+      }
       this._pushUniforms();
     } catch (e) { GAME.logError('sky.setFog', e); }
   };
@@ -6167,10 +6759,18 @@
    */
   Sky.prototype.setSolarArc = function (opts) {
     try {
+      if (opts && typeof opts === 'object') {
+        checkOpts('setSolarArc', opts, ['maxElevDeg', 'maxElevation']);
+      }
       var deg = (typeof opts === 'number') ? opts
         : (opts && isFinite(opts.maxElevDeg) ? opts.maxElevDeg
           : (opts && isFinite(opts.maxElevation) ? opts.maxElevation : NaN));
-      if (!isFinite(deg)) return;
+      if (!isFinite(deg)) {
+        skyWarn('setSolarArc', 'no usable peak elevation in ' +
+          JSON.stringify(opts) + ' - IGNORED. Pass a number of DEGREES, or ' +
+          '{maxElevDeg: 66}. Clamped to 3..88.');
+        return;
+      }
       // 88 rather than 90: the LUT parameterises elevation as sign(y)*sqrt(|y|)
       // and the azimuth-from-sun frame degenerates at the exact zenith, where
       // every view ray has the same sun-relative azimuth and the horizon band
@@ -6240,6 +6840,8 @@
       if (typeof opts === 'number') a = opts;
       else if (typeof opts === 'boolean') a = opts ? 1 : 0;
       else if (opts) {
+        checkOpts('setTwilight', opts,
+          ['amount', 'value', 'zenith', 'dim', 'away', 'azTight']);
         if (isFinite(opts.amount)) a = opts.amount;
         else if (isFinite(opts.value)) a = opts.value;
         if (readRGB(opts.zenith, _tintTmp)) {
@@ -6260,10 +6862,277 @@
       // The layer lives in the LUT, so everything derived from it - the ambient
       // set, the hemisphere hues, every fog colour and the PMREM probe - has to
       // be re-solved. Same sequence setTurbidity uses, and for the same reason.
-      this._buildLut();
+      this._reLut();
       this._pushUniforms();
       this._regenerateEnvironment();
     } catch (e) { GAME.logError('sky.setTwilight', e); }
+  };
+
+  /**
+   * Rotate the UPPER DOME toward a cool chromaticity at ANY sun elevation.
+   *
+   *   sky.setZenithTint(0.8)
+   *   sky.setZenithTint({ amount: 0.8, fromDeg: 14, toDeg: 46 })
+   *   sky.setZenithTint({ amount: 1.0, chroma: [0.24, 0.60, 1.04], dim: 0.3 })
+   *   sky.setZenithTint(0)                      // back to the shipped dome
+   *
+   * WHY THIS IS NOT setTwilight, and this is a measured distinction rather than
+   * a design preference. setTwilight()'s rotation is multiplied by `afterglow`,
+   * a window open only between +9 and -13 degrees of sun elevation. Meridian
+   * Tower is the level that asked for a cool zenith; the roster calls it a
+   * sunset and its env profile says timeOfDay 0.80, but level_highrise.js
+   * deliberately re-pins the hour to t = 0.712 (because at 0.80 the disc is
+   * 0.32 degrees UNDER the horizon and the direct key collapses), which puts
+   * the sun at +8.81 degrees. afterglow evaluates to 0.0017 there. So the
+   * shipped twilight lever multiplies its entire effect by 1/600 on the one
+   * level that needs it, and widening the afterglow window instead would drag
+   * the authored dusk and night layers - which are multiplied by the same
+   * factor - into full daylight.
+   *
+   * SO READ THIS BEFORE REACHING FOR IT: measured on Meridian Tower, no framing
+   * that level publishes shows sky above 17 degrees of elevation. lv_overview
+   * has pitch -15.1 at fov 64, so its top row is +16.9 and its horizon lands on
+   * row 205 of 720; the critic's "dome zenith, R/B 1.08" is a sample of the sky
+   * at 15-17 degrees, not of the zenith. At a +9 degree sun that band is where
+   * the mineral-dust layer legitimately lives and the model puts it at scene
+   * R/B 1.5-2.9. Rotating THAT to cool is not fixing a zenith, it is deleting a
+   * golden-hour horizon - which is the failure TWI_AWAY is capped at 0.40 to
+   * avoid (at 0.62 the brightest sky band rotated to near-neutral and
+   * grade_split INVERTED, +0.1775 to -0.0213). The honest use of this control is
+   * a level that can actually SEE its upper dome; if what you need is cool at
+   * 10-20 degrees on a framing that looks at the horizon, spend it on the fog's
+   * anti-sun lobe instead (setFog tint/tintAmount), which is where the air in
+   * those pixels comes from.
+   *
+   *   amount    0..1 master gate. 0 (default) makes every added branch fall
+   *             through to the exact arithmetic the file shipped with.
+   *   chroma    [r,g,b] target CHROMATICITY (only the ratios matter - it is
+   *             normalised to luminance 1). Default TWI_ZENITH [0.235, 0.600,
+   *             1.040], B > G > R. Also accepts a THREE.Color or 0xRRGGBB.
+   *   fromDeg   elevation where the rotation starts, DEGREES. Default 3.5.
+   *   toDeg     elevation where it is complete, DEGREES. Default 36.9. Must be
+   *             greater than fromDeg or both fall back to the defaults.
+   *   away      0..1, how much of the rotation the LOW sky gets on bearings
+   *             AWAY from the sun. Default 0.40 - the measured ceiling, above
+   *             which the warm band stops being the frame's highlight.
+   *   azTight   1..40, azimuthal exponent confining the warm band to the sun's
+   *             own quadrant. Default 14 (spent ~25 degrees off the sun).
+   *   dim       0..1, zenith luminance CUT at full weight, i.e. how much
+   *             zenith-to-horizon gradient the dome carries. Default 0, so the
+   *             rotation is purely chromatic and provably cannot move the
+   *             level's skylight, keyRef, the fog caps or the exposure. The cut
+   *             is energy-normalised (see dimNorm) so even a large value
+   *             redistributes irradiance downward rather than losing it.
+   *
+   * The rotation is luminance-preserving by construction and lives in the LUT,
+   * so the IBL, the hemisphere fill and every derived fog colour inherit it -
+   * a copy in the dome shader would light the picture and leave the light.
+   *
+   * A storm or overcast deck switches it off, exactly as it does the airglow.
+   *
+   * A level's env profile can carry `zenithTint: 0.8` or
+   * `zenithTint: {amount: 0.8, toDeg: 46}` instead of calling this.
+   *
+   * Idempotent, legal before build(), and never throws.
+   *
+   * @param {Object|number} opts {amount, chroma, fromDeg, toDeg, away, azTight, dim}
+   */
+  Sky.prototype.setZenithTint = function (opts) {
+    try {
+      var a = NaN, dirty = false;
+      if (typeof opts === 'number') a = opts;
+      else if (typeof opts === 'boolean') a = opts ? 1 : 0;
+      else if (opts) {
+        checkOpts('setZenithTint', opts,
+          ['amount', 'value', 'chroma', 'zenith', 'fromDeg', 'toDeg',
+           'away', 'azTight', 'dim']);
+        if (isFinite(opts.amount)) a = opts.amount;
+        else if (isFinite(opts.value)) a = opts.value;
+        // `zenith` accepted as an alias so a caller who has just read
+        // setTwilight's signature is not silently ignored.
+        var chroma = (opts.chroma != null) ? opts.chroma : opts.zenith;
+        if (chroma != null) {
+          if (readRGB(chroma, _tintTmp)) {
+            this._ztChroma[0] = _tintTmp[0];
+            this._ztChroma[1] = _tintTmp[1];
+            this._ztChroma[2] = _tintTmp[2];
+            dirty = true;
+          } else {
+            skyWarn('setZenithTint', '"chroma" could not be read as a colour ' +
+              'and was IGNORED. Give [r,g,b] linear, a THREE.Color, or 0xRRGGBB.');
+          }
+        }
+        var lo = this._ztLo, hi = this._ztHi, moved = false;
+        if (isFinite(opts.fromDeg)) {
+          lo = Math.sin(M.clamp(opts.fromDeg, -5.0, 85.0) * M.DEG); moved = true;
+        }
+        if (isFinite(opts.toDeg)) {
+          hi = Math.sin(M.clamp(opts.toDeg, -4.0, 90.0) * M.DEG); moved = true;
+        }
+        if (moved) {
+          if (!(hi > lo + 1e-3)) {
+            skyWarn('setZenithTint', 'toDeg must be greater than fromDeg; got ' +
+              opts.fromDeg + '..' + opts.toDeg + ' - kept the previous window.');
+          } else {
+            this._ztLo = lo; this._ztHi = hi; dirty = true;
+          }
+        }
+        if (isFinite(opts.away)) { this._ztAway = M.saturate(opts.away); dirty = true; }
+        if (isFinite(opts.azTight)) {
+          this._ztAzP = M.clamp(opts.azTight, 1.0, 40.0); dirty = true;
+        }
+        if (isFinite(opts.dim)) { this._ztDim = M.saturate(opts.dim); dirty = true; }
+      } else return;
+      if (isFinite(a)) {
+        var v = M.saturate(a);
+        if (v !== this._ztF) { this._ztF = v; dirty = true; }
+      } else if (typeof opts === 'number' || (opts && 'amount' in opts)) {
+        skyWarn('setZenithTint', 'amount ' + String(typeof opts === 'number' ? opts
+          : opts.amount) + ' is not a finite number and was IGNORED (still at ' +
+          this._ztF + '). 0..1.');
+      }
+      if (!dirty || !this._built) return;
+      // The layer lives in the LUT, so the ambient set, the hemisphere hues,
+      // every fog colour and the PMREM probe all have to be re-solved. Same
+      // sequence setTurbidity and setTwilight use, and for the same reason.
+      this._reLut();
+      this._pushUniforms();
+      this._regenerateEnvironment();
+    } catch (e) { GAME.logError('sky.setZenithTint', e); }
+  };
+
+  /**
+   * Give an ENCLOSED level real aerial perspective: air with a radiance of its
+   * own, so a lit destination 40 m away reads as distant instead of arriving at
+   * full contrast.
+   *
+   *   sky.setDepthHaze({ radiance: 0.030 })
+   *   sky.setDepthHaze({ radiance: 0.030, tint: [0.55, 0.72, 0.62] })
+   *   sky.setDepthHaze(0)                       // off (the default)
+   *
+   * WHAT IT FIXES, measured. Every inscatter colour in this file is derived off
+   * the atmosphere and then capped against keyRef so "the haze can never
+   * out-brighten the brightest surface in the frame". Under the 'none' preset
+   * sunIntensity is 0, so keyRef collapses to the void IBL - 0.00362 on metro -
+   * the anti-sun cap lands at 0.0033, and the haze is PINNED there
+   * (fogSky = 0.00341, 0.00352, 0.00363, probed in-engine). The brightest
+   * surface in that level is a tiled wall under a fluorescent at roughly linear
+   * 0.18 in the print, so the air is capped two and a half decades under the
+   * thing it exists to sit behind. Consequence, measured on lv_hero1: the east
+   * arch 38 m away prints L 0.386 against a near floor at 0.349 - the far end of
+   * the hall is BRIGHTER than the floor at the lens. The fog is attenuating
+   * (47% at 38 m) but not veiling, and a pure multiply preserves every contrast
+   * ratio it touches.
+   *
+   * Raising the cap cannot fix it, because the cap is derived from a sun that
+   * does not exist. The level is the only thing that knows what its practicals
+   * put on a wall, so the level supplies the number.
+   *
+   *   radiance  ABSOLUTE linear HDR luminance of the lit air: the value a
+   *             fully-veiled surface converges to. There is no default and the
+   *             call is inert without it. Useful range for an interior lit by
+   *             practicals is 0.004-0.06; sensible starting point is 10-20% of
+   *             the radiance of a wall directly under a fixture. Above ~0.10 the
+   *             air becomes the brightest thing in the frame, which is the
+   *             failure this file's whole cap system exists to prevent - the
+   *             cap is bypassed here on purpose, so this number is the only
+   *             thing standing between you and fog-in-the-headlights.
+   *   tint      chromaticity of the air, [r,g,b] / THREE.Color / 0xRRGGBB.
+   *             Default null = keep the chromaticity the model already solved,
+   *             so a level that only wants the LEVEL raised does not also get a
+   *             colour it did not ask for.
+   *   sunward   multiplier on the sunward lobe, x radiance. Default 1.25. With
+   *             no sun this only decides how much brighter the air is along the
+   *             notional key bearing; leave it alone in a sealed level.
+   *   ground    multiplier on the downward lobe, x radiance. Default 0.80.
+   *   amount    0..1 blend toward the above. Default 1 when a radiance is
+   *             given, 0 (inert) otherwise.
+   *
+   * TWO THINGS THIS DOES NOT DO, because setFog already does them and now
+   * actually works under a deck (see _fogParam):
+   *   * the DENSITY of the air - setFog({density}) - remembering that the
+   *     enclosed preset scales an authored density by 1.15x;
+   *   * the opacity CAP - setFog({maxOpacity}) - which is what decides whether
+   *     a fully-veiled surface can converge all the way. The enclosed default
+   *     is 0.82, so 18% of a bright destination survives at any distance.
+   * A veil radiance with a cap of 0.82 and 47% opacity at 38 m moves that arch
+   * by about a third of the way; if you want it to READ as distant, raise the
+   * density and the cap as well and measure the print.
+   *
+   * Not gated on the preset: a level with a sky can use it too (a jungle
+   * understory is the same problem). It is applied AFTER every cap and floor in
+   * the file, which is unique to this term and deliberate.
+   *
+   * A level's env profile can carry `depthHaze: {radiance: 0.03}`.
+   *
+   * Idempotent, legal before build(), and never throws.
+   *
+   * @param {Object|number} opts {radiance, tint, sunward, ground, amount}
+   */
+  Sky.prototype.setDepthHaze = function (opts) {
+    try {
+      if (opts === 0 || opts === false || opts == null) {
+        if (this._dhF === 0) return;
+        this._dhF = 0;
+      } else if (typeof opts === 'number') {
+        // A bare number is the radiance - the only field with no default.
+        if (!isFinite(opts) || opts < 0) {
+          skyWarn('setDepthHaze', String(opts) + ' is not a usable radiance ' +
+            'and was IGNORED. Pass 0 to switch the term off.');
+          return;
+        }
+        this._dhRad = M.clamp(opts, 0.0, 0.5);
+        this._dhF = 1.0;
+      } else if (typeof opts === 'object') {
+        checkOpts('setDepthHaze', opts,
+          ['radiance', 'tint', 'sunward', 'ground', 'amount']);
+        var got = false;
+        if (opts.radiance != null) {
+          var r = +opts.radiance;
+          if (!isFinite(r) || r < 0) {
+            skyWarn('setDepthHaze', '"radiance" = ' + String(opts.radiance) +
+              ' is not a usable linear radiance and was IGNORED.');
+          } else {
+            if (r > 0.10) {
+              skyWarn('setDepthHaze', '"radiance" = ' + r + ' is very high for ' +
+                'air - it bypasses every keyRef cap in this module, so above ' +
+                'about 0.10 the haze becomes the brightest thing in the frame. ' +
+                'Measure the print.');
+            }
+            this._dhRad = M.clamp(r, 0.0, 0.5);
+            got = true;
+          }
+        }
+        if (opts.tint != null) {
+          if (readRGB(opts.tint, _tintTmp)) {
+            this._dhHue = [_tintTmp[0], _tintTmp[1], _tintTmp[2]];
+          } else {
+            skyWarn('setDepthHaze', '"tint" could not be read as a colour and ' +
+              'was IGNORED. Give [r,g,b] linear, a THREE.Color, or 0xRRGGBB.');
+          }
+        }
+        if (isFinite(opts.sunward)) this._dhSun = M.clamp(opts.sunward, 0.0, 4.0);
+        if (isFinite(opts.ground)) this._dhGnd = M.clamp(opts.ground, 0.0, 4.0);
+        if (isFinite(opts.amount)) this._dhF = M.saturate(opts.amount);
+        else if (got) this._dhF = 1.0;
+        if (this._dhF > 0 && !(this._dhRad > 0)) {
+          skyWarn('setDepthHaze', 'no "radiance" has been given, so the term is ' +
+            'INERT. It is the one field with no default - it is an absolute ' +
+            'linear radiance and only the level knows what its practicals put ' +
+            'on a wall.');
+        }
+      } else {
+        skyWarn('setDepthHaze', 'expects {radiance, tint, sunward, ground, ' +
+          'amount} or a bare radiance, got ' + (typeof opts) + '.');
+        return;
+      }
+      if (!this._built) return;
+      // The fog colours are solved in _deriveAmbient, which hangs off the LUT -
+      // but this term does not change the LUT, so re-deriving the ambient is
+      // enough and there is no need to rebuild 8192 texels or the PMREM probe.
+      this._deriveAmbient();
+      this._pushUniforms();
+    } catch (e) { GAME.logError('sky.setDepthHaze', e); }
   };
 
   /**
@@ -6323,6 +7192,8 @@
       var g = NaN, dn = NaN, nf = NaN, sp = NaN;
       if (typeof opts === 'number') g = opts;
       else if (opts) {
+        checkOpts('setDustGain', opts,
+          ['gain', 'value', 'downFade', 'nearFade', 'subPixel', 'subPx']);
         if (isFinite(opts.gain)) g = opts.gain;
         else if (isFinite(opts.value)) g = opts.value;
         if (isFinite(opts.downFade)) dn = opts.downFade;
