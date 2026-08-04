@@ -1894,20 +1894,42 @@
   // albedo and every poster would come back three shades of mud.  This writes
   // an honest, gentle multiplier instead: darker and greener toward the base,
   // where the damp is.
-  function paintCard(geo, noise, base, damp) {
+  // --------------------------------------------------------------------------
+  // `silt` IS WHY THE FALLEN HOARDING WAS THE BRIGHTEST OBJECT IN THE LEVEL.
+  //
+  // Measured: a 210x120 crop of the `overview` centre came back as a crisp
+  // near-white advertising panel with a scarlet band, 0.9+ luminance, lying
+  // face-up on the deck 12 m from the gallery - the single strongest tonal
+  // accent in a 70 m establishing frame, and reading as a poster somebody put
+  // there this morning rather than as a board that came off the arcade a decade
+  // ago. Nothing was wrong with the card: paintCard only ever looked at HEIGHT,
+  // so a card lying flat took the same wear as one hung at eye level on a wall.
+  //
+  // An UP-FACING card in a flooded station is under years of silt, grit and
+  // drip fallout, and that is the one thing that makes a fallen board read as
+  // fallen. `silt` is the weight of that, applied off the surface normal, so it
+  // costs nothing on the wall posters (ny ~ 0) and takes half the value off
+  // anything horizontal.
+  // --------------------------------------------------------------------------
+  function paintCard(geo, noise, base, damp, silt) {
     var p = geo.attributes.position;
     if (!p) return geo;
+    var nr = geo.attributes.normal;
     base = base === undefined ? 0.86 : base;
     damp = damp === undefined ? 0.34 : damp;
+    silt = silt === undefined ? 0 : silt;
     var c = new Float32Array(p.count * 3);
     for (var i = 0; i < p.count; i++) {
       var y = p.getY(i);
       var n = noise ? (noise.fbm3(p.getX(i) * 3.1, y * 3.1, p.getZ(i) * 3.1, 2, 2.1, 0.5) * 0.5 + 0.5) : 0.5;
       var lo = 1 - damp * M.saturate(1 - y * 1.4);
-      var v = M.saturate(base * lo * (0.86 + n * 0.28));
+      var up = (silt > 0 && nr) ? M.saturate(nr.getY(i)) : 0;
+      // a blotchy deposit, not an even wash - a swept patch still shows through
+      var dep = silt * up * (0.62 + 0.38 * n);
+      var v = M.saturate(base * lo * (0.86 + n * 0.28) * (1 - dep));
       c[i * 3] = v;
-      c[i * 3 + 1] = v * (0.98 - 0.06 * (1 - lo));
-      c[i * 3 + 2] = v * (0.94 - 0.10 * (1 - lo));
+      c[i * 3 + 1] = v * (0.98 - 0.06 * (1 - lo)) * (1 - dep * 0.05);
+      c[i * 3 + 2] = v * (0.94 - 0.10 * (1 - lo)) * (1 - dep * 0.16);
     }
     geo.setAttribute('color', new THREE.BufferAttribute(c, 3));
     return geo;
@@ -4183,7 +4205,8 @@
       }
       Geo.copyUV1(geo);
       if (isCard) {
-        paintCard(geo, this.noise, key === 'stain' ? 1.0 : 0.90, key === 'stain' ? 0.0 : 0.26);
+        paintCard(geo, this.noise, key === 'stain' ? 1.0 : 0.90,
+          key === 'stain' ? 0.0 : 0.26, key === 'stain' ? 0.0 : 0.66);
       } else {
         // A one-off is painted with the same capillary gradient as everything
         // else, measured over its own height rather than a prop's.
