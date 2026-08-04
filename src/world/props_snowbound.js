@@ -2346,6 +2346,26 @@
     return x > b.x0 + pad && x < b.x1 - pad && z > b.z0 + pad && z < b.z1 - pad;
   };
 
+  // Distance to the nearest PLANNED standpoint - level.plan.views, the level's
+  // own survey of where it expects to be photographed from and walked through.
+  // Never a camera pose: a pose is a composition and it moves. Anything that
+  // wants to spend a detail budget where the eye is resolves against this.
+  // Returns 0 when the level does not publish a survey, so a missing list means
+  // "spend everywhere" rather than "spend nowhere".
+  PropsSnowbound.prototype._viewDist = function (x, z) {
+    var V = null;
+    try { V = this.ctx && this.ctx.level && this.ctx.level.plan && this.ctx.level.plan.views; }
+    catch (e) { V = null; }
+    if (!V || !V.length) return 0;
+    var best = 1e9;
+    for (var i = 0; i < V.length; i++) {
+      var dx = x - V[i][0], dz = z - V[i][1];
+      var d = dx * dx + dz * dz;
+      if (d < best) best = d;
+    }
+    return Math.sqrt(best);
+  };
+
   // Signed distance from the ploughed carriageway centreline.
   PropsSnowbound.prototype._roadOffset = function (x, z) {
     var rx = 0;
@@ -2549,7 +2569,16 @@
   // `span` metres along the prop's local X.
   PropsSnowbound.prototype._icicles = function (x, y, z, yaw, span, maxLen) {
     if (this._icicleCount === undefined) this._icicleCount = 0;
-    if (this._icicleCount > 220) return;
+    // 48 ROWS, NOT 220. Measured on the round-2 build the icicle set came to
+    // 56,692 triangles - four times the whole church, the level's one landmark -
+    // and not one of them was legible in any of the six published frames: a
+    // 3 cm cone at 30 m through 40% fog is a smear whatever it is textured with.
+    // A row is only worth its geometry within about 22 m of somewhere the level
+    // expects to be photographed from, so the budget is spent THERE and the
+    // remaining eaves get none. The distance test uses level.plan.views (the
+    // survey), never a camera pose.
+    if (this._icicleCount > 48) return;
+    if (this._viewDist(x, z) > 22.0) return;
     // An icicle hangs from an EAVE.  Anything asking for a row less than a
     // metre and a half off the ground is asking for a spray of ice growing out
     // of the snow, which is the one place ice does not form - and it is the
