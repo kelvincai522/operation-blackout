@@ -4075,6 +4075,11 @@
       u.uAtten.value.set(BEAM_NEAR, BEAM_FALL, fk);
       c.mesh.visible = u.uAmt.value > 0.002;
     }
+    // A beam-gain diagnostic probe lived here during the round-2 volumetric
+    // work, reporting through GAME.logError. That is the channel tools/shoot.py
+    // and tools/playtest.py both treat as a real fault, so it printed an error
+    // on clean captures and failed the playtest. Removed - instrument with a
+    // console.log behind a URL flag if needed, never logError.
   };
 
   Lighting.prototype._updateShafts = function (ctx) {
@@ -7384,6 +7389,12 @@
     var vmLocal = this._declarative && (this.interior ||
       (this._rigP && (this._rigP.key < 0.25 ||
         (this._rigP.lampFloor > 0.5 && vmWorldKey < VM_LOCAL_KEY))));
+    // A viewmodel-rig diagnostic probe lived here during the round-2 lighting
+    // work. It reported through GAME.logError, which is the channel the capture
+    // tool and playtest harness both read as a real fault - so it failed the
+    // playtest and printed an error on every clean market capture. Removed; use
+    // a local console.log behind a URL flag if this needs instrumenting again,
+    // never logError.
     if (vmLocal) {
       // Up, forward and slightly to the weapon side: a ceiling fitting, which
       // is what nearly every practical in an enclosed level is.
