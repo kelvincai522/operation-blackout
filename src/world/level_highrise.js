@@ -528,6 +528,74 @@
     return g;
   }
 
+  // ---------------------------------------------------------------------------
+  // A CHAMFERED PRISM, WHICH IS WHAT A FORMED CONCRETE COLUMN ACTUALLY IS.
+  //
+  // Geo.bevelBox "pushes the CORNER VERTEX in rather than adding a facet" - this
+  // file's own comment says so - so a bevelled box has no chamfer SURFACE on it,
+  // only a pinched corner, and the two adjoining faces still meet at what reads
+  // as a 90-degree arris. On the largest repeated object in the level, seen at
+  // 3-8 m in four of five framings, that is the single loudest "this is a box"
+  // tell there is, and raising the bevel from 35 mm to 55 mm could not fix it
+  // because there was never a facet to widen.
+  //
+  // A real column is cast against a chamfer fillet nailed into the corner of the
+  // form, so it has an eighth face 25-35 mm wide at 45 degrees down its whole
+  // height. That facet is the point: it faces a different direction from both of
+  // its neighbours, so it catches its own specular line and its own AO, and a
+  // raking 9-degree key draws a hard bright edge down one side of every column
+  // and a dark one down the other. Which is what makes concrete read as cast
+  // concrete instead of as a grey extrusion.
+  //
+  // 32 tris against bevelBox's 44, so it is also cheaper.
+  var _prismCache = new Map();
+  function chamfPrism(w, h, c, d) {
+    w = Math.max(w, 0.02); h = Math.max(h, 0.02);
+    d = Math.max(d === undefined ? w : d, 0.02);
+    c = M.clamp(c === undefined ? 0.030 : c, 0.004, Math.min(w, d) * 0.45);
+    var k = w.toFixed(4) + ',' + h.toFixed(4) + ',' + c.toFixed(4) + ',' + d.toFixed(4);
+    var g = _prismCache.get(k);
+    if (g) return g;
+    var ax = w * 0.5, az = d * 0.5;
+    var bx = ax - c, bz = az - c;
+    // Clockwise seen from above, so outward normal of edge (ex,ez) is (ez,-ex).
+    var ring = [[-bx, -az], [bx, -az], [ax, -bz], [ax, bz],
+                [bx, az], [-bx, az], [-ax, bz], [-ax, -bz]];
+    var pos = [], nor = [], uvs = [];
+    var hy = h * 0.5, i;
+    function push(px, py, pz, nx, ny, nz, u, v) {
+      pos.push(px, py, pz); nor.push(nx, ny, nz); uvs.push(u, v);
+    }
+    for (i = 0; i < 8; i++) {
+      var p0 = ring[i], p1 = ring[(i + 1) % 8];
+      var ex = p1[0] - p0[0], ez = p1[1] - p0[1];
+      var el = Math.sqrt(ex * ex + ez * ez) || 1;
+      var nx = ez / el, nz = -ex / el;
+      var u0 = i / 8, u1 = (i + 1) / 8;
+      push(p0[0], -hy, p0[1], nx, 0, nz, u0, 0);
+      push(p1[0], hy, p1[1], nx, 0, nz, u1, 1);
+      push(p1[0], -hy, p1[1], nx, 0, nz, u1, 0);
+      push(p0[0], -hy, p0[1], nx, 0, nz, u0, 0);
+      push(p0[0], hy, p0[1], nx, 0, nz, u0, 1);
+      push(p1[0], hy, p1[1], nx, 0, nz, u1, 1);
+    }
+    for (i = 0; i < 8; i++) {
+      var q0 = ring[i], q1 = ring[(i + 1) % 8];
+      push(0, hy, 0, 0, 1, 0, 0.5, 0.5);
+      push(q1[0], hy, q1[1], 0, 1, 0, 0.5 + q1[0], 0.5 + q1[1]);
+      push(q0[0], hy, q0[1], 0, 1, 0, 0.5 + q0[0], 0.5 + q0[1]);
+      push(0, -hy, 0, 0, -1, 0, 0.5, 0.5);
+      push(q0[0], -hy, q0[1], 0, -1, 0, 0.5 + q0[0], 0.5 + q0[1]);
+      push(q1[0], -hy, q1[1], 0, -1, 0, 0.5 + q1[0], 0.5 + q1[1]);
+    }
+    g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+    _prismCache.set(k, g);
+    return g;
+  }
+
   // A flat quad in the XY plane facing +Z. Decal cards, glazing lights, the
   // city's emissive points.
   var _quadCache = new Map();
@@ -1740,11 +1808,21 @@
     if (!a || !m) return null;
     var i, k;
 
-    // albedo: near white, because what the dirt does is SCATTER, and the
-    // coverage map below is what decides how much of the pane it hides.
-    a.fillStyle = '#c9c7c0'; a.fillRect(0, 0, S, S);
-    // coverage (used as alphaMap): black = clear glass, white = filthy
-    m.fillStyle = '#2c2c2c'; m.fillRect(0, 0, S, S);
+    // ---- ALBEDO IS NOT WHITE, AND THAT WAS HALF THE BLANK-RECTANGLE BUG -----
+    // A near-white albedo at 86% opacity is a sheet of paper standing between
+    // the camera and the sunset, which is exactly what the curtain wall
+    // photographed as in hero1 (three pale rectangles filling the west
+    // openings) and hero2 (a whole wall of them). Vision glass is a DARK body
+    // with a bright reflection on it - the pale part of a dirty pane is the
+    // dirt, not the glass - so the field goes to a cool mid-grey and only the
+    // slurry, the film and the sticker stay pale.
+    a.fillStyle = '#8e969a'; a.fillRect(0, 0, S, S);
+    // coverage (used as alphaMap): black = clear glass, white = filthy.
+    // 0.239, not 0.172. It is a FLOOR on how much of the pane you see at all,
+    // and with opacity down at 0.58 (see _glazingMaterial) the clean glass now
+    // lands at 0.14 - i.e. 86% of the sunset behind it comes through, and the
+    // 14% that does not is carrying the reflection.
+    m.fillStyle = '#3d3d3d'; m.fillRect(0, 0, S, S);
 
     // dust film, heaviest at the bottom of every light
     var gr = m.createLinearGradient(0, 0, 0, S);
@@ -2331,14 +2409,16 @@
         // Two lifts with a construction joint between them: a column is not one
         // extrusion, and the joint line is where all the staining starts.
         //
-        // The bevel is 55 mm, not 35. A formed concrete column carries a 20-25
-        // mm chamfer fillet, but bevelBox pushes the CORNER VERTEX in rather
-        // than adding a facet, so the visible chamfer band is roughly half the
-        // number - and at 35 mm the arrises photographed as razor-sharp 90
-        // degree corners at 4 m, which is the single loudest "this is a box"
-        // tell on the largest repeated object in the level.
-        B.box('column', w, h * 0.42, w, x, y0 + h * 0.21, z, 0.055);
-        B.box('column', w - 0.012, h * 0.58, w - 0.012, x, y0 + h * 0.42 + h * 0.29, z, 0.055);
+        // ---- AND THE ARRIS IS NOW A FACET, NOT A BEVEL ------------------------
+        // The bevel went 35 mm -> 55 mm last round and changed nothing, because
+        // Geo.bevelBox has no facet to widen (see chamfPrism). These are
+        // eight-sided chamfered prisms with a 34 mm cast fillet down the full
+        // height, which is what the form's corner chamfer leaves and the only
+        // thing that puts a specular line on a column at a 9-degree key.
+        var CH = 0.034;
+        B.add('column', chamfPrism(w, h * 0.42, CH), makeM(x, y0 + h * 0.21, z));
+        B.add('column', chamfPrism(w - 0.012, h * 0.58, CH),
+          makeM(x, y0 + h * 0.42 + h * 0.29, z));
         B.box('column', w + 0.030, 0.028, w + 0.030, x, y0 + h * 0.42, z, 0.008);
         // kicker at the base - the 75 mm upstand the column was cast off, with
         // the grout run that always squeezes out under it
@@ -2389,6 +2469,101 @@
           B.box('timber', 0.018, 1.24, w * 0.9, x + ox * (w * 0.5 + 0.012), cy, z, 0.003);
           B.box('timber', w * 0.9, 1.24, 0.018, x, cy, z + oz * (w * 0.5 + 0.012), 0.003);
         }
+        // ---- EXPOSED REBAR, WHICH THE BRIEF ASKS FOR BY NAME ------------------
+        // LEVELS_ROSTER's one-line description of this level is "open floor
+        // plates, EXPOSED COLUMNS AND REBAR, plastic sheeting..." and until now
+        // the only reinforcement on a column was the starter cage above the
+        // soffit - i.e. above the ceiling, outside every interior framing. There
+        // was no exposed steel anywhere a player stands.
+        //
+        // Every fifth column carries a spalled corner: the cover has come off in
+        // a patch where a load swung into it, and what is behind concrete cover is
+        // a vertical bar at every corner inside a spiral of links. Modelled as a
+        // recessed dark patch (the void), the bars standing in front of it, two
+        // link hoops crossing them, and four broken lumps still hanging on at the
+        // perimeter - so the SILHOUETTE of the column breaks, which is the thing a
+        // decal can never do.
+        if (ci % 5 === 1) {
+          var spY = y0 + rng.range(1.05, 1.95);
+          var spH = rng.range(0.52, 0.86);
+          var sq = rng.int(0, 3);
+          var sx2 = (sq === 0 || sq === 3) ? -1 : 1;
+          var sz2 = (sq < 2) ? -1 : 1;
+          // the void: inset, and dark because it is a hole with shadow in it
+          B.paint = 'wall';
+          var vEnt = B.boxR('column', w * 0.46, spH, w * 0.46,
+            x + sx2 * (w * 0.30), spY, z + sz2 * (w * 0.30),
+            0, 0.785, 0, 0.006);
+          if (vEnt) vEnt.dark = 0.62;
+          // the corner bar and its two neighbours, 16 mm, rusted
+          B.paint = 'steel';
+          for (var sb = 0; sb < 3; sb++) {
+            var so = (sb - 1) * 0.145;
+            B.cyl('rebar', 0.008, 0.008, spH + rng.range(0.10, 0.26),
+              x + sx2 * (w * 0.5 - 0.035) - sz2 * so * (sb === 1 ? 0 : 1),
+              spY + rng.range(-0.04, 0.04),
+              z + sz2 * (w * 0.5 - 0.035) + sx2 * so * (sb === 1 ? 1 : 0),
+              rng.range(-0.03, 0.03), 0, rng.range(-0.03, 0.03), 5);
+          }
+          // link hoops, the pair that used to be inside the cover
+          for (var lk = 0; lk < 2; lk++) {
+            var lky = spY - spH * 0.28 + lk * spH * 0.56;
+            B.tube('rebar', x + sx2 * (w * 0.5 - 0.02), lky, z + sz2 * (w * 0.5 - 0.20),
+              x + sx2 * (w * 0.5 - 0.20), lky, z + sz2 * (w * 0.5 - 0.02), 0.006, 4);
+          }
+          // the lumps that did not come away, and the rubble under it
+          B.paint = 'wall';
+          for (var lp = 0; lp < 5; lp++) {
+            var lpt = rng.range(-0.5, 0.5);
+            B.boxR('column', rng.range(0.05, 0.13), rng.range(0.04, 0.10),
+              rng.range(0.05, 0.12),
+              x + sx2 * (w * 0.5 - 0.01) - sz2 * lpt * 0.22,
+              spY + lpt * spH * 0.95,
+              z + sz2 * (w * 0.5 - 0.01) + sx2 * lpt * 0.22,
+              rng.range(-0.5, 0.5), rng.range(0, 3.14), rng.range(-0.5, 0.5), 0.004);
+          }
+          for (var rb = 0; rb < 4; rb++) {
+            B.boxR('column', rng.range(0.05, 0.14), rng.range(0.03, 0.07),
+              rng.range(0.05, 0.14),
+              x + sx2 * rng.range(0.5, 1.0), y0 + 0.03,
+              z + sz2 * rng.range(0.5, 1.0),
+              rng.range(-0.3, 0.3), rng.range(0, 3.14), rng.range(-0.3, 0.3), 0.004);
+          }
+        }
+        // ---- the formwork clamp somebody never took off ----------------------
+        // Two forged half-bands round the column with a tie rod through the ears.
+        // A hard horizontal band of bright steel at 2.4 m breaks the vertical
+        // extrusion, and on a raking key it is the only specular event on the
+        // whole member.
+        if (ci % 3 === 2) {
+          B.paint = 'steel';
+          var clY = y0 + rng.range(2.15, 2.85);
+          for (var cb = 0; cb < 2; cb++) {
+            var cs = cb ? 1 : -1;
+            B.box('scaff', w + 0.05, 0.075, 0.030, x, clY, z + cs * (w * 0.5 + 0.02), 0.005);
+            B.box('scaff', 0.030, 0.075, w + 0.05, x + cs * (w * 0.5 + 0.02), clY, z, 0.005);
+            B.cyl('scaff', 0.011, 0.011, 0.13, x + cs * (w * 0.5 + 0.075), clY,
+              z + (w * 0.5 + 0.075), 0, 0, Math.PI * 0.5, 6);
+          }
+        }
+        // ---- first-fix electrical, on about a quarter -------------------------
+        // A galvanised adaptable box cast into the column with two 25 mm conduit
+        // drops out of the bottom, capped and taped. It is the detail that says a
+        // services trade has been through, and it puts a small hard object on a
+        // 4 m face that otherwise has nothing on it at eye height.
+        if (ci % 4 === 0) {
+          B.paint = 'steel';
+          var ff = (ci % 8 < 4) ? -1 : 1;
+          var fy = y0 + 1.28;
+          B.box('grate', 0.020, 0.16, 0.11, x + ff * (w * 0.5 + 0.012), fy, z, 0.004);
+          B.tube('scaff', x + ff * (w * 0.5 + 0.008), fy - 0.08, z - 0.028,
+            x + ff * (w * 0.5 + 0.008), y0 + 0.10, z - 0.028, 0.013, 6);
+          B.tube('scaff', x + ff * (w * 0.5 + 0.008), fy - 0.08, z + 0.028,
+            x + ff * (w * 0.5 + 0.008), y0 + 0.42, z + 0.028, 0.013, 6);
+          B.cyl('plant', 0.017, 0.017, 0.03, x + ff * (w * 0.5 + 0.008), y0 + 0.44, z + 0.028,
+            0, 0, 0, 6);
+        }
+        B.paint = 'wall';
         // ---- markings -------------------------------------------------------
         // Indexed by column, never rolled: with one cell, one height and one
         // face the whole grid carried the identical mark, which is the
@@ -2694,6 +2869,89 @@
           fixedIsX ? fixed + outward * 0.035 : j, (CW_SILL + CW_HEAD) * 0.5,
           fixedIsX ? j : fixed + outward * 0.035, 0.003);
       }
+      // ---- THE THING THAT MAKES A PANE READ AS GLASS -------------------------
+      // A transparent surface is invisible by definition: you see what is behind
+      // it, and the viewer has no way to know a pane is there at all unless
+      // something is ON it. On a facade three weeks out of the crate that
+      // something is the protective tape - a big white cross taped corner to
+      // corner on every unit that has not been signed off yet, so nobody walks
+      // into it. It is high-contrast, unmistakable, universally read as GLAZING,
+      // and it costs two alpha cards per pane.
+      //
+      // Every third bay carries one, chosen by the same deterministic hash the
+      // missing units use, so the crosses land on a broken rhythm rather than on
+      // every light.
+      B.paint = 'flat';
+      var gv = (CW_SILL + 1.05 + CW_HEAD - 0.95) * 0.5;
+      var gvh = CW_HEAD - CW_SILL - 2.4;
+      for (i = 0; i < n; i++) {
+        var tc = a0 + (i + 0.5) * pitch;
+        var th2 = Math.abs(Math.sin((i * 5 + Math.round(a0)) * 3.71) * 1000) % 1;
+        if (th2 < 0.13) continue;                    // the bay has no unit in it
+        if (th2 > 0.52) continue;                    // and most are already signed off
+        var diag = Math.atan2(gvh, pitch - 0.12);
+        var dl = Math.sqrt(gvh * gvh + (pitch - 0.12) * (pitch - 0.12));
+        var tx2 = fixedIsX ? fixed + outward * 0.055 : tc;
+        var tz2 = fixedIsX ? tc : fixed + outward * 0.055;
+        var ax2 = fixedIsX ? (outward < 0 ? 'x-' : 'x+') : (outward < 0 ? 'z-' : 'z');
+        decalCard(B, CELL.tape, tx2, gv, tz2, dl * 0.98, 0.13, ax2,
+          tint(0xffffff, 0), diag * (fixedIsX ? -outward : outward), 0.95);
+        decalCard(B, CELL.tape, tx2, gv, tz2, dl * 0.98, 0.13, ax2,
+          tint(0xffffff, 0), -diag * (fixedIsX ? -outward : outward), 0.95);
+      }
+      B.paint = 'paint';
+      // ---- one bay with an opening vent swung out ----------------------------
+      // A top-hung vent standing 25 degrees off the plane is the only piece of a
+      // curtain wall that has a silhouette, and it is what makes the run read as
+      // a built assembly rather than a printed grid. The wind is what it is for.
+      (function () {
+        var vi2 = Math.max(1, Math.round(n * 0.42));
+        var vc = a0 + (vi2 + 0.5) * pitch;      // along the run
+        var vw = pitch - 0.16, vh = 1.02;       // sash width along the run, height
+        var lean = 0.44;                        // 25 degrees off the plane
+        var cs2 = Math.cos(lean), sn2 = Math.sin(lean);
+        var hingeY = CW_HEAD - 0.95 - 0.07;     // hung off the upper transom
+        var cy2 = hingeY - vh * 0.5 * cs2;      // sash centre height
+        var proj = outward * (0.045 + vh * 0.5 * sn2);   // and how far out it is
+        // Rotating the sash about the axis that RUNS ALONG the wall is what
+        // swings its bottom edge outward. For the west run (normal +/-X, sash
+        // spanning Z) that axis is Z, so the roll is rz; for the south run
+        // (normal +/-Z, sash spanning X) it is rx, and the sign flips with which
+        // way "out" is.
+        var rx2 = fixedIsX ? 0 : (outward * lean);
+        var rz2 = fixedIsX ? (-outward * lean) : 0;
+        var cX = fixedIsX ? fixed + proj : vc;
+        var cZ = fixedIsX ? vc : fixed + proj;
+        // Offsets from the sash centre to its own head and sill, in world terms:
+        // straight up the tilted sash, i.e. up and back in.
+        var upY = vh * 0.5 * cs2, upO = -vh * 0.5 * sn2 * outward;
+        B.paint = 'paint';
+        var fr = 0.052;
+        // head and sill rails
+        for (var q5 = -1; q5 <= 1; q5 += 2) {
+          B.boxR('mullion', fixedIsX ? fr : vw, fr, fixedIsX ? vw : fr,
+            cX + (fixedIsX ? q5 * upO : 0), cy2 + q5 * upY,
+            cZ + (fixedIsX ? 0 : q5 * upO), rx2, 0, rz2, 0.004);
+        }
+        // the two jambs
+        for (q5 = -1; q5 <= 1; q5 += 2) {
+          B.boxR('mullion', fixedIsX ? fr : fr, vh, fr,
+            cX + (fixedIsX ? 0 : q5 * vw * 0.5), cy2,
+            cZ + (fixedIsX ? q5 * vw * 0.5 : 0), rx2, 0, rz2, 0.004);
+        }
+        // its glass
+        B.paint = 'glass';
+        B.boxR('glazing', fixedIsX ? 0.022 : vw - 0.03, vh - 0.03,
+          fixedIsX ? vw - 0.03 : 0.022, cX, cy2, cZ, rx2, 0, rz2, 0.004);
+        // and the restrictor stay holding it open against the wind
+        B.paint = 'steel';
+        var sa2 = fixedIsX ? fixed + outward * 0.045 : vc - vw * 0.40;
+        var sb2 = fixedIsX ? vc - vw * 0.40 : fixed + outward * 0.045;
+        B.tube('scaff', sa2, hingeY - 0.10, sb2,
+          fixedIsX ? cX : vc - vw * 0.30, cy2 - vh * 0.16,
+          fixedIsX ? vc - vw * 0.30 : cZ, 0.010, 4);
+        B.paint = 'paint';
+      })();
       // collider: the wall is solid to the player
       L.addCollider(fixedIsX ? fixed : (a0 + a1) * 0.5, (CW_SILL + CW_HEAD) * 0.5,
         fixedIsX ? (a0 + a1) * 0.5 : fixed,
@@ -2766,12 +3024,20 @@
     // The GAPS are x -12.5..-3.5 on the north edge (nine metres of nothing, and
     // the mark hero3 is solved on) and x 6..9. A continuous barrier makes the
     // drop safe and therefore invisible.
+    // The west run is also split at z -15.2..-11.8, which is where the
+    // cantilevered loading platform goes (see buildOutboard): a loading bay
+    // replaces a bay of guard rail, and a second break in the barrier is a second
+    // place the drop is legible from.
     var RUNS = [
       ['x', X0 + 0.4, -12.5, true],
       ['x', -3.5, 6.0, true],
       ['x', 9.0, X1 - 0.4, true],
-      ['z', Z0 + 0.4, -9.0, true],
-      ['z', -4.0, CW_WEST_Z0 - 0.6, false]
+      ['z', Z0 + 0.4, -15.2, true],
+      ['z', -11.8, -9.0, true],
+      // -2.4, not -4.0: the debris chute's receiving hopper (buildOutboard) sits
+      // at z -4.0..-2.7 on this arris, and a guard post standing inside it is two
+      // objects in the same air 5 m from the hero3 lens.
+      ['z', -2.4, CW_WEST_Z0 - 0.6, false]
     ];
     for (var r = 0; r < RUNS.length; r++) {
       var run = RUNS[r];
@@ -2904,6 +3170,265 @@
     B.cyl('scaff', 0.024, 0.024, 1.3, -3.6, 0.65, Z0 + 0.34, 0, 0, 0, 7);
   }
 
+  // ========================================================= OUTBOARD WORKS ===
+  // WHAT AN INBOARD EYE CAN AND CANNOT SEE, AND WHY THIS FUNCTION EXISTS.
+  //
+  // From an eye E metres above a flat slab, every downward sightline meets that
+  // slab at E/tan(p). So from anywhere on this plate the ONLY things visible
+  // below plate level are things standing OUTSIDE the 54 x 42 m footprint - our
+  // own elevation, three floors of frame and 26 storeys of glazing, is occluded
+  // by the floor the camera is standing on, at every pose, always. That is the
+  // whole reason round 1 "could not see down", and no camera move fixes it:
+  // hero3 stands 450 mm inboard and still sees only a 450 mm sliver of its own
+  // building.
+  //
+  // The answer is geometry that hangs off the edge and continues down out of
+  // frame. A site has plenty of it and every piece doubles as a scale reference,
+  // because the eye knows how big a rubbish chute and a man-cage are:
+  //
+  //   * a debris chute, west edge - 22 m of bolted hoppers running down past the
+  //     slab, hazard yellow, dead in hero3's near foreground
+  //   * a suspended access cradle on the north elevation, on two wire ropes that
+  //     run from the floor above to well below the frame - the establishing
+  //     shot's scale figure
+  //   * hanging temporary services over the west arris, tied off at the edge beam
+  //   * a cantilevered loading platform in the north barrier gap, the one piece
+  //     that is ABOVE plate level and therefore visible from a standing eye
+  // ---------------------------------------------------------------------------
+  function buildOutboard(L, B, rng, N) {
+    var i, k;
+
+    // ---- 1. THE DEBRIS CHUTE ------------------------------------------------
+    // Hung off the west edge beam in the 5 m break in the guard rail, i.e. the
+    // one place a player can walk to the arris. Fourteen 1.6 m hoppers on bolted
+    // flanges, each one a little out of line with the last, because a chute is
+    // shackled together in mid-air by a man leaning over a handrail.
+    (function () {
+      var cx = X0 - 0.66, cz = -3.35;
+      var topY = 0.42;
+      // the receiving hopper, on the slab, and the frame that carries it
+      B.paint = 'plant';
+      B.box('plant', 1.30, 0.62, 1.30, cx + 0.42, topY + 0.62, cz, 0.02);
+      B.box('plant', 1.05, 0.40, 1.05, cx + 0.30, topY + 0.14, cz, 0.02);
+      B.paint = 'steel';
+      for (i = 0; i < 4; i++) {
+        var fx2 = cx + 0.42 + ((i % 2) ? 0.62 : -0.62);
+        var fz2 = cz + ((i < 2) ? 0.62 : -0.62);
+        B.tube('scaff', fx2, topY - 0.35, fz2, fx2, topY + 1.28, fz2, 0.024, 6);
+      }
+      // the tie back into the slab edge: two chains and a shackle plate
+      B.paint = 'steel';
+      B.box('struct', 0.26, 0.24, 0.030, X0 + 0.10, 0.16, cz, 0.005);
+      for (i = -1; i <= 1; i += 2) {
+        B.tube('struct', X0 + 0.10, 0.22, cz + i * 0.10,
+          cx + 0.30, topY + 1.02, cz + i * 0.42, 0.014, 4);
+      }
+      // the stack itself. r tapers very slightly and the axis wanders, so the
+      // silhouette against 176 m of air is not a ruled line.
+      B.paint = 'plant';
+      var px = cx, pz = cz, py = topY;
+      for (i = 0; i < 14; i++) {
+        var len = 1.60;
+        var nx2 = px + rng.range(-0.075, 0.055) - i * 0.012;
+        var nz2 = pz + rng.range(-0.075, 0.075);
+        var ny2 = py - len;
+        var r0 = 0.30 - i * 0.004;
+        B.tube('plant', px, py, pz, nx2, ny2, nz2, r0, 8);
+        // the bolted flange at every joint - the detail that makes a stack of
+        // cones read as a chute rather than as a pipe
+        B.cyl('plant', r0 + 0.055, r0 + 0.055, 0.075, nx2, ny2 + 0.03, nz2,
+          rng.range(-0.03, 0.03), 0, rng.range(-0.03, 0.03), 10);
+        // and a restraint chain back to the elevation every fourth section
+        if (i > 0 && i % 4 === 0) {
+          B.paint = 'steel';
+          B.tube('struct', nx2, ny2 + 0.10, nz2, X0 - 0.02, ny2 + 0.95, nz2 + 0.30, 0.011, 4);
+          B.paint = 'plant';
+        }
+        px = nx2; pz = nz2; py = ny2;
+      }
+      // hazard marking and a placard on the hopper
+      B.paint = 'flat';
+      for (i = 0; i < 3; i++) {
+        decalCard(B, CELL.hazard, cx + 0.42, topY + 0.30 + i * 0.42, cz - 0.66,
+          1.24, 0.24, 'z-', tint(0xffffff, 0), rng.range(-0.03, 0.03), 0.85);
+      }
+      signPlate(B, rng, CELL.danger, cx + 0.42, topY + 1.02, cz - 0.68, 0.42, 'z-', true);
+      B.paint = 'steel';
+    })();
+
+    // ---- 2. THE SUSPENDED ACCESS CRADLE ------------------------------------
+    // North elevation, hanging 3.1 m below the plate on two ropes that run from
+    // the floor above to 14 m below it. In the establishing shot this is the only
+    // object in the whole frame whose size the viewer already knows, which is what
+    // makes it a scale reference rather than another box.
+    (function () {
+      var gx = -16.4, gz = Z0 - 0.62, gy = -3.10;
+      var gw = 2.70, gd = 0.78, gh = 1.12;
+      B.paint = 'steel';
+      // the platform: a galvanised tray with a mesh floor and a kick plate
+      B.box('scaff', gw, 0.055, gd, gx, gy, gz, 0.008);
+      B.box('grate', gw - 0.06, 0.016, gd - 0.06, gx, gy + 0.038, gz, 0.004);
+      B.box('scaff', gw, 0.17, 0.030, gx, gy + 0.115, gz - gd * 0.5, 0.005);
+      B.box('scaff', gw, 0.17, 0.030, gx, gy + 0.115, gz + gd * 0.5, 0.005);
+      // the four corner standards and two rails all round
+      for (i = -1; i <= 1; i += 2) {
+        for (k = -1; k <= 1; k += 2) {
+          B.tube('scaff', gx + i * gw * 0.5, gy, gz + k * gd * 0.5,
+            gx + i * gw * 0.5, gy + gh, gz + k * gd * 0.5, 0.022, 6);
+        }
+        B.tube('scaff', gx - gw * 0.5, gy + gh, gz + i * gd * 0.5,
+          gx + gw * 0.5, gy + gh, gz + i * gd * 0.5, 0.020, 5);
+        B.tube('scaff', gx - gw * 0.5, gy + gh * 0.55, gz + i * gd * 0.5,
+          gx + gw * 0.5, gy + gh * 0.55, gz + i * gd * 0.5, 0.020, 5);
+        B.tube('scaff', gx + i * gw * 0.5, gy + gh, gz - gd * 0.5,
+          gx + i * gw * 0.5, gy + gh, gz + gd * 0.5, 0.020, 5);
+      }
+      // the two traction hoists, and the ropes THROUGH them: up to the floor
+      // above and down 14 m as tail rope, so the cradle hangs on a line that
+      // leaves the frame in both directions
+      B.paint = 'plant';
+      for (i = -1; i <= 1; i += 2) {
+        var hx = gx + i * (gw * 0.5 - 0.22);
+        B.box('plant', 0.34, 0.46, 0.30, hx, gy + 0.30, gz, 0.02);
+        B.paint = 'steel';
+        B.tube('struct', hx, gy + 0.52, gz, hx, SOFFIT_Y + FLOOR_H * 1.4, gz, 0.011, 4);
+        B.tube('struct', hx, gy + 0.10, gz, hx + rng.range(-0.25, 0.25),
+          gy - 14.0, gz + rng.range(-0.20, 0.20), 0.009, 4);
+        B.paint = 'plant';
+      }
+      // the outrigger beams it hangs from, up on the floor above, and their
+      // counterweights - a rope with nothing at the top of it is a rope
+      B.paint = 'steel';
+      for (i = -1; i <= 1; i += 2) {
+        var ox = gx + i * (gw * 0.5 - 0.22);
+        B.box('struct', 0.13, 0.16, 3.6, ox, SOFFIT_Y + FLOOR_H * 1.4 + 0.10,
+          Z0 + 1.20, 0.012);
+        B.paint = 'wall';
+        B.box('core_wall', 0.60, 0.42, 0.60, ox, SOFFIT_Y + FLOOR_H * 1.4 + 0.38,
+          Z0 + 2.70, 0.02);
+        B.paint = 'steel';
+      }
+      // a bucket and a coil of trailing cable on the deck
+      B.paint = 'plant';
+      B.cyl('plant', 0.16, 0.13, 0.30, gx + 0.85, gy + 0.19, gz, 0, 0, 0, 9);
+      B.paint = 'steel';
+      for (i = 0; i < 3; i++) {
+        B.tube('struct', gx - 0.9 + i * 0.06, gy + 0.08 + i * 0.03, gz - 0.2,
+          gx - 0.5 + i * 0.06, gy + 0.08 + i * 0.03, gz + 0.2, 0.014, 4);
+      }
+    })();
+
+    // ---- 3. HANGING SERVICES OVER THE WEST ARRIS ---------------------------
+    // A bundle of 32 A festoon and welder feeds and a 100 mm layflat, tied off at
+    // the edge beam and dropped to the floors below. Four thin verticals that
+    // start at the arris and end outside the frame: the cheapest depth cue on the
+    // whole level and it costs sixteen cylinders.
+    (function () {
+      var tz = -11.6;
+      B.paint = 'steel';
+      B.box('struct', 0.16, 0.13, 0.42, X0 + 0.06, -0.14, tz, 0.008);
+      var drops = [
+        [-0.30, 0.00, 22.0, 0.020],
+        [-0.42, 0.14, 19.5, 0.016],
+        [-0.36, -0.16, 25.0, 0.013],
+        [-0.55, 0.30, 16.0, 0.028]
+      ];
+      for (i = 0; i < drops.length; i++) {
+        var d2 = drops[i];
+        // over the arris first, then a near-vertical hang with a slow drift
+        B.tube('struct', X0 + 0.10, -0.10, tz + d2[1] * 0.4,
+          X0 + d2[0], -0.55, tz + d2[1], 0.012 + d2[3] * 0.3, 5);
+        var sy2 = -0.55, sxx = X0 + d2[0], szz = tz + d2[1];
+        for (k = 0; k < 5; k++) {
+          var seg2 = d2[2] / 5;
+          var ex2 = sxx + rng.range(-0.16, 0.06) - 0.05;
+          var ez2 = szz + rng.range(-0.12, 0.12);
+          B.tube('struct', sxx, sy2, szz, ex2, sy2 - seg2, ez2, d2[3], 4);
+          sxx = ex2; szz = ez2; sy2 -= seg2;
+        }
+      }
+      // and the tape wrap where the bundle passes the arris
+      B.paint = 'flat';
+      decalCard(B, CELL.tape, X0 - 0.20, -0.30, tz, 0.60, 0.20, 'z-',
+        tint(0xffffff, 0), 0.35, 0.9);
+      B.paint = 'steel';
+    })();
+
+    // ---- 4. THE CANTILEVERED LOADING PLATFORM ------------------------------
+    // THE ONE PIECE OF OUTBOARD GEOMETRY THAT STANDS ABOVE PLATE LEVEL, and
+    // therefore the only one that a standing eye anywhere on this floor can see
+    // at all. Everything else in this function hangs below the slab, where the
+    // floor the camera is standing on occludes it from every inboard pose.
+    //
+    // It goes in the 3.4 m break in the WEST edge protection at z -15.2..-11.8,
+    // which buildEdgeProtection leaves for it, and it projects 2.55 m into the
+    // void. The bearing is solved, not chosen: from the hero1 eye at (-7.9, 10.2)
+    // the platform sits at N38.9W, i.e. 9.6 degrees right of that framing's axis,
+    // 30 m out. Its rail top subtends -1.15 degrees against a graze line over the
+    // arris at -3.24 degrees, so the deck AND the rails are ABOVE the horizon of
+    // the slab the camera stands on - a platform with nothing under it, seen from
+    // inside, which is the cue hero1 has never had.
+    (function () {
+      var lz = -13.5;                       // centre along the run
+      var lx0 = X0, lx1 = X0 - 2.55;        // slab arris -> outboard end
+      var ly = -0.06;
+      var hw2 = 1.43;                       // half the run-wise width
+      B.paint = 'steel';
+      // two cantilever beams bearing on the slab and the edge beam
+      for (i = -1; i <= 1; i += 2) {
+        var bz2 = lz + i * 1.35;
+        B.box('struct', 5.4, 0.20, 0.14, X0 + 1.30, ly - 0.10, bz2, 0.012);
+        // the raking strut back under the slab
+        B.strut('struct', lx1 + 0.20, ly - 0.20, bz2, X0 + 0.30, -1.05, bz2, 0.09, 0.09);
+      }
+      // the deck: scaffold boards spanning the beams, one of them lifted
+      B.paint = 'ply';
+      for (i = 0; i < 5; i++) {
+        var dx3 = lx1 + 0.28 + i * 0.55;
+        B.boxR('timber', 0.50, 0.038, 2.86, dx3, ly + (i === 3 ? 0.07 : 0.0), lz,
+          rng.range(-0.012, 0.012), 0, i === 3 ? 0.10 : 0.0, 0.006);
+      }
+      // the handrail: three sides, and the fourth is where the load comes in
+      B.paint = 'steel';
+      var cn = [[lx1, -hw2], [lx1, hw2], [X0 - 0.20, hw2], [X0 - 0.20, -hw2]];
+      for (i = 0; i < 4; i++) {
+        B.tube('scaff', cn[i][0], ly, lz + cn[i][1], cn[i][0], ly + 1.12, lz + cn[i][1], 0.024, 7);
+      }
+      for (k = 0; k < 2; k++) {
+        var rh2 = k ? 1.10 : 0.58;
+        B.tube('scaff', cn[0][0], ly + rh2, lz + cn[0][1], cn[1][0], ly + rh2 - 0.02, lz + cn[1][1], 0.022, 6);
+        B.tube('scaff', cn[1][0], ly + rh2, lz + cn[1][1], cn[2][0], ly + rh2, lz + cn[2][1], 0.022, 6);
+        B.tube('scaff', cn[3][0], ly + rh2, lz + cn[3][1], cn[0][0], ly + rh2, lz + cn[0][1], 0.022, 6);
+      }
+      // netting round the outboard end and one side, and the toe board
+      B.paint = 'mesh';
+      B.add('debris_net', netPanel(2.86, 0.96, 0.19),
+        makeM(lx1 - 0.04, ly + 0.55, lz, 0, Math.PI * 0.5, 0));
+      B.add('debris_net', netPanel(2.35, 0.96, 0.61),
+        makeM((lx1 + X0) * 0.5, ly + 0.55, lz - hw2 - 0.04, 0, 0, 0));
+      B.paint = 'ply';
+      B.box('timber', 0.026, 0.16, 2.86, lx1 - 0.02, ly + 0.10, lz, 0.004);
+      // a stillage of glazing gaskets and a strop coil landed on it
+      B.paint = 'plant';
+      B.boxR('plant', 0.72, 0.52, 0.86, lx1 + 1.30, ly + 0.30, lz - 0.55, 0, 0.22, 0, 0.02);
+      B.paint = 'steel';
+      for (i = 0; i < 4; i++) {
+        B.tube('struct', lx1 + 0.75, ly + 0.06 + i * 0.035, lz + 0.75 + i * 0.03,
+          lx1 + 1.20, ly + 0.06 + i * 0.035, lz + 1.10 + i * 0.03, 0.018, 4);
+      }
+      B.paint = 'flat';
+      decalCard(B, CELL.hazard, lx1 - 0.05, ly + 0.10, lz, 2.80, 0.22, 'x-',
+        tint(0xffffff, 0), 0.01, 0.9);
+      signPlate(B, rng, CELL.label, (lx1 + X0) * 0.5, ly + 0.85, lz + hw2 + 0.02, 0.34, 'z', false);
+      B.paint = 'steel';
+      // walkable, and the rails stop the player walking off it
+      L.addCollider((lx1 + X0 - 0.20) * 0.5, ly - 0.06, lz, 1.20, 0.06, hw2, 'metal', true);
+      L.addCollider((lx1 + X0) * 0.5, ly + 0.55, lz - hw2 - 0.04, 1.20, 0.55, 0.07, 'metal');
+      L.addCollider((lx1 + X0) * 0.5, ly + 0.55, lz + hw2 + 0.04, 1.20, 0.55, 0.07, 'metal');
+      L.addCollider(lx1 - 0.04, ly + 0.55, lz, 0.07, 0.55, hw2, 'metal');
+    })();
+  }
+
   // ====================================================== PLASTIC SHEETING ===
   // Polythene hung off the soffit on a tube, snapping in the wind. It is the
   // level's only soft, moving, TRANSLUCENT thing, it is hung where the sun is
@@ -2955,8 +3480,17 @@
     // labelled "north edge" actually hung PERPENDICULAR to that edge with half
     // its width cantilevered over 176 m of air, and vice versa on the west. A
     // sheet spans ALONG the opening it covers.
+    // ---- AND WHY THEY ARE NOW HALF-HEIGHT ------------------------------------
+    // The six soffit-hung panels were 2.60-3.30 m tall on a 3.96 m opening, so
+    // each one closed its bay from 0.5 m off the slab to the ceiling. Six of them
+    // hung across the north and west apertures is a wall, and it is the wall the
+    // level's own premise is on the far side of - hero1 photographed zero sky,
+    // zero city and zero air. Polythene is hung at the HEAD as a wind break and
+    // it is shredded and tied back below chest height within a week; 1.80-2.20 m
+    // leaves the whole standing-eye band clear, which is the band you look
+    // through when you look down at a city 176 m below.
     var SHEETS = [
-      [X0 + 0.55, -13.2, Math.PI * 0.5, 4.6, 3.30, 0.0],
+      [X0 + 0.55, -13.2, Math.PI * 0.5, 4.6, 2.15, 0.0],
       // Moved from z -4.2 to +0.5. hero1 now looks WEST-NORTH-WEST straight
       // down the open run and its sightline leaves the plate at (-27, -4.6);
       // a 3.8 m sheet centred on -4.2 sat exactly over that vanishing point and
@@ -2964,11 +3498,11 @@
       // below it could be seen. At +0.5 it is 13 degrees off the axis, so the
       // opening reads AND the sheet is still backlit by a sun on the same
       // bearing - which is the condition the brief is actually asking for.
-      [X0 + 0.55, 0.5, Math.PI * 0.5, 3.8, 3.30, 1.7],
-      [-19.0, Z0 + 0.55, 0, 5.2, 3.30, 3.1],
-      [-3.2, Z0 + 0.55, 0, 4.0, 2.60, 4.6],
-      [12.5, Z0 + 0.55, 0, 4.6, 3.30, 5.9],
-      [X1 - 0.55, 5.0, -Math.PI * 0.5, 4.4, 3.30, 2.4],
+      [X0 + 0.55, 0.5, Math.PI * 0.5, 3.8, 2.05, 1.7],
+      [-19.0, Z0 + 0.55, 0, 5.2, 2.20, 3.1],
+      [-3.2, Z0 + 0.55, 0, 4.0, 1.80, 4.6],
+      [12.5, Z0 + 0.55, 0, 4.6, 2.10, 5.9],
+      [X1 - 0.55, 5.0, -Math.PI * 0.5, 4.4, 2.15, 2.4],
       // hung OFF the edge beam and falling past it, outboard of the slab so the
       // floor cannot occlude them
       [-8.4, Z0 - 0.34, 0, 3.4, 5.60, 0.9, -0.22],
@@ -3583,6 +4117,112 @@
   // because it is literally the same kind of building - and the transition
   // between "finished tower" and "raw frame" happens two floors below the
   // player, which is the most honest thing about the level.
+  // ---------------------------------------------------------------------------
+  // PERIMETER EDGE PROTECTION FOR A FLOOR THAT IS NOT THE WORKING FLOOR.
+  //
+  // Deliberately much cheaper than buildEdgeProtection: these runs are seen only
+  // from outside, at 60-110 m, where a coupler is a subpixel and the thing that
+  // matters is the LATTICE - a continuous line of verticals with two horizontals
+  // through them and an orange net over the bottom half. That is the silhouette
+  // an unfinished tower has, and its absence is why the establishing shot read as
+  // stacked plates rather than as a building.
+  //
+  // Runs are broken: two gaps per elevation, at a different place on each floor,
+  // so the stack does not read as a repeated decal. Sides alternate netted.
+  // ---------------------------------------------------------------------------
+  function perimeterGuard(B, rng, fy, floorIdx, x0, x1, z0, z1) {
+    var sides = [
+      ['x', x0 + 0.6, x1 - 0.6, z0 + 0.30],
+      ['x', x0 + 0.6, x1 - 0.6, z1 - 0.30],
+      ['z', z0 + 0.6, z1 - 0.6, x0 + 0.30],
+      ['z', z0 + 0.6, z1 - 0.6, x1 - 0.30]
+    ];
+    for (var s = 0; s < sides.length; s++) {
+      var sd = sides[s];
+      var horiz = sd[0] === 'x';
+      var a0 = sd[1], a1 = sd[2], fx = sd[3];
+      // two gaps, phased off the floor index so no two elevations match
+      var gA = M.lerp(a0, a1, ((floorIdx * 3 + s) % 7) / 7 + 0.04);
+      var gB = M.lerp(a0, a1, ((floorIdx * 5 + s * 2) % 7) / 7 + 0.52);
+      var n = Math.max(3, Math.round((a1 - a0) / 2.4));
+      var pitch = (a1 - a0) / n;
+      var prev = null;
+      B.paint = 'steel';
+      for (var i = 0; i <= n; i++) {
+        var a = a0 + i * pitch + (i === 0 || i === n ? 0 : rng.range(-0.22, 0.22));
+        var inGap = (Math.abs(a - gA) < 2.6) || (Math.abs(a - gB) < 2.1);
+        if (inGap) { prev = null; continue; }
+        var px = horiz ? a : fx, pz = horiz ? fx : a;
+        var ph = rng.range(1.06, 1.18);
+        B.box('scaff', 0.055, ph, 0.055, px, fy + ph * 0.5, pz,
+          rng.range(-0.05, 0.05), 0, rng.range(-0.05, 0.05), 0.008);
+        if (prev) {
+          for (var r = 0; r < 2; r++) {
+            var rh = r ? 1.06 : 0.56;
+            B.tube('scaff', prev[0], fy + rh, prev[1], px, fy + rh - rng.range(0, 0.03), pz,
+              0.023, 5);
+          }
+        }
+        prev = [px, pz];
+      }
+      // toe board along the whole side - it is what stops the plate edge being a
+      // mathematically clean line at 70 m
+      B.paint = 'ply';
+      if (horiz) B.box('timber', a1 - a0, 0.17, 0.026, (a0 + a1) * 0.5, fy + 0.10, fx - 0.03, 0.004);
+      else B.box('timber', 0.026, 0.17, a1 - a0, fx - 0.03, fy + 0.10, (a0 + a1) * 0.5, 0.004);
+      // ---- NETTING AT 60-110 m IS A BAND, NOT A NET -------------------------
+      // The first pass hung real alpha-tested netPanels here and the establishing
+      // frame printed a row of ORANGE TRIANGLES down every elevation, like
+      // bunting. That is a mip artefact and it was predictable: an alphaTest of
+      // 0.45 against a coverage that mips toward the net's own ~40% openness
+      // drops out in blotches exactly at the distance where the threshold and the
+      // average cross. A debris screen 80 m away has no threads in it at all - it
+      // is a continuous translucent orange band, and painting it as one is both
+      // correct and cheaper. The working floor's own nets stay alpha-tested,
+      // because there the threads are 4 m from the lens and they ARE the read.
+      //
+      // Two sides per floor, alternating down the stack, so the elevation has a
+      // light face and a dark face at every level.
+      if (((s + floorIdx) % 2) === 0) {
+        B.paint = 'paint';
+        var netPrev = B.tint;
+        // 0.62, not 0.90. A debris screen is orange but it is also a month of dust
+        // and UV; at full chroma four continuous bands down the elevation were the
+        // loudest thing in the establishing frame, which is not what they are for.
+        B.tint = tint(0xc26a2c, 0.62);
+        var seg = 3;
+        for (var q = 0; q < seg; q++) {
+          var qa = M.lerp(a0, a1, q / seg), qb = M.lerp(a0, a1, (q + 1) / seg);
+          var mid = (qa + qb) * 0.5;
+          if (Math.abs(mid - gA) < 3.0 || Math.abs(mid - gB) < 2.6) continue;
+          B.box('plant', horiz ? qb - qa : 0.022, 0.98, horiz ? 0.022 : qb - qa,
+            horiz ? mid : fx - 0.05, fy + 0.56, horiz ? fx - 0.05 : mid, 0.004);
+        }
+        // ---- AND THE FULL-HEIGHT PERIMETER SCREEN ---------------------------
+        // The last of the three reasons the tower read as stacked plates: even
+        // with a guard rail at every level, 2.5 m of the 3.6 m band between two
+        // floors was still open air. A tower under construction is WRAPPED - the
+        // screen runs floor to soffit on whichever elevations the wind and the
+        // neighbours demand - and a wrapped band is the single strongest signal
+        // that a stack of slabs is one building. Two elevations per floor, in
+        // three panels with the gaps left open so it is a screen being erected
+        // rather than a skin.
+        for (q = 0; q < seg; q++) {
+          var ra = M.lerp(a0, a1, q / seg), rb = M.lerp(a0, a1, (q + 1) / seg);
+          var rmid = (ra + rb) * 0.5;
+          if (((q + floorIdx) % 3) === 1) continue;      // a bay still open
+          if (Math.abs(rmid - gA) < 3.0) continue;
+          B.box('plant', horiz ? (rb - ra) * 0.94 : 0.020, FLOOR_H - SLAB_T - 1.25,
+            horiz ? 0.020 : (rb - ra) * 0.94,
+            horiz ? rmid : fx - 0.07, fy + 1.15 + (FLOOR_H - SLAB_T - 1.25) * 0.5,
+            horiz ? fx - 0.07 : rmid, 0.004);
+        }
+        B.tint = netPrev;
+      }
+      B.paint = 'steel';
+    }
+  }
+
   function buildShell(L, B, rng, N) {
     var i, k;
     var uO = Math.floor(rng.range(0, CITY_GRID)) / CITY_GRID;
@@ -3628,6 +4268,25 @@
       B.box('spandrel', 0.14, 0.34, Z1 - Z0 + 0.30, X1 + 0.09, by, 0, 0.02);
     }
     // ---- the raw frame floors between --------------------------------------
+    // ---- WHY THE ESTABLISHING SHOT PHOTOGRAPHED AS STACKED FLYING CARPETS ---
+    // MEASURED on lv_overview: five pale grey plates floating in the air with a
+    // 3.6 m band of nothing between each pair. Three things caused it and all
+    // three are geometry, not paint:
+    //
+    //   1. The plates went into the `slab` bucket, whose wear mode is the
+    //      power-floated FLOOR story - trowel polish BRIGHTENS - so 2200 m2 of
+    //      UNDERSIDE per floor was painted as a burnished top surface and lit
+    //      like a sheet of card. buildPlate solved exactly this for the working
+    //      floor by skinning its underside into the `soffit` bucket; the floors
+    //      below never got the same treatment.
+    //   2. Nothing occupied the band between two plates except four 860 mm
+    //      columns 9 m apart, which at 70 m are three pixels wide. A real
+    //      unfinished floor's perimeter is a continuous line of edge protection
+    //      with orange debris netting on it - a horizontal lattice at every
+    //      level, which is precisely what turns a stack of plates into a
+    //      BUILDING.
+    //   3. The columns were bevelled boxes, so nothing in the whole elevation
+    //      had a chamfer facet to catch the low sun.
     B.paint = 'wall';
     for (k = 1; k <= RAW_FLOORS; k++) {
       var fy = -k * FLOOR_H;
@@ -3636,14 +4295,28 @@
       B.box('slab', X1 - X0, 0.70, 0.46, 0, fy - 0.37, Z1 - 0.23, 0.04);
       B.box('slab', 0.46, 0.70, Z1 - Z0, X0 + 0.23, fy - 0.37, 0, 0.04);
       B.box('slab', 0.46, 0.70, Z1 - Z0, X1 - 0.23, fy - 0.37, 0, 0.04);
+      // (1) the underside, as a SOFFIT - see the note above
+      B.paint = 'soffit';
+      B.box('soffit', X1 - X0 - 0.04, 0.06, Z1 - Z0 - 0.04, 0, fy - SLAB_T - 0.03, 0, 0.02);
+      // and its downstand beams on the column lines, so the underside has relief
+      for (i = 0; i < COLX.length; i++) {
+        if (COLX[i] > CORE_X0 - 0.5 && COLX[i] < CORE_X1 + 0.5) continue;
+        B.box('soffit', 0.42, 0.52, Z1 - Z0 - 0.2, COLX[i], fy - SLAB_T - 0.26, 0, 0.03);
+      }
+      B.paint = 'wall';
       for (i = 0; i < COLX.length; i++) {
         for (var j = 0; j < COLZ.length; j++) {
           if (COLX[i] > CORE_X0 - 1 && COLX[i] < CORE_X1 + 1 &&
               COLZ[j] > CORE_Z0 - 1 && COLZ[j] < CORE_Z1 + 1) continue;
-          B.box('column', COL_W, FLOOR_H - SLAB_T, COL_W, COLX[i],
-            fy - SLAB_T - (FLOOR_H - SLAB_T) * 0.5, COLZ[j], 0.04);
+          B.add('column', chamfPrism(COL_W, FLOOR_H - SLAB_T, 0.034),
+            makeM(COLX[i], fy - SLAB_T - (FLOOR_H - SLAB_T) * 0.5, COLZ[j]));
         }
       }
+      // (2) the perimeter edge protection, on every raw floor. Posts at 2.4 m,
+      // two rails and a netted panel over the lower half: a horizontal lattice
+      // at every level, which is what a tower under construction looks like from
+      // outside and the one thing that fills the band between two plates.
+      perimeterGuard(B, rng, fy, k, X0, X1, Z0, Z1);
     }
     // the core continuing down as a solid shaft
     B.box('core_wall', CORE_X1 - CORE_X0, (RAW_FLOORS + 1) * FLOOR_H, CORE_Z1 - CORE_Z0,
@@ -3668,8 +4341,8 @@
           if (COLX[i] > CORE_X0 - 1 && COLX[i] < CORE_X1 + 1 &&
               COLZ[j2] > CORE_Z0 - 1 && COLZ[j2] < CORE_Z1 + 1) continue;
           if (k > 1 && rng.bool(0.35)) continue;       // the pour is still going
-          B.box('column', COL_W, FLOOR_H - SLAB_T, COL_W, COLX[i],
-            uy + SLAB_T + (FLOOR_H - SLAB_T) * 0.5, COLZ[j2], 0.04);
+          B.add('column', chamfPrism(COL_W, FLOOR_H - SLAB_T, 0.034),
+            makeM(COLX[i], uy + SLAB_T + (FLOOR_H - SLAB_T) * 0.5, COLZ[j2]));
         }
       }
       // formwork tables and edge protection on the floor above
@@ -3679,7 +4352,72 @@
         if (tx > CORE_X0 && tx < CORE_X1 && tz > CORE_Z0 && tz < CORE_Z1) continue;
         B.cyl('scaff', 0.030, 0.030, 2.6, tx, uy + SLAB_T + 1.3, tz, 0, 0, 0, 6);
       }
+      // the same perimeter lattice as the floors below: it is the top edge of the
+      // establishing shot's silhouette, and a bare arris there is a ruled line
+      perimeterGuard(B, rng, uy + SLAB_T, 6 + k, X0, X1, Z0, Z1);
     }
+
+    // ---- MATERIAL ON THE FLOORS BELOW ---------------------------------------
+    // The last reason the stack read as empty plates: from outside you look
+    // straight through a 3.6 m gap and see nothing but four columns and the far
+    // elevation. A real floor two below the pour is the laydown - block packs,
+    // shrink-wrapped pallets, stillages, a shored bay of props - and every one of
+    // those is a mass that occludes, catches the low sun on its top face and
+    // throws a shadow across the plate behind it. Placed on a coarse lattice with
+    // per-item jitter rather than at random, so no two floors read alike and
+    // nothing lands on a column.
+    for (k = 1; k <= RAW_FLOORS; k++) {
+      var ly = -k * FLOOR_H;
+      for (i = 0; i < 22; i++) {
+        var gx2 = M.lerp(X0 + 4, X1 - 4, ((i * 7 + k * 3) % 11) / 10) + rng.range(-1.6, 1.6);
+        var gz2 = M.lerp(Z0 + 4, Z1 - 4, ((i * 5 + k * 4) % 9) / 8) + rng.range(-1.6, 1.6);
+        if (gx2 > CORE_X0 - 1.5 && gx2 < CORE_X1 + 1.5 &&
+            gz2 > CORE_Z0 - 1.5 && gz2 < CORE_Z1 + 1.5) continue;
+        var kind2 = (i + k) % 4;
+        var yaw2 = rng.range(0, 1.57);
+        if (kind2 === 0) {
+          // banded block pack on a pallet
+          B.paint = 'block';
+          var bw = rng.range(1.0, 1.35), bh = rng.range(0.9, 1.6);
+          B.boxR('blockwork', bw, bh, bw * rng.range(0.7, 1.0), gx2, ly + bh * 0.5, gz2,
+            0, yaw2, 0, 0.02);
+          B.paint = 'ply';
+          B.boxR('timber', bw + 0.1, 0.13, bw + 0.1, gx2, ly + 0.065, gz2, 0, yaw2, 0, 0.01);
+        } else if (kind2 === 1) {
+          // stillage / stacked pallets
+          B.paint = 'ply';
+          var ph3 = rng.range(0.5, 1.2);
+          B.boxR('timber', rng.range(1.1, 1.4), ph3, rng.range(0.9, 1.2),
+            gx2, ly + ph3 * 0.5, gz2, 0, yaw2, 0, 0.015);
+        } else if (kind2 === 2) {
+          // a shored bay: three props, which is the thinnest tall thing up there
+          B.paint = 'steel';
+          for (var pp = 0; pp < 3; pp++) {
+            B.cyl('scaff', 0.030, 0.030, FLOOR_H - SLAB_T - 0.1,
+              gx2 + (pp - 1) * 0.7, ly + (FLOOR_H - SLAB_T) * 0.5, gz2 + rng.range(-0.5, 0.5),
+              0, 0, 0, 6);
+          }
+        } else {
+          // a bundle of loose bar on timber bearers: four metres of thin
+          // horizontal silhouette, which is the shape nothing else up there has
+          B.paint = 'steel';
+          var bl = rng.range(3.2, 5.0);
+          for (var qb2 = 0; qb2 < 5; qb2++) {
+            B.tube('rebar',
+              gx2 - Math.cos(yaw2) * bl * 0.5, ly + 0.14 + (qb2 % 2) * 0.05,
+              gz2 + Math.sin(yaw2) * bl * 0.5,
+              gx2 + Math.cos(yaw2) * bl * 0.5, ly + 0.14 + (qb2 % 2) * 0.05,
+              gz2 - Math.sin(yaw2) * bl * 0.5, 0.015, 4);
+          }
+          B.paint = 'ply';
+          B.boxR('timber', 0.10, 0.10, 0.55, gx2 - Math.cos(yaw2) * bl * 0.36,
+            ly + 0.05, gz2 + Math.sin(yaw2) * bl * 0.36, 0, yaw2, 0, 0.008);
+          B.boxR('timber', 0.10, 0.10, 0.55, gx2 + Math.cos(yaw2) * bl * 0.36,
+            ly + 0.05, gz2 - Math.sin(yaw2) * bl * 0.36, 0, yaw2, 0, 0.008);
+        }
+      }
+    }
+    B.paint = 'wall';
     // ---- the core, continuing up ---------------------------------------------
     // It is the tallest solid mass in the level and it stands dead centre of the
     // establishing shot, where the first cut printed it as a blank white cuboid
@@ -3819,7 +4557,9 @@
     // paper - and no published camera bearing is axis-aligned either.
     var GRID_A = 0.0, GRID_B = 1.22;
     var BLK = BLK_M;
-    var placed = [];
+    // Footprints already claimed. Seeded with every hand-placed neighbour BEFORE
+    // the grid runs - see the note on NEAR below for why the order matters.
+    var placed = [[-186, -138]];        // the unfinished sibling with its crane
 
     function blockAt(gx, gz, ang, seed) {
       var ca = Math.cos(ang), sa = Math.sin(ang);
@@ -3853,6 +4593,80 @@
       cityBlock(B, rg, wx, wz, yaw, w, d, h, N);
     }
 
+    // ---- THE HAND-PLACED NEIGHBOURS, AND WHY THEY ARE DECLARED HERE ---------
+    // Four towers close enough to have parallax and to be genuinely LIT rather
+    // than hazed, plus four more that exist for one reason: to make the 176 m
+    // drop legible from INSIDE the plate.
+    //
+    // THE MEASUREMENT THAT DESIGNED THE SECOND FOUR. From an eye 1.72 m above a
+    // flat slab standing 24 m inboard of the west arris, the shallowest sightline
+    // that can leave the building grazes that arris at a slope of 1/14 - so
+    // through a west opening NOTHING below y = -(d - 24)/14 is visible at all. At
+    // 260 m that floor is -17 m; at the 600 m far plane it is -41 m. The city's
+    // roofs sit between -176 and -24 m and the rim rings top out at -24, so every
+    // one of them is BELOW the line and the openings could only ever have
+    // contained sky. Which is exactly what hero1 photographed: blank apertures
+    // and no drop, in the frame the whole level is built to deliver.
+    //
+    // Geometry says the fix is not "see further down", it is "see something at
+    // your own height with a gulf in front of it". A neighbour whose top stands
+    // 14-46 m ABOVE this plate, 250-270 m out, fills an opening from the graze
+    // line to well above the horizon: its upper floors read at our eye level, its
+    // base dissolves into haze below us, and the void between is the drop. That is
+    // how a real 47th-floor photograph says 176 m, and it costs four blocks.
+    //
+    // All four new ones sit off the sun's azimuth (N48.5W) by more than their own
+    // half-width, so this file's existing rule - nothing eclipses the key inside
+    // 200 m - still holds, and all four are past 240 m.
+    //
+    // Declared BEFORE the grid loops on purpose. Pushed to `placed` only after the
+    // grid had been laid out, a hand-placed tower could stand inside a grid block,
+    // because blockAt's 33 m rejection test can only see what is already in the
+    // list. Nine hand-placed towers is nine chances of two buildings occupying the
+    // same air - an instant-fail item - and it applied to the original five as
+    // much as to the four added here.
+    var NEAR = [
+      { x: 95, z: -175, w: 42, d: 36, h: 244, glass: true, name: 'glassTowerNE' },
+      { x: 34, z: -124, w: 34, d: 30, h: 152, glass: true, name: 'glassTowerN' },
+      { x: 148, z: -62, w: 38, d: 34, h: 196, glass: false, name: 'towerE' },
+      { x: -212, z: -152, w: 46, d: 42, h: 206, glass: false, name: 'darkTowerNW' },
+      { x: -62, z: 132, w: 38, d: 34, h: 178, glass: false, name: 'towerSW' },
+      // in the west openings, seen from hero1 and THROUGH the curtain wall from
+      // hero2 - bearing N83W from the plate, 35 degrees off the sun
+      { x: -268, z: 40, w: 44, d: 38, h: 214, glass: true, name: 'towerW' },
+      // north-west, 21 degrees right of the hero1 axis: the tallest of the four,
+      // and the one whose top crosses the horizon line inside a west opening
+      { x: -125, z: -215, w: 46, d: 40, h: 222, glass: false, name: 'towerNW2' },
+      // due north, filling the right-hand third of hero1 through the north bays
+      { x: -40, z: -262, w: 36, d: 32, h: 190, glass: true, name: 'towerN2' },
+      // south-west, for hero2 and hero3, which both look that way
+      { x: -215, z: 150, w: 42, d: 36, h: 198, glass: false, name: 'towerSW2' },
+      // ---- AND THE THREE AT OUR OWN HEIGHT, 150-180 m OUT -------------------
+      // MEASURED after the first pass: with the glazing and the sheeting made
+      // transparent, hero1's west openings finally showed something - and what
+      // they showed was pale haze with a scatter of window lights 250-270 m away
+      // at 20% of the frame's value range. Nothing in the aperture had mass, so
+      // the frame said "there is fog outside", not "there is a quarter of a
+      // kilometre of air under you".
+      //
+      // What says it is a building whose ROOF is at your eye level and whose base
+      // is cut off by your own floor line: the eye reads "that is a 170 m tower
+      // and I am looking at the top of it" instantly. At 150-180 m the haze is
+      // only 17-20% (density 0.0019, e-fold 380, computed at this altitude), so
+      // these three keep their facades, their window scale, their parapets and
+      // their roof plant - i.e. they are the only city in the level that arrives
+      // as ARCHITECTURE rather than as a value ramp.
+      //
+      // Heights are set so each roof deck lands within a couple of metres of this
+      // plate: 174, 178 and 172 against our 176. All three sit more than 15
+      // degrees off the sun's bearing so the glow band under the soffit edge - the
+      // best thing in hero1 - survives between them.
+      { x: -60, z: -140, w: 40, d: 34, h: 174, glass: false, name: 'roofNW' },
+      { x: -160, z: -22, w: 38, d: 42, h: 178, glass: true, name: 'roofW' },
+      { x: 0, z: -170, w: 36, d: 38, h: 172, glass: false, name: 'roofN' }
+    ];
+    for (i = 0; i < NEAR.length; i++) placed.push([NEAR[i].x, NEAR[i].z]);
+
     // Jitter is +/-5 m, not +/-8: the roads in the ground texture are 15 m wide
     // on a 56 m module, so a footprint of up to 40 m plus 8 m of wander used to
     // stand a tower in the middle of a carriageway.
@@ -3867,12 +4681,7 @@
       }
     }
 
-    // ---- the near neighbours ------------------------------------------------
-    // Four towers close enough to have parallax and to be genuinely LIT rather
-    // than hazed. The first is the level's "curtain wall that reflects the
-    // sunset": it stands north-east of us, so the face we see is its WEST one,
-    // which is the face the sun is on.
-    //
+    // ---- the near neighbours, declared above --------------------------------
     // NOTHING TALL SITS ON THE SUN'S AZIMUTH INSIDE 200 m, and that is a rule
     // rather than an accident: the sun arrives from bearing (-0.78, -0.62), and
     // the first layout put a 208 m tower 125 m away on exactly that line. Its
@@ -3880,17 +4689,9 @@
     // the level and its own key in every framing that looks out. The dark tower
     // is now 258 m out, where it is a silhouette IN the glow instead of a lid
     // over it.
-    var NEAR = [
-      { x: 95, z: -175, w: 42, d: 36, h: 244, glass: true, name: 'glassTowerNE' },
-      { x: 34, z: -124, w: 34, d: 30, h: 152, glass: true, name: 'glassTowerN' },
-      { x: 148, z: -62, w: 38, d: 34, h: 196, glass: false, name: 'towerE' },
-      { x: -212, z: -152, w: 46, d: 42, h: 206, glass: false, name: 'darkTowerNW' },
-      { x: -62, z: 132, w: 38, d: 34, h: 178, glass: false, name: 'towerSW' }
-    ];
     for (i = 0; i < NEAR.length; i++) {
       var t = NEAR[i];
       cityBlock(B, rng, t.x, t.z, rng.range(-0.08, 0.08), t.w, t.d, t.h, N, t.glass ? 1 : 0);
-      placed.push([t.x, t.z]);
     }
 
     // ---- an unfinished sibling with its own crane ---------------------------
@@ -4484,7 +5285,16 @@
           // transparent sort handles them and no manual ordering is needed.
           if (key === 'sheeting') {
             m.transparent = true;
-            m.opacity = 0.62;
+            // ---- 0.34, NOT 0.62 ------------------------------------------
+            // Same measurement as the glazing. At 0.62 over a 0.62-value albedo
+            // a hung sheet is a 60%-opaque pale board, and six of them were
+            // hung across the north and west openings - i.e. across the only
+            // apertures through which this level's 176 m drop can be seen at
+            // all. Site polythene is 250 micron and you can read a hand through
+            // it; at 0.34 the sunset, the near towers and the city below arrive
+            // through the sheet with the creases modulating them, which is both
+            // what polythene does and what the openings are for.
+            m.opacity = 0.34;
             m.depthWrite = false;
             m.side = THREE.DoubleSide;
           }
@@ -4614,20 +5424,42 @@
     this._glazeOk = !!tex;
     var m = new THREE.MeshStandardMaterial({
       map: tex, color: 0xffffff,
-      roughness: tex ? 1.0 : 0.12, metalness: 0.0,
+      // 0.90 x the coverage map, so clean vision glass lands near 0.21 instead
+      // of 0.17 - still a mirror, but with a measurable roughness gradient
+      // across the dirt so the reflected sunset breaks up instead of sliding.
+      roughness: tex ? 0.90 : 0.12,
+      // ---- 0.16, NOT 0.0 ---------------------------------------------------
+      // A dielectric at metalness 0 has F0 = 0.04, so at 2.0 env intensity the
+      // pane returned 8% of the sky and NOTHING of the sunset: the one asset the
+      // roster brief singles out ("a glass curtain-wall section that reflects
+      // the sunset") had no reflection in it at all. Real vision glass carries a
+      // low-e coating and returns 15-30% at normal incidence and far more at
+      // grazing, which is a tinted-metal response, not a bare dielectric one.
+      metalness: 0.16,
       roughnessMap: _glazeRough || null,
       normalMap: _glazeNorm || null,
       alphaMap: _glazeAlpha || null,
-      // 0.86 with the alphaMap on top: the clean glass reads at ~0.09 coverage
-      // (a hole with a reflection in it) and the dirty parts at ~0.82 (a pale
-      // scattering film). One number cannot do both, which is the whole reason
-      // the first pass photographed as blank paper.
-      transparent: true, opacity: 0.86, depthWrite: false,
+      // ---- 0.58, NOT 0.86.  THE BLANK-RECTANGLE BUG ------------------------
+      // MEASURED: on hero1 the three west openings, the vanishing point and the
+      // whole left third of hero2 were pale cream rectangles, and the reason was
+      // arithmetic rather than art. 0.86 x a coverage floor of 0.17 is an
+      // effective 0.15 for the clean glass - except the ALBEDO was 0.79 white
+      // and the pane is lit by the same sky it is standing in front of, so the
+      // 15% it did contribute read at the same value as the sky behind it and
+      // the extra 85% of the sky was blocked. A curtain wall you cannot see the
+      // city through cannot express a 176 m drop, and hero1's entire premise is
+      // on the far side of it.
+      //
+      // 0.58 x a 0.239 floor = 0.139 for clean glass and ~0.52 for the filthy
+      // parts, against a much darker albedo. What arrives now is the sunset, the
+      // near towers and the city THROUGH the pane, modulated by the streaks,
+      // suction rings and slurry ON it - which is what a site facade is.
+      transparent: true, opacity: 0.58, depthWrite: false,
       side: THREE.DoubleSide, vertexColors: true,
-      envMapIntensity: 2.0
+      envMapIntensity: 2.6
     });
     if (_glazeNorm && m.normalScale) m.normalScale.set(0.55, 0.55);
-    if (!tex) { m.opacity = 0.34; }
+    if (!tex) { m.opacity = 0.26; }
     this._anisotropy(tex, 8);
     this._anisotropy(_glazeAlpha, 8);
     this._anisotropy(_glazeNorm, 8);
@@ -4732,6 +5564,41 @@
         // entire lower two thirds dissolved into featureless cream and hero3
         // photographed a white void with a handrail in front of it.
         ctx.sky.setFog({
+          // ===================================================================
+          // THE DROPPED KEY.  THIS ONE LINE IS THE MEASUREMENT OF THIS ROUND.
+          //
+          // Every comment in this block discusses `density` at length - "0.0019,
+          // not 0.0026", "the ramp (density 0.0019, scale height 380) was already
+          // right and is untouched", and three solved path opacities quoted to the
+          // per cent - and the key was never in the object. So for two rounds the
+          // level has been running on sky.js's DEFAULT density of 0.0150, which is
+          // the market's street fog: EIGHT TIMES thicker than every number in
+          // these comments assumes.
+          //
+          // What that actually did, computed at this level's own baseY (-174) and
+          // e-folding height (380 m), where the density at plate level is
+          // 0.0150 * exp(-174/380) = 0.00949 per metre:
+          //
+          //     40 m across the plate      od 0.380 -> 32% haze   (believed 5%)
+          //     24 m out through an opening od 0.228 -> 20%
+          //     260 m to a near tower      od 2.47  -> capped at 52%
+          //
+          // A THIRD OF A HAZE LAYER ACROSS THE ROOM. That is why the slab
+          // photographed as a flat brown expanse with no detail at 10 m, why
+          // hero3's city was one sepia value, and why the thing that sent me
+          // looking: after the glazing and the sheeting were finally made
+          // transparent, hero1's west openings STILL came back as blank cream at
+          // sRGB 210 with a 206 m tower standing dead centre 260 m away. Sampled
+          // a vertical profile through the aperture and there was no roofline in
+          // it at all - because 52% of every pixel out there was inscatter, and
+          // the inscatter at this hour is 2.1 linear against a shaded facade at
+          // 0.05. Twenty-seven per cent of that is survivable; fifty-two is not.
+          //
+          // At the authored 0.0019 the three solved paths land where the comments
+          // below say they do (4.7% / 26.8% / 37%), the near field goes crisp, and
+          // a tower across a gulf becomes a dark mass in a burning aperture
+          // instead of part of the aperture.
+          density: 0.0019,
           baseY: CITY_Y + 2.0,
           // 380, not 260. A wider e-folding height is how you make the FAR rim
           // reach the cap without also erasing the near city - raising the cap
@@ -4772,13 +5639,62 @@
           // much forward scatter into those frames that the city 176 m below
           // came back as featureless warm cream. Forward scatter is the depth
           // cue here, not the subject.
-          mieG: 0.55,
-          glowGain: 0.85,
-          // 0.34, not 0.24. With the cap down at 0.52 the haze has to do its
-          // depth work through CHROMA rather than through opacity, which is the
-          // physically right division anyway: distance eats saturation long
-          // before it eats luminance.
-          desaturate: 0.34
+          // ---- 0.46 / 0.50, NOT 0.55 / 0.85 --------------------------------
+          // THE MEASUREMENT THAT FOUND THIS. After the glazing and the sheeting
+          // were made transparent, hero1's three west openings finally had a line
+          // of sight through them - and they still photographed as blank cream.
+          // Sampled: opening mean sRGB 203 with p95 224 against a near floor at
+          // 67 and a soffit at 68, with a 222 m tower 253 m away, three towers at
+          // 150-180 m and a lit skyline all inside that aperture and NONE of them
+          // resolving. The buildings were not missing; they were being erased.
+          //
+          // The cause is the sunward lobe, and the arithmetic is in sky.js: the
+          // inscatter weight is w = clamp((hg - 0.42) * 0.34 * glowGain, 0, 1.6),
+          // and when w exceeds 1 the shader ADDS 0.75 x (w - 1) more of the SOLAR
+          // colour on top. hero1's axis is within 4 degrees of the sun's own
+          // bearing, so hg is at its maximum, and at mieG 0.55 / glowGain 0.85 the
+          // 26% of haze between the lens and a tower 253 m out was carrying
+          // roughly 1.4 of added solar radiance - more than the tower's whole
+          // shaded facade. Twenty-six per cent of a bright enough inscatter erases
+          // a hundred per cent of anything.
+          //
+          // A narrower lobe at half the gain keeps the glow band under the soffit
+          // edge (which is the best thing in the frame and is a NARROW band, so it
+          // wants a narrow lobe anyway) and hands the rest of the aperture back to
+          // the geometry that is standing in it.
+          // Both of these were tuned against a haze layer eight times too thick,
+          // so they were compensating for the wrong thing. Probed at the old
+          // density they moved the aperture by 1.5 sRGB out of 210 - which is what
+          // sent me to the density in the first place. Kept a little under the
+          // originals: with a correct layer the sunward lobe is doing real work
+          // again and does not need to shout.
+          mieG: 0.52,
+          glowGain: 0.70,
+          // 0.24, not 0.34. `desaturate` pulls toward GREY on the way to the
+          // haze, and the measured result on hero3 - which looks 100 degrees
+          // AWAY from the sun, at a city filling 60% of the frame - was a single
+          // sepia value across the whole image: slab, near towers, far towers
+          // and street all one orange-brown, no cool anywhere. The roster pins
+          // this level "orange / GLASS BLUE" and the blue half was absent.
+          // Chroma is now shifted by the two-lobe tint below instead of being
+          // bleached out first.
+          desaturate: 0.24,
+          // ---- THE TWO-LOBE TINT, WHICH IS WHAT THIS LEVEL IS FOR -----------
+          // sky.js documents this as the lever for "a low sun paired with heavy
+          // air", says every roster level in that condition hits it, and notes
+          // that no existing caller sets tintAmount - so it is inert everywhere
+          // else and market/harbor cannot move.
+          //
+          // The physics it buys: at a 9-degree sun the SUNWARD haze is 2400 K
+          // scattered sunlight and the ANTI-SUN haze is 12000 K skylight. That
+          // one fact is the entire "orange / glass blue" palette. hero1 and
+          // hero2 look within 30 degrees of the sun and keep the burning colour;
+          // hero3 and the establishing shot look away from it and now get cool
+          // blue air, which is what makes 176 m of it read as DEPTH rather than
+          // as a brown wash. It is luminance-preserving by contract, so no
+          // coverage or exposure metric can move.
+          tint: [0.30, 0.41, 0.66],
+          tintAmount: 0.46
         });
       }
       // 78 m of cascade over a 68 m plate is the whole building for an
@@ -4809,6 +5725,7 @@
     await GAME.yieldFrame();
 
     stage('edge', function () { buildEdgeProtection(self, B, rng, N); });
+    stage('outboard', function () { buildOutboard(self, B, rng, N); });
     stage('sheeting', function () { self.sheets = buildSheeting(self, B, rng, N); });
     stage('scaffold', function () { self.anchors.scaffold = buildScaffold(self, B, rng, N); });
     stage('hoist', function () {
@@ -4843,6 +5760,7 @@
     _boxCache.forEach(function (g) { g.dispose(); }); _boxCache.clear();
     _cylCache.forEach(function (g) { g.dispose(); }); _cylCache.clear();
     _quadCache.forEach(function (g) { g.dispose(); }); _quadCache.clear();
+    _prismCache.forEach(function (g) { g.dispose(); }); _prismCache.clear();
     return this;
   };
 
@@ -5620,10 +6538,25 @@
           // read as black towers with white confetti on them - the emissive
           // windows outvalued their own facades. A face split is a RATIO; making
           // the dark end darker buys the ratio at the cost of the picture.
-          // A roof is neither: at 9.2 degrees it takes sin(9.2) = 0.16 of the
-          // key but it is pale membrane and gravel, so it sits between the two.
+          // ---- A ROOF IS THE DARKEST SURFACE IN A CITY -----------------------
+          // It was 0.78, i.e. brighter than a shaded facade, on the theory that
+          // roof membrane is pale. Two things were wrong with that. Geometrically
+          // a horizontal plane takes sin(9.2) = 0.16 of a 9-degree key, which is a
+          // THIRD of what a vertical face on the sun's bearing takes, not one and
+          // a half times a shaded one. And materially a commercial roof is
+          // bitumen, ballast and grey gravel at an albedo of 0.10-0.15 - it is the
+          // darkest large surface in any city, which is why every aerial
+          // photograph of a downtown is dark roofs separated by bright streets.
+          //
+          // It only became visible when the fog density was fixed (see the
+          // setFog note): before that, everything past 200 m was half inscatter
+          // and no roof resolved at all. hero3 looks DOWN at a hundred of them,
+          // and at 0.78 they photographed as pale flat cards floating between the
+          // towers - the one thing that could make a city seen from 176 m up read
+          // as a model. At 0.38 the roofs go dark, the lit facades and the street
+          // lighting become the bright notes, and the plan of the city reads.
           var keyMul = M.lerp(0.55, 1.60, lam);
-          keyMul = M.lerp(keyMul, 0.78, M.saturate(Math.abs(ny)));
+          keyMul = M.lerp(keyMul, 0.38, M.saturate(Math.abs(ny)));
           vv *= keyMul;
           if (mode === 'glasscity') {
             // A fully glazed tower is a MIRROR of the sunset: its lit faces are
@@ -5722,7 +6655,16 @@
           // yards, car parks, dust - so the albedo climbs from the moment the
           // modelled city stops.
           var subs = M.smoothstep(300, 620, rg2);
-          vg *= 1 + subs * 1.15;
+          // 0.72, not 1.15 - and the hills below the same. Both numbers were
+          // compensation for a haze layer that has since been fixed (see the
+          // density note in setFog): at the old effective density everything past
+          // 250 m sat AT the 0.52 opacity cap, so less than half of any albedo out
+          // there survived and the outskirts had to be painted six times too
+          // bright to register at all. With a correct layer the same ground keeps
+          // 62-74% of itself, and 6.2x albedo photographed as a pale checkered
+          // plateau behind the towers - measured on hero3, where it was the only
+          // flat untextured surface left in the frame.
+          vg *= 1 + subs * 0.72;
           // ---- the far hills ---------------------------------------------------
           // Ground, not city, and MUCH paler. The fog colour looking below the
           // horizon away from the sun measured 0.0066 linear - effectively
@@ -5732,8 +6674,13 @@
           // by a factor of three is what makes the band between the city and the
           // rim read as terrain instead of as nothing.
           var hill = M.smoothstep(380, 700, rg2);
-          vg *= 1 + hill * 1.9;
-          r = vg * (1.00 - hill * 0.10); g = vg * 0.99; b = vg * (0.94 + hill * 0.26);
+          vg *= 1 + hill * 0.95;
+          // and pushed further toward blue as it goes: land 500 m away and 100 m
+          // below you, on the far side of the sky from a 9-degree sun, is lit by
+          // nothing but the blue half of the dome. That chroma shift is what makes
+          // it read as distance now that opacity is no longer doing the work.
+          r = vg * (1.00 - hill * 0.22); g = vg * (0.99 - hill * 0.04);
+          b = vg * (0.94 + hill * 0.42);
         } else if (mode === 'cityplant') {
           // Rooftop plant. Hundreds of metres up, lit rather than shadowed.
           var vp = 0.62 + (noise.fbm2(x * 0.03 + 5, z * 0.03 - 2, 3) * 0.5 + 0.5) * 0.36;
@@ -6063,8 +7010,18 @@
     // through the open north edge. Dark tube, bright end - and the two open lift
     // shafts on the right, each with a worklight a metre down it, are the only
     // things in the level that are lit from BELOW.
+    // ---- AND WHY IT NOW LOOKS DOWN INSTEAD OF UP ---------------------------
+    // The aim point was 2.30 m at z -19, i.e. 0.64 m ABOVE the eye: the framing
+    // pitched UP by 1.5 degrees and put the lobby soffit across the top third
+    // while the one bright thing in the composition - the sunlit strip of plate
+    // between the lobby mouth at z -10 and the north arris at z -21 - sat at the
+    // very bottom of the aperture. Solved rather than nudged: a point (11, -15)
+    // out on the plate receives the key, because tracing back toward the sun from
+    // there clears the north edge beam at 9.05 m with 1.47 m to spare. Aiming at
+    // 0.55 m puts that lit strip on the frame's own centre line, which is what
+    // "dark tube, bright end" means.
     var interior = pose((LOB_X0 + LOB_X1) * 0.5 - 0.20, 1.66, 6.8,
-      (LOB_X0 + LOB_X1) * 0.5 - 0.75, 2.30, -19.0);
+      (LOB_X0 + LOB_X1) * 0.5 - 0.60, 0.55, -17.0);
 
     // ---- OVERVIEW : from outside -------------------------------------------
     // There is no high vantage INSIDE a 3.96 m floor plate, so the establishing
