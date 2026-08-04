@@ -305,6 +305,93 @@
   // dressed and some are eaten away, not that every joint is a groove.
   var BEVELS = [0.013, 0.022, 0.034, 0.048, 0.066];
 
+  // -------------------------------------------------------------- relief box --
+  // A BLOCK THAT HAS BEEN EATEN, not a block with an eaten texture on it.
+  //
+  // Photographed at 1.5 m inside the gallery, every wall block in the level was
+  // a mathematically perfect rectangular prism: four dead-flat faces, one
+  // uniform chamfer on every arris, and materials.js's 5 cm mineral detail
+  // normal spread over all of it at one scale. Measured, that reads as an
+  // isotropic sandpaper speckle on cardboard, and no amount of albedo variation
+  // fixes it, because the thing that is missing is not colour - it is that
+  // nine hundred monsoons take stone away UNEVENLY. Differential erosion is a
+  // shape.
+  //
+  // bevelBox at one segment is 8 corners; at two it is a 3 x 3 grid on every
+  // face, i.e. a centre vertex, four arris midpoints and the corners - which is
+  // the minimum topology that can carry
+  //
+  //   * a DISHED face   (the centre pulled in, so a face has a hollow and its
+  //                      normal varies across it: the shading gradient a
+  //                      9.6-degree key cannot otherwise put on a wall),
+  //   * a WAVY ARRIS    (each midpoint pulled in a different amount, so no
+  //                      edge in the level is a straight line any more),
+  //   * a LOST CORNER   (one in four pulled in hard, which is a real chip with
+  //                      a real silhouette rather than a chamfer).
+  //
+  // 48 triangles instead of 12. Measured over the whole level that is about
+  // +230k triangles against 3.4M of headroom, which is what the headroom is
+  // for. The displacement is hashed off the vertex's own LOCAL position plus a
+  // per-block seed, so the three duplicate copies of a shared corner move
+  // identically and the block stays welded; and it is applied to the INDEXED
+  // geometry before computeVertexNormals, so a face is smooth across its hollow
+  // while the arrises between faces stay hard.
+  var _reliefCache = new Map();
+  function frac(v) { return v - Math.floor(v); }
+  function rhash(x, y, z, s) {
+    return frac(Math.sin(x * 37.13 + y * 61.71 + z * 19.37 + s * 7.117) * 43758.5453);
+  }
+  function reliefBox(w, h, d, bevel, seed) {
+    w = Math.max(w, 0.004); h = Math.max(h, 0.004); d = Math.max(d, 0.004);
+    if (bevel === undefined) bevel = Math.min(0.048, Math.min(w, Math.min(h, d)) * 0.20);
+    seed = seed | 0;
+    var k = w.toFixed(3) + ',' + h.toFixed(3) + ',' + d.toFixed(3) + ',' +
+      bevel.toFixed(3) + ',' + seed;
+    var g = _reliefCache.get(k);
+    if (g) return g;
+    var src;
+    try { src = Geo.bevelBox(w, h, d, bevel, 2); }
+    catch (e) { return box(w, h, d, bevel); }
+    var p = src.attributes.position;
+    var hw = w * 0.5, hh = h * 0.5, hd = d * 0.5;
+    var lim = Math.min(w, Math.min(h, d));
+    // MEASURED AND PULLED BACK, and it is the same trap the BEVELS table fell
+    // into one round earlier. At a 5.2 cm scale a chipped corner lost 19 cm and
+    // an eaten arris 12 cm; photographed at 60 cm inside the gallery, two
+    // adjacent blocks put a third of a metre of void into one joint and the
+    // coursing read as a stack of shelves with black canyons between them - on
+    // top of the 6.6 cm chamfer each block already carries. The dish in the
+    // FACE is what buys the differential erosion; the eat-back on the ARRIS
+    // only has to stop the edge being a straight line. So the scale comes down
+    // to 4 cm, the hard chip gets rarer (16% of corners, not 26%) and the
+    // typical arris now moves under 2 cm.
+    var dish = Math.min(0.040, lim * 0.13);
+    var eps = bevel + 1e-4;
+    for (var i = 0; i < p.count; i++) {
+      var x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+      var ax = Math.abs(x) >= hw - eps, ay = Math.abs(y) >= hh - eps,
+        az = Math.abs(z) >= hd - eps;
+      var n = (ax ? 1 : 0) + (ay ? 1 : 0) + (az ? 1 : 0);
+      if (!n) continue;
+      var r1 = rhash(x, y, z, seed);
+      var r2 = rhash(z, x, y, seed + 11);
+      var amt;
+      if (n === 1) amt = dish * (0.28 + 0.62 * r1);                 // a hollow
+      else if (n === 2) amt = dish * (r2 < 0.18 ? 0.62 + 0.62 * r1  // eaten back
+        : 0.08 + 0.34 * r1);                                        // or just wavy
+      else amt = dish * (r1 < 0.16 ? 0.85 + 0.85 * r2               // corner gone
+        : 0.10 + 0.35 * r2);
+      if (ax) x -= (x < 0 ? -1 : 1) * amt;
+      if (ay) y -= (y < 0 ? -1 : 1) * amt;
+      if (az) z -= (z < 0 ? -1 : 1) * amt;
+      p.setXYZ(i, x, y, z);
+    }
+    src.computeVertexNormals();
+    g = src.toNonIndexed(); src.dispose();
+    _reliefCache.set(k, g);
+    return g;
+  }
+
   var _cylCache = new Map();
   function cyl(rTop, rBot, len, seg, open) {
     seg = seg || 8;
@@ -540,6 +627,24 @@
   };
   Builder.prototype.boxR = function (key, w, h, d, x, y, z, rx, ry, rz, bevel) {
     return this.add(key, box(w, h, d, bevel), makeM(x, y, z, rx, ry, rz));
+  };
+  // The same, on the eroded atom. `relief` is recorded on the entry because
+  // _paint's arris test works in NORMALISED local coordinates and a relief
+  // block's corners have been pulled 2-7 cm inside its own bounding box; at the
+  // 0.88 threshold a small one would fall out of its own edge band and lose the
+  // pale-substrate paint that the chip in its silhouette has just earned.
+  //
+  // 0.78 is not a full restoration and that is deliberate. On a 1.5 x 0.6 x 0.9
+  // wall block the long axes still clear it (0.89) while the 60 cm bed depth does
+  // not (0.70), so what keeps the pale chip is the VERTICAL corner of each block
+  // - which is where an arris really does spall and catch a raking key - and
+  // what loses it is the horizontal top edge, which is the same surface the
+  // up-facing gate in _paint is there to hold back anyway. The two mechanisms
+  // agree; do not "fix" one without re-measuring the other.
+  Builder.prototype.relBoxR = function (key, w, h, d, x, y, z, rx, ry, rz, bevel, seed) {
+    var e = this.add(key, reliefBox(w, h, d, bevel, seed), makeM(x, y, z, rx, ry, rz));
+    if (e) e.relief = 1;
+    return e;
   };
   Builder.prototype.frus = function (key, w0, d0, w1, d1, h, x, y, z, ry) {
     return this.add(key, frus(w0, d0, w1, d1, h), makeM(x, y, z, 0, ry || 0, 0));
@@ -1240,10 +1345,34 @@
         var lat = M.smoothstep(0.0, 0.16, x / S) * M.smoothstep(1.0, 0.80, x / S);
         // squared so the body of the bank sits in its lowest third and the
         // upper half is a torn frontier rather than a hem
-        var prof = vv * vv * (0.55 + 0.45 * vv);
+        //
+        // AND IT MUST GO TO ZERO AT THE BOTTOM EDGE TOO. THIS WAS THE BUG.
+        //
+        // vv = 1 is the canvas bottom row, which CanvasTexture's Y flip puts at
+        // v = 0, i.e. at the card's BOTTOM POLYGON EDGE - and prof peaked at
+        // exactly 1.0 there. So every bank card in the level ended in a straight
+        // line of full-strength mist. Below the terrain that is invisible (the
+        // card is sunk 12 cm), which is why it survived three rounds of review;
+        // the moment the card crosses anything standing on the ground - a fallen
+        // block, a slab, a plinth, a stair tread - that opaque hem emerges in
+        // front of it as a dead-straight horizontal or diagonal edge. Measured
+        // on hero1, the signature frame, it was cutting the foreground blocks at
+        // 3.4 m and the great stair at 9 m, and it is what the critic read as
+        // "a bright translucent wedge with a dead-straight edge", diagnosed as
+        // a placement problem and treated with keep-out volumes for two rounds.
+        //
+        // No polygon edge of this cell may carry alpha: `lat` already closes the
+        // sides, prof closes the top, and `hem` now closes the bottom. A card
+        // with a soft frontier on all four edges can intersect any geometry at
+        // any angle and read as air, which is also what let the near fade be
+        // pulled back in so the level keeps its warm ground haze.
+        var hem = M.smoothstep(1.0, 0.80, vv);
+        var prof = vv * vv * (0.55 + 0.45 * vv) * hem;
         var nb = noise.fbm2(x * 0.021 - 3.5, y * 0.052 + 11.0, 4, 2.2, 0.58) * 0.5 + 0.5;
         var nb2 = noise.fbm2(x * 0.085 + 21.0, y * 0.16 - 6.0, 3) * 0.5 + 0.5;
-        var ab = M.saturate(lat * prof * (nb * 1.05 + nb2 * 0.42 - 0.30)) * 0.42;
+        // 0.52, not 0.42: the hem costs the profile about a third of its peak,
+        // and the point of the change is to lose the edge, not the medium.
+        var ab = M.saturate(lat * prof * (nb * 1.05 + nb2 * 0.42 - 0.30)) * 0.52;
         var j2 = (y * (2 * S) + S + x) * 4;
         d[j2] = 255; d[j2 + 1] = 255; d[j2 + 2] = 255;
         d[j2 + 3] = ab * 255;
@@ -1543,13 +1672,33 @@
     // ---- rubble heaps ------------------------------------------------------
     // Where a structure came down, its stone is still lying under it. Placed
     // against the fallen tower, the gallery breach and the ruined library.
+    // FOREGROUND STONE IS A HEAP LIKE ANY OTHER AND IT BELONGS IN THIS LIST.
+    // The seven piles at the end were built by literal calls inside build()'s
+    // 'rubble' stage, which meant they existed in the geometry but in no
+    // published list - so props_ruins.js could not bank leaf or seed growth
+    // against them (they are not anchors.rubble), and buildMist's `clear()`
+    // could not keep a mist bank out of them. Both of those showed: the level's
+    // signature frame had a 4.8 m mist card sliced by a block pile 3.4 m from
+    // the lens, and the piles that are deliberately the nearest thing in every
+    // hero framing carried no drift at all. They are heaps; the list is the
+    // level's statement of where its heaps are.
     P.rubble = [
       { x: T_CX + 7.4, z: T_CZ - 7.4, r: 6.2, y: TIER[1].y, n: 46, big: 1.0 },
       { x: -G_X + 1.2, z: (BREACH_Z0 + BREACH_Z1) * 0.5, r: 6.8, y: 0.1, n: 52, big: 0.9 },
       { x: -G_X - 3.6, z: (BREACH_Z0 + BREACH_Z1) * 0.5 + 1.5, r: 5.0, y: 0.0, n: 26, big: 0.7 },
       { x: 17.0, z: 11.6, r: 4.6, y: 0.16, n: 24, big: 0.6 },
       { x: 30.4, z: -14.5, r: 5.4, y: 0.1, n: 30, big: 0.8 },
-      { x: -6.0, z: -38.6, r: 4.2, y: 0.1, n: 20, big: 0.55 }
+      { x: -6.0, z: -38.6, r: 4.2, y: 0.1, n: 20, big: 0.55 },
+      // the hero foregrounds: hero1's near blocks, the inner-court spill, the
+      // east-gallery collapse, and the three bands of gate spoil that carry
+      // hero2's near and mid field
+      { x: -8.4, z: -3.2, r: 3.2, y: 0, n: 16, big: 0.85 },
+      { x: 4.6, z: -7.4, r: 2.8, y: 0, n: 12, big: 0.75 },
+      { x: 19.8, z: -19.2, r: 3.0, y: 0, n: 16, big: 0.9 },
+      { x: 16.2, z: -24.4, r: 3.4, y: 0, n: 16, big: 0.8 },
+      { x: 2.0, z: 8.2, r: 2.4, y: 0, n: 16, big: 0.75 },
+      { x: -4.5, z: 14.0, r: 3.4, y: 0, n: 20, big: 0.85 },
+      { x: -2.2, z: 9.8, r: 2.6, y: 0, n: 14, big: 0.6 }
     ];
 
     // ---- occupation --------------------------------------------------------
@@ -1793,8 +1942,15 @@
         // Bevel varies per slab. A uniform 4.8 cm arris on 1300 slabs is a
         // uniform highlight width on 1300 slabs; some of these are dressed and
         // sharp, some have had their arris eaten off entirely.
-        B.boxR(key, w, th, d, cx, yy + sink - th * 0.5, cz, tilt, rng.range(-0.03, 0.03), tilt2,
-          Math.min(th * 0.42, BEVELS[rng.int(0, BEVELS.length - 1)]));
+        // AND THE SLAB IS DISHED. A flagstone that has been walked on for nine
+        // hundred years is a shallow bowl with rounded arrises, and at the
+        // grazing incidence every floor in this level is seen at, that hollow is
+        // the only thing that puts a shading gradient across a slab at all - a
+        // flat slab under a 9.6-degree sun is one value edge to edge, which is
+        // exactly how the outer court photographed.
+        B.relBoxR(key, w, th, d, cx, yy + sink - th * 0.5, cz, tilt, rng.range(-0.03, 0.03), tilt2,
+          Math.min(th * 0.42, BEVELS[rng.int(0, BEVELS.length - 1)]),
+          ((cx * 53 + cz * 31) | 0));
         out++;
       }
     }
@@ -1983,12 +2139,18 @@
         // 9.5 cm chamfer costs exactly what a 1.6 cm one does.
         var bev = BEVELS[rng.int(0, BEVELS.length - 1)];
         if (tipped) bev = BEVELS[BEVELS.length - 1];
+        // and the block itself is EATEN - see reliefBox. Every block in every
+        // wall in the level goes through it: this is the one surface family a
+        // player stands within a metre of, and a perfect prism at a metre is the
+        // "perfectly clean, straight, uniform anything" instant-fail however
+        // good the map on it is.
+        var rsd = ((a * 41 + cy * 97 + b * 13) | 0);
         if (axis === 'x') {
-          B.boxR(kk, bw, ch * wgt * 0.985, t * bt, x + jx,
-            cy - ch * (1 - wgt) * 0.5 + jy, z + jog + jz2, tl, yw, tl * 0.6, bev);
+          B.relBoxR(kk, bw, ch * wgt * 0.985, t * bt, x + jx,
+            cy - ch * (1 - wgt) * 0.5 + jy, z + jog + jz2, tl, yw, tl * 0.6, bev, rsd);
         } else {
-          B.boxR(kk, t * bt, ch * wgt * 0.985, bw, x + jog + jx,
-            cy - ch * (1 - wgt) * 0.5 + jy, z + jz2, tl * 0.6, yw, tl, bev);
+          B.relBoxR(kk, t * bt, ch * wgt * 0.985, bw, x + jog + jx,
+            cy - ch * (1 - wgt) * 0.5 + jy, z + jz2, tl * 0.6, yw, tl, bev, rsd);
         }
       }
       // a lintel over each opening
@@ -2409,8 +2571,13 @@
         wet: 1 - M.saturate(0.5 - (y - base)) * 0.25,
         edge: 0.78 + rng.range(-0.10, 0.18)
       };
-      B.boxR(moss > 0.62 ? 'mossy' : 'sandstone', w, h, d, x, y, z,
-        rng.gaussian(0, 0.22), rng.range(0, Math.PI), rng.gaussian(0, 0.22));
+      // Eaten, not extruded. These heaps are the closest stone to the lens in
+      // every published framing - the pile at (-8.4,-3.2) is 3.4 m from the
+      // hero1 standpoint - so a broken corner and a dished face on them is
+      // worth more than the same relief anywhere else in the level.
+      B.relBoxR(moss > 0.62 ? 'mossy' : 'sandstone', w, h, d, x, y, z,
+        rng.gaussian(0, 0.22), rng.range(0, Math.PI), rng.gaussian(0, 0.22),
+        undefined, ((x * 67 + z * 29 + y * 101) | 0));
       if (rng.bool(0.22)) {
         self.addCollider(x, y, z, w * 0.45, h * 0.6, d * 0.45, 'stone');
       }
@@ -2641,6 +2808,7 @@
   function faceTower(self, B, rng, o) {
     var x = o.x, z = o.z, W = o.w, H = o.h;
     var e = o.erode || 0;
+    var N2 = self.noise;
     // The FACE STOREY is the tall one. A prasat whose storeys are all the same
     // proportion has nowhere to put a face that is not squashed: at 0.24 of H
     // the storey was 2.4 m tall and 5.4 m wide, and a face that fits inside
@@ -2658,12 +2826,52 @@
       var sh = hs[i] * H;
       var a = wA[i] * W, b = wB[i] * W;
       var mossy = (i === 0 && rng.bool(0.35)) || (i > 2 && rng.bool(0.25));
+      // ---- THE STOREY IS COURSED ------------------------------------------
+      // It used to be ONE tapered block per storey, and photographed at 20 m
+      // in the signature framing that is what it looked like: the prasats read
+      // as smooth cast concrete with stone mouldings applied to them. The
+      // gallery walls two metres away carry visible ashlar; the towers - the
+      // subject of hero1, the overview and hero4 - carried none, and a tower
+      // whose surface has no joints in it has nothing for the water staining
+      // and the lichen to be ON.
+      //
+      // Nine hundred kilos a block, ~62 cm to a bed, and the beds do not stay
+      // parallel: each course is drawn from a noise field along the tower's
+      // height so neighbouring courses agree while distant ones do not, each is
+      // set back 0-2 cm from the one below and jogged +/-1 cm, and each carries
+      // its own grime and edge value. That is the differential erosion the
+      // towers were missing, and it costs twelve triangles a course.
+      var nCourse = Math.max(2, Math.round(sh / 0.62));
+      var cbedH = [], cbedSum = 0, cb;
+      for (cb = 0; cb < nCourse; cb++) {
+        var cbv = 1 + N2.fbm2(x * 0.21 + cb * 4.3, (z + y) * 0.17 - cb * 2.9, 2) * 0.48;
+        cbedH.push(cbv); cbedSum += cbv;
+      }
+      var cAcc = 0;
+      for (cb = 0; cb < nCourse; cb++) {
+        var cbh = cbedH[cb] * sh / cbedSum;
+        var u0 = cAcc / sh, u1 = (cAcc + cbh) / sh;
+        cAcc += cbh;
+        var wLo = M.lerp(a, b, u0), wHi = M.lerp(a, b, u1);
+        // the recessed joint: a course set back from the one under it is what
+        // throws the horizontal shadow line that reads as masonry at 20 m
+        var setb = rng.range(0.004, 0.021) + (rng.bool(0.10) ? 0.030 : 0);
+        var cg0 = 0.74 + rng.range(-0.10, 0.14) - (i === 0 ? 0.08 : 0);
+        B.wear = {
+          grime: cg0 + N2.fbm2(x * 0.3, (y + cAcc) * 0.55, 2) * 0.16,
+          wet: 1 - (i === 0 ? 0.14 : 0),
+          edge: 0.84 + rng.range(-0.12, 0.14) - e * 0.10
+        };
+        B.frus(mossy ? 'mossy' : 'sandstone', wLo - setb, wLo - setb,
+          wHi - setb, wHi - setb, cbh * 1.004,
+          x + rng.range(-0.010, 0.010), y + cAcc - cbh * 0.5,
+          z + rng.range(-0.010, 0.010), rng.range(-0.004, 0.004));
+      }
       B.wear = {
         grime: 0.74 + rng.range(-0.08, 0.12) - (i === 0 ? 0.08 : 0),
         wet: 1 - (i === 0 ? 0.14 : 0),
         edge: 0.84 + rng.range(-0.10, 0.12) - e * 0.10
       };
-      B.frus(mossy ? 'mossy' : 'sandstone', a, a, b, b, sh, x, y + sh * 0.5, z);
       // corner pilasters - the vertical accents that stop a taper reading as
       // a cone. They step in with the storey.
       for (q = 0; q < 4; q++) {
@@ -3893,7 +4101,17 @@
     }
 
     // ---- the gallery INTERIOR: the inner face of the outer wall -------------
-    for (i = 0; i < 130; i++) {
+    // SMALLER MARKS, MORE OF THEM - the same fix, and the same arithmetic, as
+    // the wall-foot fringe above, but this wall is the closest large surface to
+    // any camera in the level. The interior framing stands 1.8 m off it; a 1.9 m
+    // mark off a 512 px atlas cell delivers 269 texels/m against about 1100
+    // screen pixels per metre at that range, so its painted lobes are magnified
+    // four times past their own resolution and a moss sheet reads as a flat
+    // green field with hard shapes in it. Photographed, two overlapping marks
+    // covered most of the right-hand wall in exactly that. Under 1.2 m the same
+    // cell keeps its frontier, and the station count goes up so the wall does
+    // not lose coverage.
+    for (i = 0; i < 190; i++) {
       var e3 = rng.int(0, 3);
       var ax3, xx3, zz3, yaw3;
       if (e3 === 0) { ax3 = rng.range(-G_X + 5, G_X - 5); xx3 = ax3; zz3 = G_ZS - G_WALL - 0.02; yaw3 = Math.PI; }
@@ -3901,11 +4119,11 @@
       else if (e3 === 2) { ax3 = rng.range(G_ZN + 5, G_ZS - 5); xx3 = -G_X + G_WALL + 0.02; zz3 = ax3; yaw3 = Math.PI * 0.5; }
       else { ax3 = rng.range(-G_X + 5, G_X - 5); xx3 = ax3; zz3 = G_ZN + G_WALL + 0.02; yaw3 = 0; }
       var hgt3 = rng.next();
-      onWall(hgt3 < 0.42 ? (rng.bool(0.6) ? MOSS : FRINGE)
-        : (hgt3 < 0.72 ? STAIN : (rng.bool(0.5) ? LICHEN : EFFL)),
+      onWall(hgt3 < 0.34 ? (rng.bool(0.6) ? MOSS : FRINGE)
+        : (hgt3 < 0.70 ? STAIN : (rng.bool(0.5) ? LICHEN : EFFL)),
         xx3, 0.28 + M.lerp(0.2, 3.6, hgt3), zz3,
-        rng.range(0.8, 1.9), rng.range(0.7, 1.9), yaw3,
-        hgt3 < 0.42 ? GREEN : null);
+        rng.range(0.50, 1.20), rng.range(0.45, 1.15), yaw3,
+        hgt3 < 0.34 ? GREEN : null);
       // and the floor joint right under it - the wettest line in the level,
       // where run-off off the corbelled vault ends up
       if (hgt3 < 0.42) {
@@ -4100,6 +4318,17 @@
       }
       // the causeway deck and its balustrades
       if (Math.abs(px) < CW_HALF + 1.4 + m2 && pz > CW_Z0 - m2 && pz < CW_Z1 + m2) return false;
+      // EVERY RUBBLE HEAP. The masonry keep-outs above are all buildings, and
+      // buildings are not what actually sliced these cards: the block piles are
+      // 2-3 m tall, they are deliberately placed 3-5 m in front of every hero
+      // standpoint, and a bank standing among them shows their silhouettes cut
+      // into it as dead-straight edges. The near fade handles the first two
+      // metres; this handles the rest, at the source.
+      for (var q3 = 0; q3 < P.rubble.length; q3++) {
+        var rb = P.rubble[q3];
+        var rdx = px - rb.x, rdz = pz - rb.z, rr3 = rb.r + 1.6;
+        if (rdx * rdx + rdz * rdz < rr3 * rr3) return false;
+      }
       return true;
     }
     var layers = [
@@ -4158,8 +4387,24 @@
         // BACK-LIT and it glows; only the air on the far side of the temple is
         // cool. 0.22-0.90 puts the courtyard at 0.67 of warm and keeps the
         // blue anchor where it belongs, behind the north gallery.
+        // 0.14-0.80, not 0.22-0.90, and this is the second half of the hem fix
+        // rather than a new opinion. Removing the opaque bottom edge also removed
+        // a card that had been sitting two metres from the lens at full strength
+        // in every framing - i.e. a warm gel over the whole picture - and the
+        // measurement says exactly that: hero1's brightest 5% went from R-B
+        // +0.118 to +0.071 and its grade split from +0.043 to +0.010 while the
+        // towers behind it did not move at all (L 0.234 to 0.238). A gel over the
+        // sky is not a grade, so it is right that it is gone; but the level's own
+        // argument for the ramp - at dawn the mist between the eye and a sun on
+        // the horizon is BACK-LIT and glows, and only the air on the far side of
+        // the temple is cool - was being under-served by the old window. At the
+        // inner courtyard's own sunward value of 0.55 the old window returned
+        // 0.48 of warm, i.e. neutral, for the volume the key is shining THROUGH
+        // toward the camera. 0.14-0.80 returns 0.71 there and still leaves the
+        // north courtyard and the far jungle on the cool end, which is where the
+        // grade's blue anchor lives.
         var sunward = M.saturate((x * SUN_X + z * SUN_Z) / 60 * 0.5 + 0.5);
-        var warm = M.smoothstep(0.22, 0.90, sunward);
+        var warm = M.smoothstep(0.14, 0.80, sunward);
         var amp = L.o * sd[2] * (L.bank ? 0.80 : 1.0);
         var cc = [
           M.lerp(0.088, 0.345, warm) * amp,
@@ -4185,6 +4430,64 @@
     geo.computeBoundingSphere();
     void N;
     return geo;
+  }
+
+  // ---------------------------------------------------------- the near fade --
+  // THE ONE THING THE GEOMETRIC KEEP-OUT ABOVE CANNOT DO.
+  //
+  // `clear()` keeps the banks out of the volume the MASONRY occupies, and that
+  // worked: no card is sliced by a wall or a tower any more. What it cannot
+  // know about is the tumbled stone - the block piles at (-8.4,-3.2), the
+  // toppled lintel at (-11.2,-5.6), the gate spoil in the outer court - which
+  // is deliberately placed 3-5 m in front of every hero standpoint precisely
+  // because a frame needs hard foreground. Measured on hero1, the level's
+  // signature image: a 4.8 m bank standing 2 m from the lens laid a 0.28-alpha
+  // wash over the near blocks with a DEAD-STRAIGHT diagonal where the card's
+  // own polygon edge crossed them, and the same wedge cut the great stair in
+  // the lower right. That reads as a rendering fault, not as air, and it was
+  // costing the frame its whole foreground.
+  //
+  // The fix is not more keep-out volumes - a keep-out per rubble pile is a list
+  // that goes stale the moment anything moves. It is that A PARTICIPATING
+  // MEDIUM HAS NO NEAR FIELD: the inscatter along a ray is an integral over
+  // path length, so at two metres there is almost nothing of it and the card
+  // model - constant alpha regardless of distance - is simply wrong there. So
+  // the alpha is ramped in over the first several metres of view distance.
+  // Everything within 1.4 m of the eye disappears - a card that close subtends
+  // most of the frame and its texture is magnified past its own frequency - and
+  // by 7 m it is at full strength.
+  //
+  // The window used to be 2.8 to 13 m, which was a workaround for the opaque
+  // bottom hem on the bank cell (see buildMistTexture): pushing the medium out
+  // to 13 m was the only way to get the hard edge off the near geometry, and it
+  // cost the signature frame half its grade split, because a warm back-lit haze
+  // in the near field was the warmest thing in it (measured: highlight tint fell
+  // from +0.030 R to +0.014 R when it went). With the hem fixed at source the
+  // card has no edge to hide, so the window closes back to where a participating
+  // medium actually wants it and the ground haze comes back.
+  //
+  // onBeforeCompile rather than a hand-written ShaderMaterial, because the
+  // material must keep participating in sky.js's height fog (`fog: true`) and
+  // in the vertex-colour tinting above, and re-implementing those is how a
+  // level file quietly diverges from the shared atmosphere.
+  function mistNearFade(mat) {
+    try {
+      mat.onBeforeCompile = function (shader) {
+        shader.uniforms.uMistFade = { value: new THREE.Vector2(1.4, 7.0) };
+        shader.vertexShader = 'varying float vMistD;\n' + shader.vertexShader
+          .replace('#include <project_vertex>',
+            '#include <project_vertex>\n\tvMistD = - mvPosition.z;');
+        shader.fragmentShader = 'uniform vec2 uMistFade;\nvarying float vMistD;\n' +
+          shader.fragmentShader.replace('#include <dithering_fragment>',
+            '#include <dithering_fragment>\n' +
+            '\tgl_FragColor.a *= smoothstep( uMistFade.x, uMistFade.y, vMistD );');
+      };
+      // Distinct from every other MeshBasicMaterial in the build, so three.js
+      // never hands this program to one of them or vice versa.
+      mat.customProgramCacheKey = function () { return 'ruins_mist_nearfade'; };
+      mat.needsUpdate = true;
+    } catch (e) { GAME.logError('ruins.mistFade', e); }
+    return mat;
   }
 
   // ============================================================== LevelRuins ==
@@ -4620,7 +4923,12 @@
       pave(self, B, rng,
         { x0: -G_PX + 0.3, x1: G_PX - 0.3, z0: G_PZN + 0.3, z1: G_PZS - 0.3 },
         0, {
-          follow: true, pitch: 1.22, jitter: 0.9, mossBias: 0.22,
+          // the same argument as the outer court's `lift`, at half the amount:
+          // the west gallery's own shadow reaches 15 m into this courtyard and
+          // the terrace shades the rest of the near field, but unlike the outer
+          // court this floor also holds standing water and moss, so it earns
+          // less headroom.
+          follow: true, pitch: 1.22, jitter: 0.9, mossBias: 0.22, lift: 0.08,
           trodX: 0, trodW: 2.6,
           skip: [
             { x0: T_CX - TIER[0].hx - 0.5, x1: T_CX + TIER[0].hx + 0.5,
@@ -4642,8 +4950,22 @@
         // shared default it measured L 0.025 against a gate at 0.186. Less
         // grime is a paler, warmer stone, which is also true of a court that
         // is swept and walked on rather than of a jungle floor.
+        // `lift` at 0.18. WHY THIS FLOOR CAN ONLY EVER BE AN ALBEDO PROBLEM:
+        // the gallery's south wall is 5.05 m and the sun is at 9.6 degrees, so
+        // its shadow reaches 29.6 m to the south-east and the outer court is
+        // only 10 m deep - every square metre of it is inside that shadow at
+        // the one hour this level is set at, and there is no aperture that could
+        // change it (traced, the ray from a court flagstone toward the sun
+        // crosses the gallery wall 79 cm above its own footing). So no amount of
+        // rig work lights this floor; a swept, walked precinct simply carries
+        // less biological grime than the jungle mould the shared default is
+        // solved for. Honest note on the size of the effect: the grime channel
+        // already runs past 1.0 on most of these vertices once the per-block and
+        // erosion terms are in, and 1.0 is where the shader's grime term
+        // saturates, so this is a small lift on the darkest slabs only - not the
+        // reason the frame improved.
         0.16, {
-          pitch: 1.26, jitter: 1.0, trodX: 0, trodW: 2.8, lift: 0.10,
+          pitch: 1.26, jitter: 1.0, trodX: 0, trodW: 2.8, lift: 0.18,
           skip: [
             { x0: -21.2, x1: -12.8, z0: 8.9, z1: 14.3 },
             { x0: 12.8, x1: 21.2, z0: 8.9, z1: 14.3 }
@@ -4685,21 +5007,10 @@
         var r = P.rubble[i];
         scatterBlocks(self, B, rng, r.x, r.y, r.z, r.r, r.n, r.big);
       }
-      // FOREGROUND STONE. Every published framing needs something inside 6 m
-      // or it photographs as a diorama: these piles are placed against the
-      // hero standpoints deliberately and are the closest thing in each frame.
-      scatterBlocks(self, B, rng, -8.4, 0, -3.2, 3.2, 16, 0.85);
-      scatterBlocks(self, B, rng, 4.6, 0, -7.4, 2.8, 12, 0.75);
-      scatterBlocks(self, B, rng, 19.8, 0, -19.2, 3.0, 16, 0.9);
-      scatterBlocks(self, B, rng, 16.2, 0, -24.4, 3.4, 16, 0.8);
-      // GATE SPOIL IN THE OUTER COURT. This is now hero2's foreground, so it
-      // is placed on that standpoint's sightline in three bands rather than
-      // two: 3.4 m (hard near foreground, inside the frame's bottom edge),
-      // 8 m and 12 m. An outer court that is 10 m of unbroken flagstone with
-      // a wall behind it is the "flat paving grid" the critic photographed.
-      scatterBlocks(self, B, rng, 2.0, 0, 8.2, 2.4, 16, 0.75);
-      scatterBlocks(self, B, rng, -4.5, 0, 14.0, 3.4, 20, 0.85);
-      scatterBlocks(self, B, rng, -2.2, 0, 9.8, 2.6, 14, 0.6);
+      // FOREGROUND STONE and the GATE SPOIL that carries hero2's near field are
+      // now the last seven entries of P.rubble (see the note there), so the loop
+      // above has already built them and props_ruins.js and buildMist can both
+      // see where they are.
       // a fallen pediment slab and a broken colonnette lying in the court -
       // silhouette, not scatter, at the near edge of the hero2 cone
       B.wear = { grime: 0.64, wet: 1, edge: 0.62 };
@@ -4773,6 +5084,7 @@
         transparent: true, depthWrite: false, vertexColors: true,
         side: THREE.DoubleSide, fog: true, opacity: 1.0, toneMapped: true
       });
+      mistNearFade(mat);
       var mesh = new THREE.Mesh(g, mat);
       mesh.name = 'ruins_mist';
       mesh.renderOrder = 4;
@@ -4838,6 +5150,7 @@
 
     if (this.ctx && this.ctx.scene) this.ctx.scene.add(this.root);
     _boxCache.forEach(function (g) { g.dispose(); }); _boxCache.clear();
+    _reliefCache.forEach(function (g) { g.dispose(); }); _reliefCache.clear();
     _cylCache.forEach(function (g) { g.dispose(); }); _cylCache.clear();
     _quadCache.forEach(function (g) { g.dispose(); }); _quadCache.clear();
     _frusCache.forEach(function (g) { g.dispose(); }); _frusCache.clear();
@@ -5101,13 +5414,48 @@
         g *= 1 - M.smoothstep(0.75, -0.10, hgt) * 0.30 * (1 - M.saturate(ny) * 0.92);
 
         // ---- edge wear: chipped arrises -----------------------------------
+        // GATED ON THE NORMAL, for the same reason the wet band above is, and
+        // it is the same class of bug found from the other end.
+        //
+        // materials.js's B channel exposes PALE FRESH SUBSTRATE (0xb9ae9a).
+        // On the vertical arris of a wall block that is exactly right: a
+        // spalled corner really is paler than the weathered face beside it, and
+        // it is what makes nine hundred years of coursing catch a light.
+        // Applied to an UP-facing arris it is a lie with a measurable cost.
+        // Every paved floor in this level is 1300 individually laid slabs, each
+        // one proud of its neighbours by 2-3 cm, so the whole floor is arris;
+        // and the outer court - which is the entire near half of the hero2
+        // framing - stands in the gallery's shadow at a 9.6-degree sun and is
+        // lit by SKY ALONE. Measured on that frame: the slab faces came back at
+        // L 0.157 with B > R (0.144 / 0.158 / 0.177, cold, because the only
+        // illuminant is the zenith) while their arrises measured L 0.441 and
+        // near-neutral. A 2.8:1 rim-to-face ratio on a horizontal surface is
+        // not weathering; it is a floor of dark glass tiles with the joints
+        // glowing, which is what the frame photographed as.
+        //
+        // A trodden flagstone is POLISHED by feet, not spalled by them. So the
+        // term keeps roughly half its strength on a fully up-facing edge and all
+        // of it on a vertical one - the same shape of gate, and the same
+        // reasoning, as the splash-back term thirty lines above.
+        //
+        // HALF, NOT A FIFTH, and the difference was measured. At 0.80 of
+        // suppression the outer court went from a floor of glass tiles with
+        // glowing joints to a floor with no joints at all: the near field
+        // measured L 0.156 with its darkest 40% at 0.088, i.e. it traded one
+        // instant-fail ("perfectly uniform anything") for the other ("an unlit
+        // ground plane"). The arris was carrying the floor's whole read. At 0.55
+        // the near field measures RGB 0.180 / 0.158 / 0.150 - WARM, where before
+        // the change it measured 0.227 / 0.225 / 0.240, i.e. blue-dominant,
+        // because a pale neutral substrate under a violet zenith is the only
+        // thing that was lighting it.
         if (doEdges) {
           _pv.set(x, y, z).applyMatrix4(_pinv);
           var ex = Math.abs(_pv.x) / hx, ey = Math.abs(_pv.y) / hy, ez = Math.abs(_pv.z) / hz;
-          var nEdge = (ex > 0.88 ? 1 : 0) + (ey > 0.88 ? 1 : 0) + (ez > 0.88 ? 1 : 0);
+          var eT = ent.relief ? 0.78 : 0.88;
+          var nEdge = (ex > eT ? 1 : 0) + (ey > eT ? 1 : 0) + (ez > eT ? 1 : 0);
           if (nEdge >= 2) {
             var chip = M.saturate(noise.fbm2(x * 2.3 + 17, z * 2.3 - 5, 2) * 1.6 + 0.35);
-            b2 *= 1 - chip * 0.42;
+            b2 *= 1 - chip * 0.42 * (1 - upF * upF * 0.55);
           }
         }
         col[j] = M.clamp(r, 0.05, 1.6);

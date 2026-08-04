@@ -2543,10 +2543,17 @@
       // SHORT on purpose: the corridor soffit is 4.6 m and a player's eye is
       // at 1.9, so anything reaching below about 3 m stops being a curtain
       // seen against the light and becomes an obstacle hanging in your face.
-      for (i = 0; i < 4; i++) {
+      // A ROOT HANGING IN FRONT OF AN OPEN HOLE IS BACK-LIT, so it is a dark
+      // silhouette, not a pale one. leafTint(0.75) is the DRY end of the leaf
+      // ramp and multiplies up to (1.27, 1.19, 0.83) over an atlas cell that is
+      // already a pale grey-tan rope: measured, this cluster came back brighter
+      // than the lit masonry of the temple and read as a curtain of torn paper
+      // hanging in the middle of the interior framing. Below the stone it reads
+      // as what it is.
+      for (i = 0; i < 5; i++) {
+        _tc.setRGB(rng.range(0.34, 0.54), rng.range(0.32, 0.50), rng.range(0.28, 0.42));
         this.putAt('aroot', cx + rng.range(-0.9, 0.9), roof - 0.05, cz + rng.range(-0.8, 0.8),
-          rng.range(0, 6.283), 0, 0, rng.range(0.55, 0.95), rng.range(0.30, 0.52), 1,
-          this.leafTint(rng, 0.75));
+          rng.range(0, 6.283), 0, 0, rng.range(0.55, 0.95), rng.range(0.34, 0.60), 1, _tc);
       }
       // and the green under it
       for (i = 0; i < 7; i++) {
@@ -3763,13 +3770,50 @@
           x, z, rng.range(0, 6.283), bs, bs * rng.range(0.8, 1.25), bs, 0.4, 0.04,
           this.leafTint(rng, rng.range(0, 0.4)));
       }
-      // aerial root off the crown, which is what a strangler fig actually does
-      for (i = 0; i < 8; i++) {
-        var aa = rng.range(0, 6.283), ar = rng.range(0.6, tr.radius * 2.4 + 1.2);
-        this.putAt('aroot', tr.centre.x + Math.cos(aa) * ar,
-          tr.centre.y + tr.height * rng.range(0.42, 0.66), tr.centre.z + Math.sin(aa) * ar,
-          rng.range(0, 6.283), 0, 0, rng.range(0.7, 1.4), rng.range(0.8, 1.8), 1,
-          this.leafTint(rng, 0.8));
+      // ---- aerial root off the crown ----------------------------------------
+      // AN AERIAL ROOT ENDS IN SOIL. THAT IS THE WHOLE POINT OF ONE.
+      //
+      // The first pass hung a 2.3 m card from 0.42-0.66 of the tree's height at
+      // a random 0.7-1.4 x 0.8-1.8 scale and up to (radius*2.4 + 1.2) m out from
+      // the trunk. Measured on hero3 - the arrival framing - that put a cluster
+      // of pale straps in the top-left with a hard straight top edge, no
+      // attachment to any branch, and a FREE LOWER END stopping three metres
+      // above the causeway with nothing under it. It came back at L 0.435
+      // against the gate tower's 0.297, i.e. the brightest large mass in the
+      // frame was a floating sheet of paper; the same asset hung in the middle
+      // of the interior framing under the collapsed roof bay.
+      //
+      // Two structural mistakes, and neither is a tuning problem:
+      //
+      //  (1) THE LENGTH WAS NOT THE DROP. A strangler fig sends its roots down
+      //      to the ground and they thicken there; a rope that stops in mid-air
+      //      has no reading available to it except "torn cloth". The card's
+      //      pivot is at its TOP (see the `down:true` kit entry), so the y scale
+      //      IS the reach - solve it against the measured ground under the hang
+      //      point instead of drawing it from a range, and skip the site
+      //      entirely when the drop is too tall for one card to explain.
+      //  (2) THE VALUE WAS ABOVE THE STONE. leafTint(0.8) is a DRY tint - up to
+      //      (1.29, 1.20, 0.80) - multiplying an atlas cell that is already a
+      //      pale grey-tan rope. Against a temple whose lit masonry measures
+      //      0.30 that lands the roots brighter than the building. They are wet
+      //      bark hanging in shade: the tint now sits them under it.
+      for (i = 0; i < 10; i++) {
+        var aa = rng.range(0, 6.283);
+        // in under the crown, not out past its edge - a root hangs from a limb
+        var ar = rng.range(0.35, Math.max(0.9, tr.radius * 1.45));
+        var rx = tr.centre.x + Math.cos(aa) * ar;
+        var rz = tr.centre.z + Math.sin(aa) * ar;
+        var hangY = tr.centre.y + tr.height * rng.range(0.30, 0.52);
+        var drop = hangY - this._ground(rx, rz);
+        // too short to read, or too tall for one card to reach without the
+        // rope drawing stretching into ribbon
+        if (drop < 1.6 || drop > 8.5) continue;
+        // it reaches the soil, give or take the last handspan
+        var reach = drop + rng.range(-0.15, 0.10);
+        var arw = rng.range(0.55, 1.05);
+        _tc.setRGB(rng.range(0.40, 0.62), rng.range(0.38, 0.58), rng.range(0.32, 0.48));
+        this.putAt('aroot', rx, hangY, rz, rng.range(0, 6.283), 0, 0,
+          arw, reach / 2.30, arw, _tc);
       }
     }
 
@@ -4080,6 +4124,33 @@
           rng.range(0, 6.283), rng.range(-0.45, 0.45), rng.range(-0.45, 0.45),
           rs, rs * rng.range(0.5, 1.0), rs * rng.range(0.7, 1.2), this.wearTint(rng));
       }
+      // DRY LEAF IN THE LEE OF THE HEAP.
+      //
+      // Every hero standpoint in this level has a block pile 3-5 m in front of
+      // it, and the level's ground mist used to be the only warm thing in those
+      // foregrounds - a near-field card wash which has now been removed for
+      // slicing the blocks. Measured, taking it out cost the signature frame
+      // half its grade split (highlight tint +0.030 R to +0.014 R), because a
+      // warm veil over the foreground was doing the work of warm THINGS in it.
+      // Dead leaf is the honest version: it is the one material on this site
+      // that is both warm and PALER than the stone at this exposure, so it
+      // reads on a shadowed floor where nothing else does, and gravity puts it
+      // exactly here - banked against the up-wind face of the nearest obstacle.
+      var lwd = this.uWindDir.value;
+      for (i = 0; i < 26; i++) {
+        var la = rng.range(0, 6.283);
+        // biased into the lee: the heap stops what the wind is carrying
+        var lw = -(Math.cos(la) * lwd.x + Math.sin(la) * lwd.y) * 0.5 + 0.5;
+        if (!rng.bool(0.30 + lw * 0.60)) continue;
+        var lr = R.radius * (0.70 + 0.70 * Math.sqrt(rng.next()));
+        x = R.centre.x + Math.cos(la) * lr;
+        z = R.centre.z + Math.sin(la) * lr;
+        if (this._pathDist(x, z) < 1.3) continue;
+        if (this._waterDist(x, z) < 0.8) continue;
+        this.putAt('litter', x, this._ground(x, z) + 0.019, z, rng.range(0, 6.283), 0, 0,
+          rng.range(0.7, 1.6), 1, rng.range(0.7, 1.6),
+          this.leafTint(rng, rng.range(0.78, 1.0)));
+      }
     }
 
     // ---- leaf drift: it collects where the wind stops ---------------------
@@ -4114,6 +4185,43 @@
         z = tr.centre.z + Math.sin(ta) * trr;
         this.putAt('litter', x, this._ground(x, z) + 0.018, z, rng.range(0, 6.283), 0, 0,
           rng.range(0.8, 1.7), 1, rng.range(0.8, 1.7), this.leafTint(rng, rng.range(0.7, 1.0)));
+      }
+    }
+
+    // ---- THE OUTER COURT'S OWN LEAF DRIFT ----------------------------------
+    // This floor cannot be lit. The gallery's 5 m south wall stands between it
+    // and a 9.6-degree sun, and its shadow is three times deeper than the court
+    // is - so however good the stone is, the near half of the hero2 framing is
+    // a surface whose only illuminant is the violet zenith, and it measures
+    // there (L 0.16 against a gate at 0.31). The one material on the site that
+    // is warm AND PALER than shadowed sandstone is dead leaf, which is why the
+    // causeway deck already leans on it; the outer court had none away from the
+    // spoil heaps.
+    //
+    // It is not scattered. Leaf on a swept court lies in the clumps where the
+    // last shower of it landed and it is absent from the trodden centre line -
+    // so the mask is a noise field thresholded at the station, the density
+    // ramps with how far above that threshold the station is, and everything
+    // within 2.4 m of the published worn path is rejected outright.
+    var EN = A.enclosure, GP = A.gopura;
+    if (EN && GP) {
+      var cz1 = GP.centre.z - 4.2;                 // stop short of the gate ramp
+      // 700 stations at a 0.40 threshold, not 340 at 0.46: the first pass moved
+      // 7,387 pixels of a 921,600-pixel frame and did not shift a single metric,
+      // which for a floor that is a third of the picture means it was not there.
+      for (i = 0; i < 700; i++) {
+        x = rng.range(EN.x0 + 1.6, EN.x1 - 1.6);
+        z = rng.range(EN.z0 + 0.4, cz1);
+        if (this._pathDist(x, z) < 2.4) continue;
+        var dens2 = this.noise.fbm2(x * 0.28 + 61.0, z * 0.28 - 17.0, 3) * 0.5 + 0.5;
+        if (dens2 < 0.40) continue;
+        if (!rng.bool((dens2 - 0.40) * 2.9)) continue;
+        if (this._blocked(x, z, 0.12, 0.7)) continue;
+        var ls = rng.range(0.70, 1.55) * (0.6 + 0.7 * dens2);
+        this.putAt(rng.bool(0.78) ? 'litter' : 'straw',
+          x, this._ground(x, z) + 0.017, z, rng.range(0, 6.283), 0, 0,
+          ls, 1, ls * rng.range(0.8, 1.25),
+          this.leafTint(rng, rng.range(0.72, 1.0)));
       }
     }
 
