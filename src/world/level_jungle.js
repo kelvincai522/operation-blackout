@@ -46,6 +46,21 @@
 // which is the instant tell, and at 0.09 intensity it is 5% of a lit leaf and
 // invisible where the light already is.
 //
+// THE FOREST IS FOUR STRATA, and a forest reads as DEPTH only when it has all
+// of them. Each is its own scatter pass and each one exists because the frame
+// measurably lacked it:
+//
+//   LITTER      0-0.1 m   scatterLitter  -> `deadleaf`, real fallen-leaf drifts.
+//               The floor is 30-40% of every exterior framing and was carrying
+//               its whole information budget in one 39 cm triplanar tile.
+//   UNDERSTORY  0-2 m     scatterUnderstory -> grass, fern, taro, banana.
+//   MID-STOREY  1.5-6 m   scatterMidstorey  -> the SAME kinds at 1.5-3x, plus
+//               palms. Costs no new draw calls and is what closed the two-to-nine
+//               metre hole that made every middle distance a milky void.
+//   CANOPY      9.5-30 m  scatterCanopy     -> alpha cards, three tiers, with a
+//               ring over the firebase cut and a margin over the river so the
+//               canopy horizon has no holes in it.
+//
 // "Saturated green must not become a flat green wash." The value range is built
 // in four independent places so no single one has to carry it:
 //   * the CANOPY is cool and dark, the UNDERSTORY warm and light - foliage
@@ -93,11 +108,18 @@
 //                           inventing street lighting would be a lie - these
 //                           five are all things that burn regardless of hour,
 //                           and every one of them has visible geometry.
-//   level.lightShafts       four canopy gaps, published with `lux` so they are
-//                           FIXTURES: the sky preset is 'overcast', so a shaft
-//                           gated on the solar disc would simply not exist, and
-//                           "light arrives as shafts filtered through canopy"
-//                           is the first line of the brief.
+//   level.lightShafts       five canopy gaps plus the bunker's shell hole,
+//                           published with `lux` so they are FIXTURES: the sky
+//                           preset is 'overcast', so a shaft gated on the solar
+//                           disc would simply not exist, and "light arrives as
+//                           shafts filtered through canopy" is the first line of
+//                           the brief. The five live in shaftSpecs() as DATA, and
+//                           shaftPool() paints their landing into the floor light
+//                           bake, the per-instance plant tint and the merged
+//                           bucket colour - because lighting.js fades a haze cone
+//                           to nothing over its last 22% and the spot's few lux
+//                           against an overcast dome is a third of a stop, so
+//                           without the pool the shafts hang in the air.
 //   level.dripEdges         leaf tips and eaves that weather.js hangs its drip
 //                           ropes from. The brief puts the water ON THE LEAVES.
 //   level.foliage           THE FOLIAGE KIT. The two materials, the atlas cell
@@ -893,6 +915,89 @@
     return best;
   }
 
+  // ==================================================== THE SHAFTS, AS DATA ==
+  // ONE TABLE, READ BY FOUR PLACES, and that is the entire reason it exists.
+  //
+  // The six canopy gaps used to be six literal `gap(...)` calls inside
+  // _buildLights, so nothing else in the level knew where they were - and
+  // measured, that is why the level's only lighting event did not land.
+  // lighting.js takes BOTH ends of a haze cone to zero on purpose (a cone that
+  // stops at a finite brightness draws its own rim, and a visible rim turns a
+  // beam back into a cone-shaped object), so the last 22% of every shaft fades
+  // out before it reaches the floor. The landing is supposed to come from the
+  // SpotLight underneath - but that puts `lux` on the mud against an overcast
+  // dome already delivering several times as much, so hero1 photographed as a
+  // milky column stopping two metres above a floor whose value was identical
+  // inside and outside it. A shaft that does not land is a searchlight in fog.
+  //
+  // Published as DATA, the POOL can be painted by everything in the level that
+  // has a colour: the floor light bake, the per-instance plant tint and the
+  // merged-bucket vertex colour. That is the only way a pool survives an
+  // overcast key, it costs no draw calls and no triangles, and it puts the light
+  // on the plants standing IN the shaft as well as on the mud under it - which
+  // is what a shaft arriving through a canopy actually does.
+  //
+  // The landing point is derived exactly the way lighting.js derives it, and
+  // that agreement is load-bearing: _solveShaft keeps the published `dir`'s
+  // AZIMUTH and replaces its elevation with a 0.18 horizontal lean on a unit
+  // downward axis, so the beam drifts 0.18 * rise from the aperture over its
+  // run. A pool painted at the aperture's own (x, z) would sit two metres off
+  // the light.
+  function shaftSpecs(P) {
+    if (P._shafts) return P._shafts;
+    var raw = [
+      // kind, x, z, rise, dx, dz, width, lux, colour
+      // The lux is a step down from the values that shipped, because the pool no
+      // longer depends on it: haze opacity is lux * 0.055 in lighting.js, so the
+      // same number that has to make the floor bright also decides how opaque
+      // the column is, and those two wants are opposed. The bake carries the
+      // landing now, so the column can be the thinner thing it should be.
+      ['hero1', P.clearings[0].x + 0.4, P.clearings[0].z, 13.5, 0.17, 0.11, 3.4, 8.0, 0xe4f0a0],
+      ['hero2', P.heli.x + 1.2, P.heli.z - 1.6, 10.5, -0.12, 0.15, 3.0, 6.0, 0xe2eea4],
+      ['hero3', P.firebase.x - 3.0, P.firebase.z + 5.0, 8.0, 0.13, -0.09, 2.6, 4.2, 0xe8f29c],
+      ['hero1b', P.clearings[4].x - 1.2, P.clearings[4].z + 1.0, 11.0, -0.10, 0.16, 2.8, 4.8, 0xdceca4],
+      ['mid', P.clearings[1].x + 1.0, P.clearings[1].z - 1.5, 12.0, 0.14, -0.12, 2.6, 3.6, 0xe0eea6]
+    ];
+    var out = [];
+    for (var i = 0; i < raw.length; i++) {
+      var s = raw[i];
+      var hl = Math.sqrt(s[4] * s[4] + s[5] * s[5]) || 1;
+      var fr = s[6] * 0.5;
+      out.push({
+        kind: s[0], x: s[1], z: s[2], rise: s[3],
+        dx: s[4], dz: s[5], width: s[6], lux: s[7], col: s[8],
+        fx: s[1] + (s[4] / hl) * 0.18 * s[3],
+        fz: s[2] + (s[5] / hl) * 0.18 * s[3],
+        fr: fr, fr2: (fr * 2.7) * (fr * 2.7)
+      });
+    }
+    P._shafts = out;
+    return out;
+  }
+
+  // 0..1 pool weight at a floor point. The rim is broken by the same leaf field
+  // the dapple uses, because a shaft through a canopy lands as a ragged patch of
+  // overlapping ellipses and never as a clean one - and a pool without an edge
+  // is only a slightly brighter piece of floor.
+  function shaftPool(x, z, P) {
+    var A = shaftSpecs(P);
+    var best = 0;
+    for (var i = 0; i < A.length; i++) {
+      var s = A[i];
+      var dx = x - s.fx, dz = z - s.fz;
+      var d2 = dx * dx + dz * dz;
+      if (d2 > s.fr2) continue;
+      var d = Math.sqrt(d2);
+      var w = 1 - M.smoothstep(s.fr * 0.40, s.fr * 1.50, d);
+      w *= 0.36 + 0.64 * M.smoothstep(0.16, 0.70, leafBreak(x, z));
+      // the skirt: sun-fleck spill beyond the cone's own footprint
+      w += (1 - M.smoothstep(s.fr * 1.35, s.fr * 2.7, d)) * 0.18 *
+        M.smoothstep(0.44, 0.88, leafBreak(x * 1.7 + 13.0, z * 1.7 - 8.0));
+      if (w > best) best = w;
+    }
+    return M.saturate(best);
+  }
+
   // ==================================================== PROCEDURAL TEXTURES ==
   // GAME.Noise is perlin on an unbounded lattice and is therefore NOT tileable.
   // Bark wraps a trunk and repeats up it; a seam every 1.4 m on the biggest
@@ -1413,7 +1518,16 @@
       // A wet tropical leaf is WAXY: low roughness on the lamina, higher on the
       // veins and much higher on anything dead. Drives the specular sheen that
       // separates a lit canopy from a flat green wash.
-      var ro = 0.62 - 0.26 * M.saturate(lum * 1.5) + (1 - H[k]) * 0.16;
+      //
+      // FLOORED AT 0.56, NOT 0.36. At 0.36 against a bright overcast dome the
+      // lobe is tight enough to resolve, and the atlas's own 1.9-strength normal
+      // tilts every painted leaf a different way - so the mid-tier cards at
+      // 10-15 m photographed as CRUMPLED TINFOIL: silver shards following the leaf
+      // shapes, right through the top third of hero1, hero2 and hero3. A leaf
+      // twelve metres away seen through mist has no resolvable specular; what it
+      // has is a broad sheen, which is what 0.56-0.84 gives. The lamina/vein
+      // contrast is kept, just at a third of the range.
+      var ro = 0.72 - 0.16 * M.saturate(lum * 1.5) + (1 - H[k]) * 0.12;
       var q = Math.round(M.saturate(ro) * 255);
       R[i2] = q; R[i2 + 1] = q; R[i2 + 2] = q; R[i2 + 3] = 255;
       // Widen the alpha slightly so the mip chain does not eat the leaf tips:
@@ -2250,6 +2364,76 @@
     return whiteColor(weld(list));
   }
 
+  // A DRIFT OF FALLEN LEAVES, AS GEOMETRY.
+  //
+  // The forest floor is 30-40% of every exterior framing in this level and it
+  // was carrying its whole information budget in one 39 cm triplanar tile.
+  // Measured: hero1 and hero2 - the two framings that matter - reported 11.0%
+  // and 13.5% flat area against 5.1-6.3% on the other three, and cropped to one
+  // metre the near bank is a uniform ochre grain with no object of any kind
+  // lying on it. Flat `mark` cards were already being painted there and they
+  // read as exactly what they are: dark amoebae with no silhouette and no
+  // shading.
+  //
+  // Six real broadleaves lying nearly flat plus two twigs is 132 triangles. It
+  // has an outline, it self-shadows, it catches the sheen and clearcoat the
+  // blade material already carries off weather.wetness, and its instance tint
+  // runs it dead-brown - which makes the litter the largest warm mass in a level
+  // whose named failure mode is "saturated green must not become a flat green
+  // wash". It rides the `blade` material, so it costs no new material and no new
+  // texture, and it never casts.
+  function deadLeaves(rng, scale) {
+    var list = [];
+    var i, k, t;
+    // 5 blades and 1 twig, not 7 and 2, and it is a BUDGET decision rather than an
+    // art one. lv_firefight - the level's worst frame, because it carries the AI
+    // and the VFX on top of the world - measured 485 draws and 4.39 M triangles
+    // against ceilings of 500 and 4.5 M, i.e. two per cent of margin. The litter
+    // is ~4200 instances and by far the largest single line of the new spend, so
+    // 148 triangles a drift down to 98 is where the margin comes back. A drift of
+    // five leaves reads the same as one of seven at any range a player sees it.
+    var n = 5;
+    for (i = 0; i < n; i++) {
+      var a = i * (Math.PI * 2 / n) + rng.range(-0.55, 0.55);
+      // 11-26 cm, MEASURED AND HALVED. The first pass authored 19-42 cm blades
+      // and then scaled them up to 1.7, so the near field of hero1 came back as a
+      // carpet of 60 cm dinner plates - which is a stand of collapsed taro, not
+      // litter. A fallen forest leaf is hand-sized.
+      var ln = rng.range(0.11, 0.26) * scale;
+      // shape 1 (widest at mid-length) with a shallow fold. A leaf on the
+      // ground has curled, so it is not a flat card - but it is not a dish
+      // either, and at 0.26 the section is the low arch a drying leaf holds.
+      var g = blade(ln, ln * 0.50, ln * 0.10, ln * rng.range(-0.14, 0.14),
+        0.26, 4, 1, 3);
+      // rx near pi/2 lays the blade's +Y length axis down into the ground plane.
+      // The SPREAD is what matters and 0.20 was not enough: every leaf presented
+      // very nearly the same face to the sky, so the blade material's sheen and
+      // clearcoat lit the whole drift as one sheet of wet plastic. At +/-0.40 the
+      // leaves catch the dome at a dozen different angles, which is what a drift
+      // of curled leaves does.
+      applyMatrix(g, makeM(
+        Math.sin(a) * rng.range(0.02, 0.20) * scale,
+        rng.range(0.004, 0.030) * scale,
+        Math.cos(a) * rng.range(0.02, 0.20) * scale,
+        1.30 + rng.range(-0.55, 0.55), a, rng.range(-0.65, 0.65)));
+      list.push(g);
+    }
+    for (i = 0; i < 1; i++) {
+      var ta = rng.range(0, Math.PI * 2);
+      var tl = rng.range(0.16, 0.34) * scale;
+      var tr = rng.range(0.008, 0.016) * scale;
+      var st = [];
+      for (k = 0; k <= 3; k++) {
+        t = k / 3;
+        st.push([Math.sin(ta) * tl * t,
+          (0.010 + t * t * 0.014) * scale,
+          Math.cos(ta) * tl * t, tr * (1 - t * 0.55)]);
+      }
+      list.push(tube(st, 3, false));
+    }
+    return whiteColor(weld(list));
+  }
+
   function bambooLeafCards(rng, scale, n) {
     var list = [];
     n = n || rng.int(10, 16);
@@ -2745,6 +2929,22 @@
         var aa = Math.abs(x - rc) / rh;
         var shore = 1 - M.smoothstep(0.0, 0.22, Math.abs(aa - 1.0));
         r += shore * 0.030; g += shore * 0.100; b += shore * 0.038;
+
+        // ---- WHERE THE SHAFTS LAND ------------------------------------------
+        // The pool, painted from the same table the SpotLights are built from.
+        // See shaftSpecs(): the haze cone is faded to nothing over its last 22%
+        // so it draws no rim, and the spot's `lux` against an overcast dome is a
+        // third of a stop - so the level's four published shafts photographed as
+        // columns hanging in the air over a floor that had not noticed them.
+        // Additive irradiance in the same lux the shafts are quoted in, so a pool
+        // is a real 9 lux of broken daylight rather than a brighter texture, and
+        // it is warm-yellow-green because that is what light is after forty
+        // metres of leaf. Painted BEFORE the occlusion block below, so the
+        // bunker's roof still stops it.
+        var pw = shaftPool(x, z, P);
+        if (pw > 0) {
+          r += pw * 0.60; g += pw * 0.66; b += pw * 0.26;
+        }
 
         // ---- occlusion ------------------------------------------------------
         var ddx = x - K.x, ddz = z - K.z;
@@ -3487,16 +3687,41 @@
     var wA = bagH * rng.range(0.28, 0.62);
     for (var c = 0; c < courses; c++) {
       var yy = c * bagH * 0.78;
-      var off = (c & 1) ? pitch * 0.5 : 0;
+      // ---- EVERY COURSE USED TO RIDE THE SAME WAVE ---------------------------
+      // wPh / wK / wA were solved once per RUN, so all eleven courses of the
+      // bunker wall were the same curve scaled by cf: the rows stayed exactly
+      // parallel, the columns stayed exactly aligned, and the interior framing -
+      // where the revetment is 45% of the picture at 1.5 m - photographed as a
+      // wavy GRID of identical lozenges. Seven bag silhouettes and a per-bag tint
+      // cannot fix that, because what the eye is reading is the lattice, not the
+      // unit: this object has been through four rounds of varying the bag and the
+      // grid was never touched.
+      //
+      // Per-course phase, frequency, amplitude and datum, plus per-bag jitter
+      // along the run and in height, is what turns parallel rows into masonry.
+      // Every magnitude here is bounded by the OVERLAP, which is the thing that
+      // must not break: a bag is 1.42 x the course pitch along the run and 1.24 x
+      // the course rise, so worst-case adjacent jitters of 0.11 of a pitch and
+      // 4.5 cm still leave 10 cm of along-run and 5 cm of vertical overlap. A
+      // revetment with a hole in it lets the daylight through, and this object
+      // has already had that failure once.
+      var cJit = rng.range(-0.045, 0.045);
+      var cWA = wA * rng.range(0.55, 1.35);
+      var cWPh = wPh + rng.range(-1.2, 1.2);
+      var cWK = wK * rng.range(0.74, 1.32);
+      // The running bond is not a machined half-lap either: a hand-laid course
+      // steps over by "about half a bag".
+      var off = (c & 1) ? pitch * rng.range(0.34, 0.66) : pitch * rng.range(-0.09, 0.09);
       var cn = (c & 1) ? n - 1 : n;
       // the top course is ragged: bags missing, bags knocked off
       var frac = c === courses - 1 ? 0.70 : 1.0;
       var cf = courses > 1 ? c / (courses - 1) : 0;
       for (var i = 0; i < cn; i++) {
         if (rng.next() > frac) continue;
-        var t = (i + 0.5) * pitch + off;
+        var t = (i + 0.5) * pitch + off + rng.range(-0.11, 0.11) * pitch;
         var px = ax + ux * t, pz = az + uz * t;
-        var rise = wA * Math.sin(t * wK + wPh) * cf;
+        var rise = cWA * Math.sin(t * cWK + cWPh) * cf + cJit +
+          rng.range(-0.026, 0.026);
         var py = ay + (by - ay) * (t / len) + yy + bagH * 0.5 + rise;
         var jx = rng.range(-0.055, 0.055);
         var sag = rng.range(0.90, 1.10);
@@ -3873,8 +4098,17 @@
     for (var q = 0; q < 2; q++) {
       for (var ii = 0; ii < bagN; ii++) {
         for (var jj = 0; jj < bagM; jj++) {
-          var lx = -hw - 0.3 + (ii + 0.5) * 0.52 + (q ? 0.20 : 0);
-          var lz = -hd - 0.3 + (jj + 0.5) * 0.40;
+          // A PERFECT LATTICE, AND THE OVERVIEW LOOKS STRAIGHT DOWN ON IT. This
+          // is 360 bags on an exact 0.52 x 0.40 grid with no positional jitter at
+          // all, seen in plan from the tower platform nine metres above it - so
+          // whatever the bag silhouettes and tints do, the roof photographed as a
+          // woven mat of identical cells across a fifth of the establishing shot.
+          // The bags are 0.72 x 0.56 on a 0.52 x 0.40 pitch, so 0.20 m and 0.16 m
+          // of overlap; +/-0.07 and +/-0.05 leaves at least 6 cm of it and is what
+          // turns the mat back into a roof somebody stacked.
+          var lx = -hw - 0.3 + (ii + 0.5) * 0.52 + (q ? 0.20 : 0) +
+            rng.range(-0.07, 0.07);
+          var lz = -hd - 0.3 + (jj + 0.5) * 0.40 + rng.range(-0.05, 0.05);
           if (inHole(lx, lz)) continue;
           var edge = Math.sqrt((lx - holeX) * (lx - holeX) + (lz - holeZ) * (lz - holeZ));
           if (edge < holeR + 0.55 && rng.bool(0.55)) continue;
@@ -3884,10 +4118,11 @@
           if (rng.bool(0.30)) B.tint.multiply(new THREE.Color(0.70, 1.00, 0.72));
           var rvk = rng.next();
           var rshp = rvk < 0.10 ? 6 : (rvk < 0.24 ? 5 : rng.int(0, 4));
+          var rsg = rng.range(0.90, 1.10);
           B.add('sandbag', roofBags[rshp],
-            makeMS(lx, roofY + 0.28 + q * 0.24, lz,
-              rng.range(-0.12, 0.12), rng.range(-0.45, 0.45), rng.range(-0.14, 0.14),
-              0.72, 0.30, 0.56));
+            makeMS(lx, roofY + 0.28 + q * 0.24 + rng.range(-0.035, 0.035), lz,
+              rng.range(-0.14, 0.14), rng.range(-0.55, 0.55), rng.range(-0.16, 0.16),
+              0.72 * rsg, 0.30 * rsg, 0.56 * rsg));
           B.tint = null;
         }
       }
@@ -5044,6 +5279,183 @@
     }
   }
 
+  // ========================================================== THE MID-STOREY ==
+  // THE HOLE IN THIS FOREST WAS BETWEEN TWO METRES AND NINE.
+  //
+  // The level had an understory (0-2 m, real folded-ribbon geometry) and a
+  // canopy (9.5-27 m, alpha cards), and between them nothing whatever except the
+  // four per cent of understory rolls that happened to survive as a palm. So at
+  // eye height, past about six metres, every exterior framing looked straight
+  // through bare trunks into vapour: cropped, hero1's 15-40 m band is a milky
+  // pale wash with no occluding plane and almost no contrast in it, which is the
+  // brief's named "flat green wash" failure arriving as a flat PALE one. A forest
+  // reads as DEPTH because it has four or five overlapping planes between the
+  // lens and the far field. This is the one that was missing.
+  //
+  // IT COSTS NO NEW DRAW CALLS, and that is the whole design of the pass. Every
+  // kind in it is a kind the level already instances, planted at 1.6-3.0x scale:
+  // a banana at 2.3 is a four-metre wild plantain, a fern at 2.6 is a tree fern,
+  // a taro at 2.0 is a three-metre philodendron. All three are real plants of a
+  // delta understory, all three are already generated, tested and merged into an
+  // existing InstancedMesh, and none of them casts. The pass is pure triangles,
+  // which is the budget this level actually has (3.32 M against 4.5 M).
+  //
+  // `tall` is passed to camClear, so this stratum may never grow inside a
+  // published sightline - only beside and behind it. A four-metre plant in a
+  // cone is a wall, and the level has been round that loop already.
+  function scatterMidstorey(L, rng) {
+    var P = L.plan;
+    var N = L.noise;
+    var STEP = 6.1;
+    for (var gz = Z_MIN + 3; gz < Z_MAX - 3; gz += STEP) {
+      for (var gx = X_MIN + 3; gx < X_MAX - 3; gx += STEP) {
+        // Two scales of patchiness, exactly as the understory does it: the
+        // lattice, and a field that decides how many this cell carries. A
+        // mid-storey is thickets and gaps, never an even sprinkle.
+        var band = n01(N.fbm2(gx * 0.088 + 51.0, gz * 0.088 - 24.0, 2));
+        var nPl = Math.round(M.lerp(0.3, 4.2, M.saturate(band * 1.45 - 0.18)));
+        if (nPl < 1) continue;
+        for (var p = 0; p < nPl; p++) {
+          var x = gx + rng.range(-2.9, 2.9);
+          var z = gz + rng.range(-2.9, 2.9);
+          if (!L._inPlay(x, z)) continue;
+          var rc = riverC(z), rh = riverHalf(z);
+          var a = Math.abs(x - rc) / rh;
+          var y = L.sampleGround(x, z);
+          if (a < 1.04 || y < WATER_Y + 0.12) continue;              // in the river
+          if (Math.abs(x - trackX(z)) < TRACK_HALF * 1.45) continue;  // in the road
+          var dfx = x - FB_X, dfz = z - FB_Z;
+          if (dfx * dfx + dfz * dfz < (FB_R - 0.5) * (FB_R - 0.5)) continue;
+          if (camClear(x, z, P, true) > 0.14) continue;
+          // A HARD BUBBLE ROUND EVERY STANDPOINT, on top of the cone. camClear's
+          // own bubble is only C.r + 1.5 (about 2.6 m) because it was sized for
+          // knee-high understory; a four-metre wild plantain three metres off the
+          // lens on the camera's FLANK is outside the cone and still fills a
+          // quarter of the frame with one flat sheet, which is what hero2 came
+          // back as. Nothing in this stratum inside six metres of a pose.
+          var tooNear = false;
+          for (var cm2 = 0; cm2 < P.camMarks.length; cm2++) {
+            var CB2 = P.camMarks[cm2];
+            var bdx = x - CB2.x, bdz = z - CB2.z;
+            if (bdx * bdx + bdz * bdz < 36.0) { tooNear = true; break; }
+          }
+          if (tooNear) continue;
+          var open = skyOpen(x, z, P);
+          var roll = rng.next();
+          var kind, scale;
+          if (roll < 0.62) {
+            // TREE FERN, and it carries the pass. A fern at 2-3x is a feathery
+            // mound of 1.2-3.3 m fronds whose leaves start at the GROUND: it
+            // occludes without reading as a distinct object, which is exactly what
+            // a middle distance needs.
+            kind = 'fern0'; scale = rng.range(1.85, 2.90);
+          } else if (roll < 0.90) {
+            // Wild plantain. The broadest single silhouette available and the one
+            // that still reads at thirty metres through mist. 1.25-1.70, NOT
+            // 1.5-2.45: bananaPlant hangs all six leaves in the top quarter of its
+            // pseudostem, so at 2x it stops being a plant and becomes a rosette on
+            // a bare pole - measured in hero1, a row of cabbages on sticks at six
+            // metres. At 1.25-1.70 it is a 2-3 m clump, which is what it is.
+            kind = 'banana0'; scale = rng.range(1.25, 1.70);
+          } else if (roll < 0.95) {
+            // A palm is 2040 triangles against a banana's 480 and a fern's 576, so
+            // it is one in twenty rather than one in ten: it is the tallest thing
+            // in the stratum and it earns its place on silhouette, not on mass, and
+            // one in twenty is still ~30 of them in the delta.
+            kind = 'palm'; scale = rng.range(0.72, 1.10);
+          } else {
+            kind = 'fern0'; scale = rng.range(2.00, 2.90);
+          }
+          // TARO IS NOT A MID-STOREY PLANT AT 2x. taroPlant is four leaves on
+          // four long petioles, which at knee height is a plant and at two metres
+          // is four flat discs on bare sticks - and that is exactly how the first
+          // pass photographed in lv_overview and hero1: a field of lollipops.
+          // The species that scale are the ones whose leaves start at the ground.
+          // A gap grows a thicket; deep shade grows the shade-tolerant ones
+          // smaller. This is the only place openness enters, and it is a SIZE
+          // term rather than a species one - the species are all understory
+          // plants and all of them occur under a closed roof.
+          scale *= 0.86 + 0.26 * open;
+          L.addInst(kind, makeM(x, y, z, rng.range(-0.11, 0.11),
+            rng.range(0, 6.28), rng.range(-0.11, 0.11)), scale, y + 2.4);
+        }
+      }
+    }
+  }
+
+  // ============================================================== THE LITTER ==
+  // DEPOSITION, NOT SCATTER. Leaf litter collects; it does not distribute. The
+  // seeds sit on a 3.4 m jittered lattice weighted by how CLOSED the roof above
+  // them is - a leaf falls out of a canopy, so there is none where there is no
+  // canopy - and by the same macro field buildGround's own litter drift and
+  // buildFloorLight's warm mass are painted from, so the geometry lands ON the
+  // drift the floor already has rather than beside it.
+  //
+  // It is allowed on the track and inside the wire on purpose: leaves blow into
+  // a rut and pile against a sandbag, and a flat 4 cm leaf cannot mask a subject
+  // at any range, so this is the one planting pass with no sightline exclusion at
+  // all. That is exactly why it can fix the near field of a published framing.
+  function scatterLitter(L, rng) {
+    var P = L.plan;
+    var N = L.noise;
+    var i;
+
+    function put(x, z, s) {
+      if (!L._inPlay(x, z)) return;
+      if (Math.abs(x - riverC(z)) / riverHalf(z) < 1.02) return;
+      var y = L.sampleGround(x, z);
+      if (y < WATER_Y + 0.06) return;
+      L.addInst('deadleaf', makeM(x, y + 0.012, z,
+        rng.range(-0.055, 0.055), rng.range(0, 6.28), rng.range(-0.055, 0.055)),
+        s, y);
+    }
+
+    var STEP = 3.4;
+    for (var gz = Z_MIN + 2; gz < Z_MAX - 2; gz += STEP) {
+      for (var gx = X_MIN + 2; gx < X_MAX - 2; gx += STEP) {
+        var sx = gx + rng.range(-1.5, 1.5), sz = gz + rng.range(-1.5, 1.5);
+        var open = skyOpen(sx, sz, P);
+        var drift = M.smoothstep(0.30, 0.70,
+          n01(N.fbm2(sx * 0.145 + 11.0, sz * 0.145 - 6.0, 3)));
+        // MEASURED AND DOUBLED. At (0.28 + 0.72 * (1 - open)) the open ground got
+        // nothing: hero2 stands on a bank crest where skyOpen is 1.0, so the pass
+        // put 0-1 drifts in a 3.4 m cell and the mound came back as the same
+        // uniform granular carpet it had been, only green instead of ochre. Open
+        // ground in a delta is not swept clean - it is where flood debris and
+        // wind-blown leaf ends up - so the openness term is a bias now, not a gate.
+        // 0.36, between the 0.28 that left the open ground bare and the 0.46 that
+        // put isolated bright flecks all over the firebase field. A cleared field
+        // of fire is swept and trodden; a closed forest floor is buried.
+        var dens = (0.30 + 0.70 * drift) * (0.36 + 0.64 * (1 - open));
+        var nn = Math.round(M.lerp(0, 5.6, dens));
+        for (i = 0; i < nn; i++) {
+          put(sx + rng.range(-1.7, 1.7), sz + rng.range(-1.7, 1.7),
+            rng.range(0.70, 1.55));
+        }
+      }
+    }
+
+    // ---- AND THICKEST RIGHT UNDER THE LENS ----------------------------------
+    // The nearest three metres of hero1 and hero2 are bare ochre grain, because
+    // the sightline cone that correctly keeps the SUBJECT clear was also the only
+    // thing standing between the camera and the floor. Litter has no height, so
+    // it is the one thing that can go there.
+    for (var cm = 0; cm < P.camMarks.length; cm++) {
+      var CM = P.camMarks[cm];
+      // 300, not 110. A drift is about 0.09 m2 of coverage, so 110 over a disc of
+      // 190 m2 is five per cent - i.e. arithmetically incapable of changing what
+      // the floor under the lens looks like. 300 out to 8.5 m is the density at
+      // which the near field stops being ground with objects on it and starts
+      // being a forest floor.
+      for (i = 0; i < 300; i++) {
+        var la = rng.range(0, Math.PI * 2);
+        var lr = 0.6 + Math.pow(rng.next(), 0.55) * 8.5;
+        put(CM.x + Math.sin(la) * lr, CM.z + Math.cos(la) * lr,
+          rng.range(0.80, 1.70));
+      }
+    }
+  }
+
   // ================================================================ THE ROOF ==
   // THE CANOPY IS A LAYER, NOT A DECORATION ON THE TREES.
   //
@@ -5094,33 +5506,73 @@
         // and it must not have a visible edge in it.
         var outside = (x < X_MIN + 2 || x > X_MAX - 2 || z < Z_MIN + 2 || z > Z_MAX - 2);
         var dens = outside ? 1.0 : (1 - open * 0.94);
-        // HARD exclusion, not a probability. The firebase was CUT out of the
-        // forest, so nothing overhangs it - and the overview framing stands on
-        // the tower platform inside it, where a six-per-cent chance of a blob
-        // was enough to hang a nine-metre leaf card two metres in front of the
-        // establishing shot's lens.
+        // HARD exclusion of the inner base, not a probability. The firebase was
+        // CUT out of the forest, so nothing overhangs it - and the overview
+        // framing stands on the tower platform inside it, where a six-per-cent
+        // chance of a blob was enough to hang a nine-metre leaf card two metres
+        // in front of the establishing shot's lens.
+        //
+        // BUT THE FOREST STILL ARCHES OVER THE EDGE OF THE CUT, and the level was
+        // saying otherwise out to 20 m plus everything skyOpen > 0.80 covered -
+        // about 30 m. hero3 stands 9.8 m off the base's centre looking across it,
+        // so its canopy horizon fell just below the top of the frame and the upper
+        // sixth of the level's third hero framing was bare blown overcast with the
+        // watchtower silhouetted against it. The pose's own comment says the
+        // canopy standing behind the tower is the point, "because a tower
+        // photographed against sky could be anywhere".
+        //
+        // So: the mid and low tiers keep the hard exclusion (they sit at the
+        // tower platform's own height, and one of them is what hung the card in
+        // front of the establishing shot), and the HIGH tier comes back in the
+        // ring from 18 m out at 42% density and 21-30 m up - five to fifteen
+        // metres above the tower roof, and far enough out that a 4.5 m card
+        // half-extent still cannot reach the platform.
+        // ---- AND THE CROWNS LEAN OUT OVER THE RIVER ---------------------------
+        // skyOpen is 1.0 across the whole channel, so dens fell to 0.06 and the
+        // roof simply stopped at the water. That is right for the CENTRE - the
+        // open channel is the level's one bright floor and its band of reflected
+        // cloud - and wrong for the edges: a 26 m creek through primary forest has
+        // 25 m crowns arching out over both banks, and without them hero1's
+        // upper-left corner (which looks over the east bank toward the water) is a
+        // blown pale wash with 42% flat area in it, and the establishing shot's
+        // canopy horizon has a hole in it.
+        //
+        // High tier only, and only from 0.95 of the half-width outward, so the
+        // channel keeps its sky and the water keeps its reflection.
+        var rvA = Math.abs(cx - riverC(cz)) / riverHalf(cz);
+        var rvEdge = !outside && rvA > 0.95 && rvA < 1.40;
+        var fbRing = false;
         if (!outside) {
           var fdx = x - FB_X, fdz = z - FB_Z;
-          if (fdx * fdx + fdz * fdz < (FB_R + 3.0) * (FB_R + 3.0)) continue;
-          if (open > 0.80) continue;
+          var fd2 = fdx * fdx + fdz * fdz;
+          if (fd2 < 18.0 * 18.0) continue;
+          if (fd2 < (FB_R + 10.0) * (FB_R + 10.0)) {
+            if (rng.next() > 0.42) continue;
+            fbRing = true;
+          } else if (rvEdge) {
+            if (rng.next() > 0.55) continue;
+          } else if (open > 0.80) continue;
         }
-        if (rng.next() > dens) continue;
+        if (!fbRing && !rvEdge && rng.next() > dens) continue;
         // High tier - the roof. 17-27 m, not 13.5-23: the nearest cards in a
         // 75-degree framing were 8-12 m from the lens, which is close enough to
         // read an individual leaf on them. Raising the deck four metres puts the
         // nearest at 12-16 m and, together with the leaf-size fix above, drops
         // what one leaf subtends from 8-10 degrees to about 2.
+        // In the firebase ring the deck goes up nine metres, so the cut's own
+        // canopy horizon stands clear above the watchtower roof rather than
+        // level with it.
         card('canopy' + (rng.next() < 0.34 ? 0 : (rng.next() < 0.5 ? 1 : 2)),
-          x, gy + rng.range(17.0, 27.0), z,
+          x, gy + (fbRing ? rng.range(21.0, 30.0) : rng.range(17.0, 27.0)), z,
           rng.range(-0.25, 0.25), rng.range(0, 6.28), rng.range(-0.25, 0.25),
-          rng.range(1.00, 1.70), gy + 22);
+          rng.range(1.00, 1.70), gy + (fbRing ? 25 : 22));
         // mid tier - the thing that was missing between the understory and the
         // roof, and the reason the middle distance was nothing but bare poles.
         // 0.52, not 0.34: with the shadow budget freed up this is the cheapest
         // depth cue in the level - two triangles a card, no shadow pass, and it
         // is what puts a fourth and fifth plane between the trunk at 12 m and
         // the fog at 60.
-        if (rng.bool(0.52)) {
+        if (!fbRing && !rvEdge && rng.bool(0.52)) {
           card('canopy' + (rng.next() < 0.6 ? 2 : 1),
             x + rng.range(-2.0, 2.0), gy + rng.range(9.5, 15.0),
             z + rng.range(-2.0, 2.0),
@@ -5129,7 +5581,7 @@
         }
         // a dead frond caught on the way down, and a hanging liana, only under
         // the closed part of the roof
-        if (!outside && open < 0.4 && rng.bool(0.05)) {
+        if (!fbRing && !rvEdge && !outside && open < 0.4 && rng.bool(0.05)) {
           card('canopy2',
             x + rng.range(-1.5, 1.5), gy + rng.range(3.5, 6.5),
             z + rng.range(-1.5, 1.5), rng.range(-0.6, 0.6), rng.range(0, 6.28), 0,
@@ -5291,11 +5743,16 @@
           0.17, 0.32, dir, grey(rng.range(0.85, 1.10)));
       }
     }
-    // the leaf drift under closed canopy
+    // The leaf drift under closed canopy - the STAIN the real fallen-leaf
+    // geometry stands on (see deadLeaves / scatterLitter). Tinted warm rather
+    // than neutral so the painted drift and the modelled leaves agree: with a
+    // neutral tint the card took its hue from the atlas alone and the two read as
+    // two different materials lying on top of each other.
     for (i = 0; i < L.litter.length; i++) {
       var lt = L.litter[i];
       markCard(B, MARK.litter, lt[0], lt[1], lt[2], lt[3], lt[3], lt[4],
-        new THREE.Color(rng.range(0.85, 1.15), rng.range(0.85, 1.10), rng.range(0.75, 1.0)));
+        new THREE.Color(rng.range(1.18, 1.52), rng.range(0.88, 1.06),
+          rng.range(0.48, 0.74)));
     }
     // algal scum along both banks
     for (i = 0; i < 210; i++) {
@@ -5597,14 +6054,37 @@
     // nearly all its value from the sky it reflects. That reflection is why the
     // river is the brightest floor in the level and why it can carry the bottom
     // half of a framing on its own.
+    // MEASURED: THE RIVER WAS DARKER THAN TAR. This file's own header calls the
+    // channel "the level's only open sky and therefore its only bright floor: a
+    // horizontal band of reflected cloud low in every framing that looks west",
+    // and hero2's near water measured a median of 0.040 linear luminance against
+    // 0.254 for the vapour directly above it - two and two-thirds stops the WRONG
+    // WAY for a near-mirror at 9 degrees of incidence. The planar pass is on and
+    // is working (there is real structure and a real specular lane), but its
+    // default handover of 0.5 toward grazing hands the surface over to the
+    // ABSOLUTE brightness of the reflected canopy, and the reflected canopy is
+    // the darkest thing in the level. graze 0.34 keeps the structure the pass
+    // exists for and gives most of the authored level back, and the probe term is
+    // lifted with it. Both are water() options; no shared system is touched.
     return lib.water({
       color: 0x131a12,
       roughness: 0.085,
-      envMapIntensity: 1.30,
-      depth: 2.4,
+      envMapIntensity: 2.00,
+      reflect: { graze: 0.30 },
+      // A SILT RIVER IS TURBID, AND TURBID WATER IS NOT DARK. The reflection lifts
+      // the far channel, where the incidence is grazing; the NEAR channel is where
+      // the eye looks steeply down, the reflection term falls away and the surface
+      // takes its value from the body - and the body was 0x131a12 over a 0x2a2414
+      // bed at 2.4 m of absorption, i.e. near black. A Mekong reach carries so much
+      // suspended silt you cannot see 30 cm into it, and what that looks like is a
+      // milky olive-brown that scatters light back OUT. Shallower absorption plus a
+      // lighter bed and in-scatter tint is what turns the near water from tar into
+      // water; the transmitted hue stays brown-green because blue is still absorbed
+      // hardest, which is the one thing a delta does opposite to the sea.
+      depth: 1.85,
       absorb: [0.17, 0.27, 0.62],
-      bed: 0x2a2414,
-      tint: 0x40431f,
+      bed: 0x3b3420,
+      tint: 0x55583a,
       foam: 0x9aa07a,
       foamWidth: 1.1,
       waveAmp: 0.42
@@ -5909,7 +6389,8 @@
     banana0: 'blade', banana1: 'blade',
     palmTrunk: 'bark', palmCrown: 'blade',
     bambooCulm: 'bark', bambooLeaf: 'canopy',
-    canopy0: 'canopy', canopy1: 'canopy', canopy2: 'canopy'
+    canopy0: 'canopy', canopy1: 'canopy', canopy2: 'canopy',
+    deadleaf: 'blade'
   };
   var NO_SHADOW = {
     grass0: 1, grass1: 1, grass2: 1, fern0: 1, fern1: 1,
@@ -5924,7 +6405,9 @@
     // light bake already draws. Under an OVERCAST dome a knee-high leaf casts
     // essentially nothing, and this is the same trade the file already made for
     // the canopy and the palm crowns.
-    taro0: 1, taro1: 1, banana0: 1, banana1: 1
+    taro0: 1, taro1: 1, banana0: 1, banana1: 1,
+    // A leaf lying flat on the mud casts nothing an overcast dome could resolve.
+    deadleaf: 1
   };
   // EVERY EXTRA KIND IS A DRAW CALL IN EVERY CHUNK AND IN EVERY CASCADE. These
   // four existed only as a size variant of another kind, which addInst's own
@@ -5966,9 +6449,24 @@
     if (al) { kind = al[0]; scale = (scale === undefined ? 1 : scale) * al[1]; }
     if (!INST_MAT[kind]) return;
     var el = m.elements;
-    var ci = M.clamp(Math.floor((el[12] - X_MIN) / INST_CX), 0, INST_NX - 1);
-    var cj = M.clamp(Math.floor((el[14] - Z_MIN) / INST_CZ), 0, INST_NZ - 1);
-    var slotKey = kind + '#' + (cj * INST_NX + ci);
+    // CHUNKING BUYS NOTHING FOR THE LITTER, SO IT PAYS NOTHING FOR IT. The chunk
+    // grid is 2 x 2 over 120 x 124 m, so a chunk's bounding sphere is 43 m in
+    // radius - which any camera standing in the middle of the delta intersects on
+    // all four. Measured: the mid-storey and litter passes added an almost
+    // IDENTICAL 915 k triangles to every one of the five framings, i.e. the chunk
+    // culling was not rejecting any of it. For the plant strata the split still
+    // earns its keep at the edges of the map, but the litter is a flat carpet that
+    // covers the whole floor and is never rejected anywhere, so four meshes is
+    // three draw calls spent on nothing - and lv_firefight is the frame with two
+    // per cent of draw-call margin in it.
+    var slotKey;
+    if (kind === 'deadleaf') {
+      slotKey = kind + '#0';
+    } else {
+      var ci = M.clamp(Math.floor((el[12] - X_MIN) / INST_CX), 0, INST_NX - 1);
+      var cj = M.clamp(Math.floor((el[14] - Z_MIN) / INST_CZ), 0, INST_NZ - 1);
+      slotKey = kind + '#' + (cj * INST_NX + ci);
+    }
     var slot = this._inst[slotKey] ||
       (this._inst[slotKey] = { kind: kind, m: [], c: [] });
     var s = scale === undefined ? 1 : scale;
@@ -5998,6 +6496,48 @@
     var b = v * (0.92 - 0.16 * warm);
     if (kind === 'bambooCulm' || kind === 'palmTrunk') {
       r = v * 1.12; g = v * 1.06; b = v * 0.78;
+    } else if (kind === 'deadleaf') {
+      // DEAD, AND THAT IS THE POINT OF IT. The level's chroma measured an 18-38
+      // degree hue interquartile range in every sampled region - the whole
+      // picture living in one wedge - and the floor is the largest surface it can
+      // put OUTSIDE that wedge. So the litter runs ochre through to a rotted
+      // near-black brown, with about one leaf in six freshly enough down to be
+      // still holding its colour. Ignoring the green ramp above is deliberate:
+      // a dead leaf is not a cool leaf, it is a different pigment.
+      // A MULTIPLIER CANNOT MAKE A GREEN TEXTURE BROWN AT 1.3 : 0.9. The blade
+      // albedo is a live leaf - roughly (0.15, 0.35, 0.08) linear - so green is
+      // already the largest channel by 2.3 : 1 and a 1.4 : 1 red bias still comes
+      // out olive. Measured: the first litter pass photographed as a carpet of
+      // FRESH GREEN leaves, which added silhouette to the floor and nothing at all
+      // to its hue range. Brown needs the red channel about three times the green
+      // one, so the ceiling in the clamp below is 2.6 rather than 2.0.
+      // The RATIO makes it brown, the MAGNITUDE makes it litter. At 2.30 : 0.76
+      // the leaves came out ochre and correct in hue and a full stop too BRIGHT -
+      // a drift of pale straw lying on a dark forest floor, which reads as
+      // sawdust. Dead leaf under a closed canopy is a dark umber; the ratio is
+      // kept and the whole thing is scaled down by a quarter.
+      // SOLVED AGAINST THE MEASUREMENT, TWICE. At 1.72 : 0.57 the litter rendered
+      // with a mean of [0.097 0.095 0.039] - red equal to green, i.e. olive-yellow
+      // rather than brown - because the blade albedo's green is about three times
+      // its red, so a 3 : 1 multiplier only gets you back to parity. Brown wants
+      // r/g around 1.5 in the OUTPUT, so the multiplier ratio has to be about
+      // 4.4 : 1. The luminance is held roughly where it was (the litter already
+      // measured 0.055 median against 0.084 for the ground beside it, which is
+      // correct - dead leaf is darker than wet mud, not brighter).
+      // SOLVED FROM THE RENDERED MEAN, not from the multiplier. At (1.72, 0.57,
+      // 0.23) the litter measured [0.097 0.095 0.039] - olive-yellow, red equal to
+      // green - and at (1.95, 0.44, 0.16) it went ORANGE and read as confetti
+      // scattered on the firebase field. Wet leaf litter in shade is about
+      // [0.055 0.038 0.022] linear: r/g near 1.5 in the OUTPUT and roughly half
+      // the luminance of the first attempt. Scaling the measurement gives
+      // (1.15, 0.27, 0.15), and the wide per-leaf value spread on top of it is what
+      // makes a DRIFT rather than a set of identical bright flecks - a real drift
+      // runs from a pale newly-fallen leaf to a near-black rotted one.
+      var fresh = rng.next() < 0.16 ? 1 : 0;
+      var wj = rng.range(0.62, 1.34);
+      r = v * M.lerp(1.15, 0.74, fresh) * wj;
+      g = v * M.lerp(0.27, 0.50, fresh) * wj * rng.range(0.88, 1.10);
+      b = v * M.lerp(0.15, 0.30, fresh) * wj * rng.range(0.66, 1.34);
     } else {
       // PER-PLANT HUE. The whole understory shares ONE albedo map, so the only
       // place its hue can vary is here - and without it 2500 plants are 2500
@@ -6029,7 +6569,18 @@
     var op2 = skyOpen(m12[12], m12[14], this.plan);
     var dl = 0.72 + 0.46 * op2 * (0.25 + 0.75 * dp);
     r *= dl; g *= dl; b *= dl * (1 - 0.10 * dp);
-    slot.c.push(new THREE.Color(r, g, b));
+    // AND THE SHAFT POOL REACHES THE PLANTS IN IT. A shaft whose pool exists
+    // only on the mud is a projected slide: the four things standing in hero1's
+    // cone were the same value as the four standing two metres outside it, which
+    // is the tell that says the light is painted on the floor rather than
+    // arriving through the roof. Warm, because forty metres of leaf is a filter.
+    var pl2 = shaftPool(m12[12], m12[14], this.plan);
+    if (pl2 > 0) {
+      var pg = 1 + 0.42 * pl2;
+      r *= pg; g *= pg * 0.99; b *= pg * 0.80;
+    }
+    slot.c.push(new THREE.Color(
+      M.clamp(r, 0.03, 2.6), M.clamp(g, 0.03, 2.6), M.clamp(b, 0.03, 2.6)));
   };
 
   LevelJungle.prototype._buildInstances = function () {
@@ -6058,7 +6609,8 @@
       bambooLeaf: function () { return bambooLeafCards(rng, 1.0, 12); },
       canopy0: function () { return canopyCluster(rng, 2.9, CELL.canopyA); },
       canopy1: function () { return canopyCluster(rng, 2.9, CELL.canopyB); },
-      canopy2: function () { return canopyCluster(rng, 2.9, CELL.canopyC); }
+      canopy2: function () { return canopyCluster(rng, 2.9, CELL.canopyC); },
+      deadleaf: function () { return deadLeaves(rng, 1.0); }
     };
     // The crown has to sit on top of the trunk it shares an instance transform
     // with, so it is generated from the same palm.
@@ -6170,6 +6722,10 @@
 
     stage('understory', function () { scatterUnderstory(self, rng); });
     await GAME.yieldFrame();
+    stage('midstorey', function () { scatterMidstorey(self, rng); });
+    await GAME.yieldFrame();
+    stage('litter', function () { scatterLitter(self, rng); });
+    await GAME.yieldFrame();
     stage('canopy', function () { scatterCanopy(self, rng); });
     await GAME.yieldFrame();
     stage('marks', function () { buildGroundMarks(self, B, rng); });
@@ -6270,6 +6826,16 @@
       var eop = skyOpen(em[12], em[14], plan);
       var dl = 0.74 + 0.70 * eop * (0.22 + 0.78 * M.smoothstep(0.35, 0.75, edp));
       if (!emissive) { tr *= dl; tg *= dl; tb *= dl * (1 - 0.06 * edp); }
+      // ...and so does the shaft pool. Same reason as in addInst: the sandbag
+      // run, the drum and the revetment post standing in a cone have to be lit
+      // by it, or the cone is a slide projected onto the mud.
+      if (!emissive) {
+        var epl = shaftPool(em[12], em[14], plan);
+        if (epl > 0) {
+          var pg2 = 1 + 0.36 * epl;
+          tr *= pg2; tg *= pg2 * 0.99; tb *= pg2 * 0.82;
+        }
+      }
       for (i = 0; i < cnt; i++) {
         j = (vi + i) * 3;
         var x = pa[j], y = pa[j + 1], z = pa[j + 2];
@@ -6314,8 +6880,18 @@
           // its pores. Nothing in the level was saying so - the sandbags, the
           // drums and the revetment posts all ran the same value from ground to
           // top, which is the tell that says "dropped in", not "stood here".
-          var splash = Math.pow(M.saturate(1 - above / 0.34), 1.8);
-          r *= 1 - splash * 0.34; g *= 1 - splash * 0.30; b *= 1 - splash * 0.22;
+          //
+          // IT MUST NOT REACH THE GROUND MARKS. A decal card lies AT above = 0.02,
+          // so every boot print, tyre rut, leaf drift and scum patch in the level
+          // was taking the full 34% - i.e. the marks were a third of a stop darker
+          // than the mud they are painted on, which is why the leaf drift under
+          // the closed canopy photographed as a set of dark amoebae rather than as
+          // a drift. Splash is a term about the bottom of a STANDING object; the
+          // floor cannot splash itself.
+          if (key !== 'mark') {
+            var splash = Math.pow(M.saturate(1 - above / 0.34), 1.8);
+            r *= 1 - splash * 0.34; g *= 1 - splash * 0.30; b *= 1 - splash * 0.22;
+          }
         } else {
           // Bark and leaf: the same moss idea, plus a height ramp that cools
           // and darkens as it climbs into the canopy. The blue leg CLIMBS with
@@ -6511,48 +7087,55 @@
     }
 
     // ---- the shafts ---------------------------------------------------------
+    // FIVE CANOPY GAPS, READ OUT OF shaftSpecs() RATHER THAN WRITTEN HERE. The
+    // table is the one place their positions live, so the floor light bake, the
+    // per-instance plant tint and the merged-bucket vertex colour can all put
+    // the POOL down at exactly the point lighting.js is going to land the beam.
+    // Before this the shafts were literals in this function and nothing else in
+    // the level had any way to know where they were - which is why they hung in
+    // the air over a floor that was the same value inside them and outside.
     var shafts = this.lightShafts = [];
-    var self = this;
-    function gap(kind, x, z, rise, dx, dz, width, lux, col) {
-      var gy = self.sampleGround(x, z);
+    var specs = shaftSpecs(P);
+    for (var si = 0; si < specs.length; si++) {
+      var sp2 = specs[si];
       shafts.push({
-        kind: kind,
-        origin: new THREE.Vector3(x, gy + rise, z),
-        dir: new THREE.Vector3(dx, -1, dz).normalize(),
-        width: width, length: rise, strength: 1.0,
-        lux: lux, always: true, color: col
+        kind: sp2.kind,
+        origin: new THREE.Vector3(sp2.x, this.sampleGround(sp2.x, sp2.z) + sp2.rise,
+          sp2.z),
+        dir: new THREE.Vector3(sp2.dx, -1, sp2.dz).normalize(),
+        width: sp2.width, length: sp2.rise, strength: 1.0,
+        lux: sp2.lux, always: true, color: sp2.col
       });
     }
-    // A GOD RAY YOU CANNOT SEE THROUGH IS A SEARCHLIGHT. At 15 lux into a level
-    // whose lit ground measures 0.16, with an ADDITIVE toneMapped:false haze
-    // mesh over it and the roster's thickest volumeIntensity behind that, all
-    // four shafts photographed as parallel-sided milky columns that erased a
-    // whole revetment run and a plant standing behind one of them. The haze
-    // opacity is lux * 0.055, so 15 clipped at 0.83 - opaque.
+    // A GOD RAY YOU CANNOT SEE THROUGH IS A SEARCHLIGHT, and the haze opacity
+    // lighting.js applies is lux * 0.055 - so the same number that decides how
+    // bright the pool is also decides how OPAQUE the column is, and those two
+    // wants are opposed. At 15 the columns clipped at 0.83 and erased a whole
+    // revetment run; at 9 they were translucent and the pool was a third of a
+    // stop. The table now carries 8 / 6 / 4.2 / 4.8 / 3.6 and the POOL is painted
+    // separately by shaftSpecs / shaftPool, which is what breaks the deadlock.
     //
-    // 6 / 4.5 / 3 / 8, and the SPREAD is the point: a 3 lux shaft at the back of
-    // the frame is what makes the 6 lux one at the front read as bright. Widths
-    // go to 5-6 m (the API clamps at 6) so the cone TAPERS over its length
-    // instead of standing there as a tube, and the tops are staggered so they
-    // do not all start at the same height.
-    // A WIDE SHAFT IS A WALL. At 6 m width the hero1 cone is parallel-sided
-    // over its whole 13.5 m and lands as a milky curtain the same hue and value
-    // as the fog it stands in; at 3.4 it TAPERS to a defined ellipse on the
-    // ruts, which is what makes it read as a shaft rather than as smoke. The
-    // lux goes up because the footprint went down - the same photons through a
-    // third of the area. The colours are pushed a step warmer than the fog so
-    // the shafts separate by HUE as well as by value, which is the only way a
-    // pale column reads against pale vapour.
-    // 1 - the track clearing south of the creek. hero1's subject.
-    gap('hero1', P.clearings[0].x + 0.4, P.clearings[0].z, 13.5,
-      0.17, 0.11, 3.4, 9.0, 0xe4f0a0);
-    // 2 - the gap the helicopter came down through. hero2's key.
-    gap('hero2', P.heli.x + 1.2, P.heli.z - 1.6, 10.5,
-      -0.12, 0.15, 3.0, 6.5, 0xe2eea4);
-    // 3 - over the firebase, between the shattered survivors. The deep one.
-    gap('hero3', P.firebase.x - 3.0, P.firebase.z + 5.0, 8.0,
-      0.13, -0.09, 2.6, 4.6, 0xe8f29c);
-    // 4 - the shell hole in the bunker roof. The whole reason the interior
+    // The SPREAD is deliberate: a 3.6 lux shaft at the back of the frame is what
+    // makes the 8 lux one at the front read as bright. Widths stay at 2.6-3.4 m
+    // (the API clamps at 6) so the cone TAPERS over its length instead of
+    // standing there as a tube - at 6 m the hero1 cone was parallel-sided over
+    // its whole 13.5 m and landed as a milky curtain the same hue and value as
+    // the fog it stood in. The colours are a step warmer than the fog so the
+    // shafts separate by HUE as well as by value, which is the only way a pale
+    // column reads against pale vapour.
+    //
+    //   1 hero1   the track clearing south of the creek. hero1's subject.
+    //   2 hero2   the gap the helicopter came down through. hero2's key.
+    //   3 hero3   over the firebase, between the shattered survivors.
+    //   4 hero1b  a second, dimmer pool further down hero1's road, which is what
+    //             makes the near one read as near.
+    //   5 mid     the creek crossing.
+    // All five now live in shaftSpecs() at the top of the file. lighting.js
+    // builds up to eight for a declarative level and only the first casts a
+    // shadow, so the fourth and fifth cost one unshadowed SpotLight and one
+    // additive cone each.
+    //
+    // 6 - the shell hole in the bunker roof. The whole reason the interior
     //     framing is not a black rectangle. It keeps the most lux of the four
     //     because the room around it is genuinely dark, not merely shaded.
     //     IT IS THE COOLEST LIGHT IN THE BUILDING, NOT THE WARMEST. Published
@@ -6573,19 +7156,6 @@
       });
     }
 
-    // ---- two more canopy gaps ------------------------------------------------
-    // "Light arrives as shafts filtered through canopy" is the first line of
-    // the brief and the level was publishing THREE over 150 x 150 m, so hero1
-    // had one lighting event and every other exterior had none. lighting.js
-    // builds up to eight for a declarative level and only the first casts a
-    // shadow, so a fifth and a sixth cost one unshadowed SpotLight and one
-    // additive cone each. Both are placed on published sightlines: a SECOND,
-    // dimmer pool further down hero1's road (which is what makes the near one
-    // read as near) and one on the creek crossing.
-    gap('hero1b', P.clearings[4].x - 1.2, P.clearings[4].z + 1.0, 11.0,
-      -0.10, 0.16, 2.8, 5.2, 0xdceca4);
-    gap('mid', P.clearings[1].x + 1.0, P.clearings[1].z - 1.5, 12.0,
-      0.14, -0.12, 2.6, 4.0, 0xe0eea6);
   };
 
   // ---- IT RAINS INSIDE THE BUNKER ---------------------------------------------
