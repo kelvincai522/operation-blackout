@@ -318,8 +318,42 @@
     // metal 0.45, not 0.68: every railing, truss and rack in the level is seen
     // from its shaded side in at least one published framing, and above ~0.5 a
     // shaded painted-steel member has no diffuse left to be lit by.
+    // ---------------------------------------------------------------------
+    // 0.26 / 0.62, and it is the same argument carried one step further by a
+    // frame that made the cost visible. The overview eye stands ON the water
+    // tower catwalk, so the nearest object in the establishing shot - one metre
+    // from the lens, across the bottom third - is a `steel` handrail and a
+    // `steel` deck plank. At metalness 0.45 an up-facing member a metre from
+    // the lens has almost no diffuse and mirrors the ZENITH sky, so the frame's
+    // whole foreground printed as a dark navy bar with white specular confetti
+    // scattered along it: chrome rope, not galvanised handrail. The same defect
+    // at lower contrast turns the parts-yard wing racks in hero2 into a
+    // blue-white jungle gym. Chalked painted steel in the Sonoran desert is a
+    // near-dielectric satin; 0.26 hands most of that surface back to the
+    // diffuse term (which is also the only fill a shaded member gets) and the
+    // extra roughness stops the rivet field in the shared skin map picking
+    // single-pixel speculars out of the sky.
+    // ---------------------------------------------------------------------
+    // macro 0.04, AND IT IS THE OTHER HALF OF THE SAME FRAME.
+    //
+    // Dropping the metalness took the sky mirror off the catwalk but the bar was
+    // still blotchy blue-grey with white specks along it, and the cause is the
+    // uv above rather than the shader: 0.16 is a 6.25 METRE tile, so a 0.85 m
+    // deck plank one metre from the establishing eye shows one seventh of one
+    // tile - the library's macro colour/roughness field magnified about seven
+    // times, which is a smooth 40 cm blotch on a 50 mm bar at 30 m and a pair of
+    // 3 m stains on a plank at 1 m. Raising the uv would fix the plank and
+    // reintroduce the "every bar picks a different random value" failure the
+    // note above exists to prevent, so the density stays and the MACRO LAYER
+    // goes: 0.04 instead of painted_metal's 0.17. What is left carrying the
+    // surface is the detail layer, which materials.js samples in WORLD space at
+    // a 4-5 cm period (wdet) and is therefore the same size on a handrail at
+    // 1 m and a truss at 40 m - exactly the property this material needs. ns
+    // 0.62 for the same reason: at full strength the magnified normal was
+    // throwing the single-pixel speculars that read as the confetti.
     steel:      { uv: 0.16, cast: true, recv: true, wear: false,
-                  base: 'painted_metal', target: 0x808690, rough: 0.54, metal: 0.45 },
+                  base: 'painted_metal', target: 0x808690, rough: 0.62, metal: 0.26,
+                  macro: 0.04, ns: 0.62 },
     rusted:     { uv: 0.40, cast: true, recv: true, wear: false,
                   base: 'rusted_metal', target: 0x6b4834, rough: 0.86, metal: 0.28 },
     // ---------------------------------------------------------------------
@@ -373,7 +407,7 @@
     wrap:       [0xd8d4c6, 0.88, 0.0],
     canopy:     [0x3d474c, 0.22, 0.0],
     tyre:       [0x232426, 0.86, 0.0],
-    steel:      [0x868b93, 0.52, 0.45],
+    steel:      [0x868b93, 0.60, 0.26],
     rusted:     [0x77503a, 0.84, 0.28],
     clad:       [0x9a9c98, 0.56, 0.40],
     conc_wall:  [0xa39a8b, 0.92, 0.0],
@@ -2300,10 +2334,30 @@
         var ex = e.x * s;
         var ez = (e.z !== undefined ? e.z
           : (T.wing.rootZ + e.x * Math.tan(T.wing.sweep) - e.fwd)) * s;
-        var ey = (T.wing ? T.wing.y * s : spec.centreY) - e.drop * s;
+        // ---------------------------------------------------------------------
+        // THE ANHEDRAL, AND WHY THE OUTBOARD ENGINE WAS A CARDBOARD BOX.
+        //
+        // `ey` used to hang the nacelle a fixed drop below T.wing.y, which is
+        // the wing height AT THE ROOT. The fairing three lines down already
+        // solved the wing height AT THE ENGINE'S OWN STATION (wyS, with the
+        // dihedral term) - so the two disagreed by e.x * tan(dihedral), and on
+        // the transport4, whose wing carries 2.6 degrees of ANHEDRAL over a
+        // 21 m semi-span, that is 0.69 m at the outboard pylon. The nacelle
+        // crown sat 0.72 m INSIDE the wing box: what was left outside the skin
+        // was the plain cuboid pylon and the tip of the fairing, and at 8.4 m
+        // from the lens in hero1 - the level's signature frame - that printed as
+        // a grey cardboard crate hanging under the wing with no engine attached
+        // to it. Measured off the capture at 7.5 x 4.1 degrees, which is the
+        // pylon's 1.8 x 0.9 m at that range to within a pixel.
+        //
+        // One station height, solved once, used by the nacelle, the pylon and
+        // the fairing, so they cannot part company again.
+        var wyAt = (T.wing ? T.wing.y * s : spec.centreY) +
+          (T.wing ? e.x * s * Math.tan(T.wing.dihedral) : 0);
+        var ey = wyAt - e.drop * s;
         if (e.prop) {
           // a turboprop nacelle sits ON the wing, not under it
-          ey = (T.wing ? T.wing.y * s : spec.centreY) - 0.16 * s;
+          ey = wyAt - 0.16 * s;
         }
         buildNacelle(B, ex, ey, ez, e.len * s, e.r * s, 'airframe');
         buildNacelle(B, -ex, ey, ez, e.len * s, e.r * s, 'airframe');
@@ -2314,24 +2368,41 @@
           // fairing a nacelle is a dark box hanging off a bar with a hard right
           // angle between them and no surface at the junction for the key to
           // find; the fillet is what makes an engine read as attached.
-          // 0.42 of the drop, not 0.48, and 0.78 of it tall rather than 0.95:
-          // at the old numbers the pylon's top edge stood 5 cm PROUD of the
-          // wing's upper skin, so a 2.1 m plate printed lying across the top of
-          // the wing in the hero framing instead of hanging under it.
-          B.boxR('skin_dull', 0.22 * s, e.drop * s * 0.78, 1.8 * s,
-            ex, ey + e.drop * s * 0.42, ez + 0.8 * s, 0, 0, 0, 0.04);
-          B.boxR('skin_dull', 0.22 * s, e.drop * s * 0.78, 1.8 * s,
-            -ex, ey + e.drop * s * 0.42, ez + 0.8 * s, 0, 0, 0, 0.04);
+          var wThk = (T.wing ? T.wing.thick : 0.12) *
+            M.lerp(T.wing ? T.wing.rootC : 4, T.wing ? T.wing.tipC : 2,
+              M.saturate(e.x / (T.span * 0.5))) * s;
+          var fy2 = wyAt - wThk * 0.42;
+          // -------------------------------------------------------------------
+          // AND THE PYLON IS AN AEROFOIL, NOT A CUBOID.
+          //
+          // It was `boxR(0.22, drop*0.78, 1.8)` - a bevelled brick. A real
+          // engine pylon is a short, thick, vertical wing section, and this file
+          // already builds exactly that: finPiece() is wingPanel() stood on end,
+          // which is what gives it a rounded leading edge, a taper and a
+          // trailing edge the key can rake. Two hundred triangles a side in the
+          // `skin_dull` bucket that already exists, no draw call, and it is the
+          // difference between "engine hung on a strut" and "crate taped under a
+          // plank" at the range hero1 shoots it from.
+          //
+          // The strut runs from just above the nacelle crown up INTO the wing
+          // box (the extra 0.12 m of span is buried, which is how a real one
+          // meets the lower skin - there is no gap to see through).
+          var pyBase = ey + e.r * s * 0.30;
+          var pySpan = Math.max(0.22 * s, fy2 - pyBase + 0.12 * s);
+          var pySpec = {
+            span: pySpan, rootC: 1.95 * s, tipC: 1.62 * s, sweep: 0.13,
+            dihedral: 0, thick: 0.135, rootZ: ez - 0.05 * s, y: pyBase,
+            sections: 2, twist: 0, split: 0
+          };
+          for (var pk = 0; pk < 2; pk++) {
+            B.pushXYZ(pk ? -ex : ex, 0, 0);
+            buildFin(B, pySpec, 'skin_dull');
+            B.pop();
+          }
           // The fairing sits UNDER the wing's lower skin, not through it: the
           // first pass put it at 0.90 of the pylon drop, which is inside the
           // wing box, and two 3 m plates printed lying across the top of the
           // wing in the hero framing.
-          var wyS = (T.wing ? T.wing.y * s : spec.centreY) +
-            e.x * s * Math.tan(T.wing ? T.wing.dihedral : 0);
-          var wThk = (T.wing ? T.wing.thick : 0.12) *
-            M.lerp(T.wing ? T.wing.rootC : 4, T.wing ? T.wing.tipC : 2,
-              M.saturate(e.x / (T.span * 0.5))) * s;
-          var fy2 = wyS - wThk * 0.42;
           B.tint = o.body || null;
           B.boxR('airframe', 0.44 * s, 0.26 * s, 2.4 * s,
             ex, fy2, ez + 1.1 * s, 0, 0, 0, 0.11 * s);
@@ -2651,11 +2722,36 @@
     // Big irregular patches where a slab has been cut out and made good. They
     // are the only large DARK areas on the hardstanding and they do more for the
     // "flat white frame" problem than any amount of grading.
+    // ------------------------------------------------------------------------
+    // TWENTY-TWO, not eight, and the reason is a scale argument rather than a
+    // taste one. From the establishing eye the slab is 60-70 % of the frame at
+    // 50-200 m, where the concrete's own texture - a 2.9 m tile on a 1.5 m
+    // vertex grid - is at or below one pixel and contributes nothing. The only
+    // marks on 204 x 168 m of hardstanding that survive that reduction are the
+    // ones measured in TENS of metres: the bay joint grid, the tow lanes, the
+    // aircraft shadows and these. Eight of them left the whole west field and
+    // the entire east apron without a single one, so three quarters of the slab
+    // had no tonal event on it at all. Each patch is a 2.4 m gridSurface, about
+    // 60 triangles, in a bucket that already exists - fourteen more of them cost
+    // ~900 triangles out of 2.5 M of headroom and no draw call whatsoever, and
+    // they are what a forty-year-old apron that has had its drains and its
+    // ducting dug up actually looks like.
+    //
+    // Placed along the row corridors and the tow routes (which is where a slab
+    // is cut) rather than scattered, and deliberately NOT on the taxiway
+    // centreline, where the painted overlay already carries the story.
     B.paint = 'patch';
     var patches = [
       [-6, 26, 16, 11], [30, -20, 22, 13], [-46, 6, 18, 9],
       [8, -52, 26, 15], [-70, -40, 14, 20], [52, 12, 12, 16],
-      [-30, 58, 20, 10], [70, -60, 18, 14]
+      [-30, 58, 20, 10], [70, -60, 18, 14],
+      // the west storage field: down each row corridor, where the tugs work
+      [-33, -24, 15, 9], [-51, -60, 17, 11], [-69, 22, 12, 15],
+      [-88, -10, 13, 10], [-58, 36, 11, 9], [-84, -66, 15, 12],
+      [-15, -8, 10, 13], [-40, -46, 12, 8],
+      // the east apron, which had none at all
+      [86, -28, 17, 12], [88, 32, 14, 17], [46, -42, 19, 11],
+      [24, -70, 15, 12], [64, 52, 13, 10], [78, 6, 12, 14]
     ];
     for (i = 0; i < patches.length; i++) {
       var p = patches[i];
@@ -2961,7 +3057,31 @@
     // FURTHER, HAZIER, LOWER range rather than empty sky - a valley, which is
     // both truthful and worth more than a hole. The second gap on each band is
     // behind the camera in every pose and exists so the ring is not a ring.
+    // ------------------------------------------------------------------------
+    // AND A THIRD BAND, THE NEAR ONE, BECAUSE TWO BANDS AT 322 AND 508 m READ
+    // AS ONE.
+    //
+    // Both existing bands sit past 322 m, so materials.distant() hazes them to
+    // within a few per cent of each other and they overlap into a single mass:
+    // in the establishing frame the range is one flat grey-brown wall filling a
+    // quarter of the picture with no internal value break anywhere in it, and it
+    // is a measurable share of the frame's flat_area_pct. Aerial perspective is
+    // a RATIO, so the only way to get a second tonal step out of it is to put
+    // something much NEARER in front of it - at 200-330 m the same material
+    // carries barely half the haze, which lands this band as a distinctly
+    // darker, warmer lip under the pale range behind it.
+    //
+    // Low and rolling (6-28 m against 24-96), because what is actually there in
+    // a Sonoran basin at that range is bajada and creosote hummock, not a third
+    // sierra: k 5.6 gives it a much shorter horizontal wavelength than the
+    // ranges, so it reads as a different landform rather than as a scale copy.
+    // It inherits band 0's gap at a = 35 - that arc is the one place the desert
+    // is allowed to reach the sky at ground level and it is worth more than a
+    // hill - and it costs 1.7 k triangles in the `ridge` bucket that already
+    // exists, i.e. no draw call.
     var bands = [
+      { r0: 200, r1: 330, h0: 6, h1: 28, k: 5.6, seed: -3.5, rj: 0.10,
+        gaps: [[35, 40, 0.0], [128, 44, 0.22], [252, 40, 0.18]] },
       { r0: 322, r1: 486, h0: 24, h1: 96, k: 3.4, seed: 2.0, rj: 0.11,
         gaps: [[35, 44, 0.0], [214, 30, 0.30]] },
       { r0: 508, r1: 596, h0: 74, h1: 172, k: 2.2, seed: 8.5, rj: 0.055,
@@ -3304,9 +3424,19 @@
     for (i = 0; i < racks.length; i++) {
       var rx = racks[i][0], rz = racks[i][1], ry = racks[i][2];
       var gy0 = groundY(rx, rz, N);
-      out.wingRacks.push({ position: new THREE.Vector3(rx, gy0, rz), yaw: ry, levels: 3 });
+      out.wingRacks.push({ position: new THREE.Vector3(rx, gy0, rz), yaw: ry, levels: 4 });
       B.pushXYZ(rx, gy0, rz, 0, ry, 0);
-      B.paint = 'metal'; B.tint = tint(0x7d8188, 0.55);
+      // -----------------------------------------------------------------------
+      // bodyTint, not tint, and the value is the point. tint() normalises, so
+      // tint(0x7d8188, 0.55) is a near-WHITE multiplier - the rack ran at the
+      // full `steel` albedo, i.e. brand-new galvanising, and in hero2 the three
+      // racks were the brightest objects in the frame. A blue-white lattice
+      // eight metres from the lens with pale panels behind it reads as a
+      // jungle gym, which is what the critique of that frame said. Forty summers
+      // of Sonoran sun on rack steel is a fifth of a stop down and slightly
+      // warmer, and taking it there is also what lets the WINGS on the rack
+      // become the subject instead of the frame holding them.
+      B.paint = 'metal'; B.tint = bodyTint(0x7d8188, 0.55, 0.80);
       for (j = 0; j < 2; j++) {
         var fz = j ? 3.2 : -3.2;
         B.box('steel', 0.16, 2.9, 0.16, -4.2, 1.45, fz, 0.02);
@@ -3314,18 +3444,31 @@
         B.box('steel', 8.7, 0.16, 0.16, 0, 2.85, fz, 0.02);
         B.strut('steel', -4.2, 0.1, fz, 4.2, 2.85, fz, 0.10, 0.10);
       }
-      for (j = 0; j < 3; j++) {
-        B.box('steel', 8.7, 0.14, 0.30, 0, 0.55 + j * 1.05, 0, 0.02);
+      // FOUR shelves at 0.62 m, not three at 1.05. A 2.9 m rack holding three
+      // panels 0.29 m thick on a metre pitch is two thirds AIR: the capture came
+      // back with a lattice you could see the sky through and three thin plates
+      // in it, so a rack read as scaffolding rather than as stored inventory.
+      // The pitch a real wing rack is loaded at is the panel thickness plus a
+      // hand, which is what 0.62 is, and eight panels per rack turns the thing
+      // into the solid warm-metal MASS the framing wants in its lower right.
+      var WLEV = 4, WPITCH = 0.62;
+      for (j = 0; j < WLEV; j++) {
+        B.box('steel', 8.7, 0.14, 0.30, 0, 0.55 + j * WPITCH, 0, 0.02);
       }
       // the wings themselves, stacked flat with a little skew
-      // Value, not just hue - and a bright one. Stacked flat, a wing shows the
-      // camera its UNDERSIDE, which sees no sun at all and only the ground
-      // bounce; at the first pass's tint (a normalised near-white multiplier
-      // with no value in it) the whole stack printed as one black slab and the
-      // racks read as empty frames.
+      // Value, not just hue. Stacked flat, a wing shows the camera its
+      // UNDERSIDE, which sees no sun at all - at the first pass's tint (a
+      // normalised near-white multiplier with no value in it) the whole stack
+      // printed as one black slab and the racks read as empty frames, so it was
+      // pushed to 1.28, i.e. a quarter of a stop ABOVE the map. That was
+      // treating a lighting problem as a paint problem and it cost the panels
+      // their form: 1.28 with no light on it is a flat pale card. The upward
+      // slab-bounce card (see BOUNCE_UP_I) now lights every one of these
+      // undersides for real, so the multiplier comes back to 1.02 and the panels
+      // read as aluminium with a lit lower skin and a shaded rib line under it.
       B.paint = 'skin';
-      for (j = 0; j < 3; j++) {
-        B.tint = bodyTint(j === 1 ? 0xa8aca8 : 0xc2c6c8, 0.35, 1.28 - j * 0.06);
+      for (j = 0; j < WLEV; j++) {
+        B.tint = bodyTint(j % 2 ? 0xa8aca8 : 0xc2c6c8, 0.35, 1.02 - j * 0.045);
         for (k = 0; k < 2; k++) {
           var wz = k ? 1.7 : -1.7;
           var pspec = { span: 4.3, rootC: 3.9, tipC: 1.4, sweep: 0.62, dihedral: 0,
@@ -3374,7 +3517,8 @@
     var fgy = groundY(fx, fz2, N);
     out.finRack = { position: new THREE.Vector3(fx, fgy, fz2), yaw: 0.08, count: 6 };
     B.pushXYZ(fx, fgy, fz2, 0, 0.08, 0);
-    B.paint = 'metal'; B.tint = tint(0x7d8188, 0.55);
+    // weathered, for the same reason as the wing racks
+    B.paint = 'metal'; B.tint = bodyTint(0x7d8188, 0.55, 0.80);
     B.box('steel', 9.0, 0.22, 2.2, 0, 0.12, 0, 0.02);
     B.box('steel', 9.0, 0.14, 0.14, 0, 1.5, -0.85, 0.02);
     B.box('steel', 9.0, 0.14, 0.14, 0, 1.5, 0.85, 0.02);
@@ -3677,7 +3821,18 @@
           yaw: Math.PI + rng.range(-0.075, 0.075),
           body: bodies[(k + i) % bodies.length],
           crown: (k % 3 === 0) ? BODY.white : null,
-          val: rng.range(0.62, 1.0),
+          // 0.50 .. 1.0, widened from 0.62. With the far-field mirage no longer
+          // painting the yard flat (see heatShimmer) the value spread these
+          // multipliers carry is finally VISIBLE, and 0.62-1.0 is only two
+          // thirds of a stop across the whole inventory - enough to separate two
+          // neighbours at 20 m and not enough to sort thirty-four airframes into
+          // depth layers at 120 m. Half of them are repainted tactical grey and
+          // green over forty years of sun, which is genuinely a stop under bare
+          // alclad. The range is widened at the DARK end only, so the bare-metal
+          // airframes that anchor the highlight (Sierra Seven at val 0.88) do
+          // not move at all. Same number of rng draws, so the plan - types,
+          // positions, yaws - is bit-identical.
+          val: rng.range(0.50, 1.0),
           wrapped: rng.next() < 0.62 ? rng.range(0.4, 1.0) : rng.range(0.05, 0.2),
           onJacks: rng.next() < 0.28,
           noWings: (i === 3 && j > 3) ? true : rng.next() < 0.10,
@@ -4525,26 +4680,65 @@
     // postfx.js reads this record on its own (see setHeatShimmer) and turns it
     // into a screen-space refraction, so it is not advisory any more.
     //
-    // strength 1.70, up from 0.85, and six cells instead of four. Measured at
-    // the old figures it was about 3 px of vertical boil over roughly a
-    // quarter of the slab - present in the buffer and invisible in the frame,
-    // which is the worst of both. Heat shimmer is one of the four things the
-    // brief names for this level and the ONLY one that is pure atmosphere; if
-    // it is going to cost a composite pass it has to read.
+    // ------------------------------------------------------------------------
+    // strength 0.55, DOWN from 1.70, and that one number was costing this level
+    // its establishing frame. Measured, A/B, camera unmoved, everything else
+    // held:
     //
-    // The cells are placed where the published framings actually look rather
-    // than where the slab is widest: the taxiway mid-ground that hero1 and
-    // hero3 shoot across, the parts-yard apron in hero2, and the long south
-    // run the spawn faces. HEAT_CELL_MAX is 6 and this uses all six.
+    //             flat_area_pct   edge_energy   dyn.range   yard band < 80
+    //   1.70          55.63          0.0757       0.642        2.30 %
+    //   ~0            38.70          0.1311       0.733        9.22 %
+    //
+    // 55.63 is a HARD FAIL against analyze.py's 45.0 limit and it is exactly
+    // the "flat, white, contrastless frame" the brief names as this level's
+    // trap - arriving from post, not from the geometry, and hiding behind five
+    // green metric reports on the other four framings.
+    //
+    // The mechanism is a coupling across two files. `strength` scales BOTH
+    // halves of postfx's heat effect: uHeat (the displacement) and uHeatPale
+    // (the inferior mirage, added later). BLEACH_GRADE publishes heatPale 0.55
+    // with heatCellFloor 0.55, so at strength 1.70 the mirage ran at
+    // 0.55 x 1.70 = 0.935, and with the cell floor that means every ground
+    // pixel past heatFar (70 m) and below 6.2 m was 51-94 % REPLACED by one
+    // constant at 2.2x the frame's metered key. A 10:1 wing shadow - and
+    // hero1's near-field shadows do measure 10:1 - arrives on screen at 1.2:1.
+    // The far ground was lifted above the airframes standing on it: at 90 m the
+    // slab metered p50 151 against 144 on the aeroplanes, i.e. figure/ground
+    // INVERTED, which is why 34 aircraft printed as white ghosts.
+    //
+    // 0.55 is not a retreat from the brief, it is the amplitude the preset was
+    // written for. postfx's own arithmetic is
+    // "heatAmount x strength x 0.57 x 720 px", and BLEACH_GRADE's heatAmount
+    // 0.022 is documented as giving "7.6 px of vertical boil" - which solves to
+    // strength 0.84, the level's value BEFORE this file doubled it. So 1.70 was
+    // double-counting an increase the preset had already absorbed. At 0.55 the
+    // boil is ~5 px (the same note calls 3.1 px "barely separable from TAA
+    // jitter", so this is still comfortably readable) and the mirage runs at
+    // 0.166 outside the cells - present as a pale dissolve under everything
+    // standing on the far slab, which is what a mirage is, rather than as a
+    // coat of paint over the level's only graphic asset.
+    //
+    // See sharedNeeds: the displacement and the mirage want separate scalars,
+    // and the mirage wants to attenuate with the view ray's PATH LENGTH through
+    // the hot layer rather than with the lit surface's height - an eye 20 m up
+    // on a water tower looks through 3 m of it and currently gets all of it.
+    //
+    // The cells are re-aimed off the storage field for the same reason: inside
+    // a cell `cell` goes to 1.0, i.e. nearly double the floor, and two of the
+    // six sat squarely on the four rows of aeroplanes that ARE the establishing
+    // shot's subject. They now cover open taxiway and open apron only - the
+    // mid-grounds hero1, hero2 and hero3 shoot across, where there is no
+    // silhouette to dissolve and where a boil over bare slab is the whole
+    // point. HEAT_CELL_MAX is 6 and this uses all six.
     this.heatShimmer = {
-      y: 0.0, strength: 1.70,
+      y: 0.0, strength: 0.55,
       cells: [
-        { x: 6, z: -34, r: 46 },     // the taxiway mid-ground: hero1, hero3
-        { x: -50, z: 40, r: 38 },    // the west field, seen from the tower
-        { x: 40, z: 34, r: 30 },     // the parts-yard apron: hero2
-        { x: 0, z: 44, r: 30 },      // the spawn run
-        { x: 74, z: -20, r: 34 },    // the east big-airframe stand
-        { x: -20, z: -74, r: 40 }    // the far south end of the yard
+        { x: 4, z: -30, r: 30 },     // taxiway mid-ground: hero1, hero3
+        { x: 4, z: 34, r: 26 },      // taxiway north, the spawn run
+        { x: 38, z: 38, r: 20 },     // the parts-yard apron: hero2
+        { x: 34, z: -34, r: 26 },    // open apron east of the taxiway
+        { x: 80, z: -18, r: 24 },    // the east big-airframe apron
+        { x: -12, z: -84, r: 26 }    // the far south run, clear of the rows
       ]
     };
   };
@@ -4579,9 +4773,38 @@
   // The lights are positioned on the exact ray now, with no vertical fudge:
   // the old `dy * 160 + 6` turned a nominal 12 degrees into 9.9 and would have
   // turned -3 into -0.35, which is 88% of the harm back again.
+  // ---------------------------------------------------------------------------
+  // AND A THIRD ONE POINTING STRAIGHT UP, WHICH IS THE HALF OF A BOUNCE CARD
+  // THE PAIR ABOVE CANNOT DO AT ALL.
+  //
+  // The two flank fills sit 3 degrees BELOW the horizon so they cannot leak into
+  // a shadow on the slab, and that is right - but it also means a DOWN-facing
+  // normal gets dot = sin(3) = 0.052 out of them, i.e. essentially nothing. So
+  // the whole underside of this level had no fill of any kind: Sierra Seven's
+  // port wing crosses the top third of hero1 as one unbroken plank at 0.36 of
+  // its own sunlit flank in display, with its ribs, its spar and its three
+  // flap-track fairings all inside a single value, and the near tailplane in the
+  // establishing frame prints black with a blue rim. That is the "flat black
+  // shadows" tell the architecture doc calls the #1 amateur giveaway, on the
+  // largest single shape in the signature frame.
+  //
+  // 200 m of white concrete under a vertical sun is a bounce card that lies
+  // BELOW everything in the yard, and what a card below you lights is your
+  // underside. So the third light shines straight up (position -Y, target at the
+  // origin), and the geometry of that is exactly why it is safe: lambert against
+  // an up-facing normal is dot(+Y, +Y_travel) = -1, clamped to zero, so it
+  // deposits mathematically nothing on the hardstanding, nothing in any shadow
+  // cast on it, and nothing on a vertical flank either (dot = 0). It can only
+  // touch surfaces that face the ground, which is the set that had no light.
+  //
+  // 0.72 rather than the flanks' 1.15: a horizontal slab returns its albedo
+  // (~0.35) times the full vertical key, but an underside is also a metre or two
+  // above the card and sees it at less than a full hemisphere, and above ~1.0
+  // the wing undersides stop reading as shade at all.
   var BOUNCE_ELEV = -3.0 * Math.PI / 180;
   var BOUNCE_SPREAD = 48.0 * Math.PI / 180;
   var BOUNCE_I = 1.15;
+  var BOUNCE_UP_I = 0.62;
 
   LevelBoneyard.prototype._buildBounceFill = function () {
     this._bounce = [];
@@ -4606,6 +4829,17 @@
       this.root.add(L);
       this._bounce.push(L);
     }
+    // the card itself, seen from underneath
+    var U = new THREE.DirectionalLight(0xffffff, BOUNCE_UP_I);
+    U.color.setHex(0xffe4c2, THREE.SRGBColorSpace);
+    U.castShadow = false;
+    var utgt = new THREE.Object3D();
+    utgt.position.set(0, 0, 0);
+    this.root.add(utgt);
+    U.target = utgt;
+    U.position.set(0, -140, 0);
+    this.root.add(U);
+    this._bounceUp = U;
     this._aimBounce(SUN_AZ, SUN_EL);
   };
 
@@ -4629,6 +4863,13 @@
       this._bounce[i].position.set(dx * 160, dy * 160, dz * 160);
       this._bounce[i].intensity = BOUNCE_I * gain;
       this._bounce[i].updateMatrixWorld();
+    }
+    // The upward card has no bearing - it is the ground - but it scales with the
+    // same gain, because how much light the slab returns upward is exactly how
+    // much the sun puts into it.
+    if (this._bounceUp) {
+      this._bounceUp.intensity = BOUNCE_UP_I * gain;
+      this._bounceUp.updateMatrixWorld();
     }
   };
 
@@ -5607,8 +5848,18 @@
         // genuinely has near the ground is the shallow hot shimmer this height
         // scale models, not a 200 m veil. The ridge is unaffected either way -
         // materials.distant() carries its own 0.0034 extinction.
+        // density 0.0022, down again from 0.0034, and this one is measured as
+        // the SECOND of the two additive terms that were flattening the far
+        // field. A/B on the establishing frame with the fog effectively off
+        // (0.0004) and everything else held moved flat_area_pct 55.63 -> 44.00
+        // and edge_energy 0.0757 -> 0.0856 on its own - a third of the mirage's
+        // effect, but the same sign and on the same pixels, and the two
+        // multiply. 0.0022 is a 35 % cut rather than a rout, because the fog is
+        // also what keeps the 322-596 m range sitting inside the air instead of
+        // standing on top of it, and materials.distant() carries the range's own
+        // 0.0034 extinction independently of this number.
         ctx.sky.setFog({
-          density: 0.0034, heightScale: 30.0, startDistance: 8.0,
+          density: 0.0022, heightScale: 30.0, startDistance: 8.0,
           desaturate: 0.12, mieG: 0.58
         });
       } catch (e) { GAME.logError('boneyard.fog', e); }
