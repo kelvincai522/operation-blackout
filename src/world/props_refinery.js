@@ -1321,14 +1321,44 @@
   };
 
   // ---- sign on a post ------------------------------------------------------
-  K.signPost = function (w, h, y) {
+  // `bend` builds the variant every yard actually has: the post caught by a
+  // reversing truck years ago, kinked at knee height, with the board leaning
+  // out of plumb and one of its two fixing straps sprung.  Every sign in the
+  // level used to be the same dead-plumb instance, and a row of identical
+  // vertical rectangles is the "perfectly straight, perfectly uniform anything"
+  // on the instant-fail list.
+  // How far the bent variant's board sits off the post's own base, in the
+  // sign's local +X. `_signPost` needs it to put the printed placard on the
+  // board rather than in the air beside it.
+  var SIGN_BEND_DX = 0.115;
+
+  K.signPost = function (w, h, y, bend) {
     var p = [];
     w = w || 0.78; h = h || 0.56; y = y || 1.55;
-    p.push(part(box(0.07, y, 0.07, 0.008), T(0, y * 0.5, 0)));
-    p.push(part(box(w, h, 0.028, 0.008), T(0, y - h * 0.5, 0.048)));
-    p.push(part(box(w * 0.28, 0.045, 0.055, 0.006), T(0, y - 0.06, 0.02)));
-    p.push(part(box(w * 0.28, 0.045, 0.055, 0.006), T(0, y - h + 0.06, 0.02)));
-    p.push(part(box(0.16, 0.05, 0.16, 0.01), T(0, 0.025, 0)));
+    if (bend) {
+      var kink = 0.54;
+      var dxB = SIGN_BEND_DX;                       // where the board ends up
+      var lean = Math.atan2(dxB, y - kink);
+      var upper = Math.sqrt(dxB * dxB + (y - kink) * (y - kink));
+      p.push(part(box(0.07, kink, 0.07, 0.008), T(0, kink * 0.5, 0)));
+      p.push(part(box(0.07, upper, 0.07, 0.008),
+        T(dxB * 0.5, kink + (y - kink) * 0.5, 0, 0, 0, -lean)));
+      // the board, hanging off the leaning post and out of plumb with it
+      p.push(part(box(w, h, 0.028, 0.008),
+        T(dxB * 0.92, y - h * 0.5, 0.048, 0, 0, -0.075)));
+      p.push(part(box(w * 0.28, 0.045, 0.055, 0.006),
+        T(dxB * 0.92, y - 0.07, 0.02, 0, 0, -lean)));
+      // one strap sprung off its fixing, which is why the board hangs skew
+      p.push(part(box(w * 0.22, 0.038, 0.048, 0.006),
+        T(dxB * 0.92 - 0.09, y - h + 0.12, 0.030, 0, 0, -lean + 0.62)));
+      p.push(part(box(0.16, 0.05, 0.16, 0.01), T(0, 0.025, 0)));
+    } else {
+      p.push(part(box(0.07, y, 0.07, 0.008), T(0, y * 0.5, 0)));
+      p.push(part(box(w, h, 0.028, 0.008), T(0, y - h * 0.5, 0.048)));
+      p.push(part(box(w * 0.28, 0.045, 0.055, 0.006), T(0, y - 0.06, 0.02)));
+      p.push(part(box(w * 0.28, 0.045, 0.055, 0.006), T(0, y - h + 0.06, 0.02)));
+      p.push(part(box(0.16, 0.05, 0.16, 0.01), T(0, 0.025, 0)));
+    }
     var g = mergeParts(p);
     disposeParts(p);
     return g;
@@ -2504,6 +2534,7 @@
     bat('shower', fin(K.safetyShower(), 'painted_metal', { noise: N, grime: 0.30, edge: 0.18, dust: 0.5, hiY: 2.0 }, 620), m.paintGreen, 12);
     bat('monitor', fin(K.fireMonitor(), 'painted_metal', { noise: N, grime: 0.36, edge: 0.24, dust: 0.5, hiY: 1.6 }, 620), m.paintRed, 14);
     bat('sign', fin(K.signPost(), 'painted_metal', { noise: N, grime: 0.34, edge: 0.20, dust: 0.5, hiY: 1.6 }, 620), m.paintPale, 64, false);
+    bat('signBent', fin(K.signPost(0.78, 0.56, 1.55, true), 'painted_metal', { noise: N, grime: 0.44, edge: 0.30, dust: 0.6, hiY: 1.6 }, 620), m.paintPale, 32, false);
     bat('hose', fin(K.hoseReel(N), 'painted_metal', { noise: N, grime: 0.36, edge: 0.22, dust: 0.5, hiY: 1.1 }, 620), m.paintRed, 18);
     bat('coil', fin(K.coilHose(), 'rubber', { noise: N, grime: 0.52, edge: 0.18, dust: 0.7, hiY: 0.3 }, 620), m.rubber, 22, false);
 
@@ -2572,6 +2603,34 @@
     var g = markQuad(cell, w, h);
     // markQuad lies in XZ facing +Y; stand it up and turn it to face `yaw`
     this._static('marks', g, Tn(x, y, z, Math.PI * 0.5, yaw, 0));
+  };
+
+  // ---- A SIGN THAT SAYS SOMETHING, AND IS NOT DEAD PLUMB -------------------
+  // Every sign on the site goes through here, so a bare board can no longer be
+  // put up by forgetting the second call: hero3 shipped a completely blank
+  // untextured rectangle 2.24 m from the published eye because `_place` was
+  // called without the `_placard` that every other site pairs with it.
+  //
+  // One in three is the bent variant, and every one of them takes 2-3 degrees
+  // of yaw jitter and a real settle tilt. Signs are the most repeated
+  // silhouette in the level and a row of identical plumb rectangles is the
+  // single loudest "this was generated" tell a yard can have.
+  PropsRefinery.prototype._signPost = function (x, z, yaw, cell, opts) {
+    opts = opts || {};
+    var R = this.rng;
+    var bent = R.bool(opts.bentP === undefined ? 0.34 : opts.bentP);
+    var yj = yaw + R.range(-0.052, 0.052);
+    var y = this._place(bent ? this.B.signBent : this.B.sign, x, z,
+      { r: opts.r === undefined ? 0.5 : opts.r, h: 1.6, yaw: yj,
+        tilt: opts.tilt === undefined ? 0.040 : opts.tilt,
+        maxRelief: opts.maxRelief, road: opts.road });
+    if (y === null) return null;
+    // the board's own local +X offset on the bent variant, resolved into world
+    var ox = bent ? Math.cos(yj) * SIGN_BEND_DX : 0;
+    var oz = bent ? -Math.sin(yj) * SIGN_BEND_DX : 0;
+    this._placard(cell, x + ox + Math.sin(yj) * 0.065, y + 1.27,
+      z + oz + Math.cos(yj) * 0.065, 0.66, 0.48, yj);
+    return y;
   };
 
   // Wind helpers.  windDir is the direction the wind TRAVELS, so the windward
@@ -3097,14 +3156,8 @@
       [rx1 + 1.6, -78.0, Math.PI], [rx0 - 1.6, -52.0, 0.0]
     ];
     for (i = 0; i < signs.length; i++) {
-      var sy = this._place(this.B.sign, signs[i][0], signs[i][1],
-        { r: 0.5, h: 1.6, yaw: signs[i][2], tilt: 0.02 });
-      if (sy !== null) {
-        var f = signs[i][2];
-        this._placard(R.bool(0.4) ? MARK.nosmoke : (R.bool(0.5) ? MARK.danger : MARK.ppe),
-          signs[i][0] + Math.sin(f) * 0.065, sy + 1.27, signs[i][1] + Math.cos(f) * 0.065,
-          0.66, 0.48, f);
-      }
+      this._signPost(signs[i][0], signs[i][1], signs[i][2],
+        R.bool(0.4) ? MARK.nosmoke : (R.bool(0.5) ? MARK.danger : MARK.ppe));
     }
 
     // THE WORKS AREA.  A lifted floor plate on the east verge at z = -30, coned
@@ -3175,13 +3228,8 @@
       }
       // the sign, turned to face the traffic coming up the spine
       var yaw = sz > 0 ? 0 : Math.PI;
-      var sy = this._place(this.B.sign, cx + sx * 2.6, cz + sz * 2.4,
-        { r: 0.5, h: 1.6, yaw: yaw, tilt: 0.02 });
-      if (sy !== null) {
-        this._placard(q % 2 ? MARK.nosmoke : MARK.ppe,
-          cx + sx * 2.6 + Math.sin(yaw) * 0.065, sy + 1.27,
-          cz + sz * 2.4 + Math.cos(yaw) * 0.065, 0.66, 0.48, yaw);
-      }
+      this._signPost(cx + sx * 2.6, cz + sz * 2.4, yaw,
+        q % 2 ? MARK.nosmoke : MARK.ppe);
       // a barrier stub keeping traffic off the corner radius
       this._place(this.B.barrier, cx + sx * 4.4, cz + sz * 3.0,
         { r: 1.15, h: 0.85, yaw: 0.7 * sx * sz, tilt: 0.012, maxRelief: 0.30,
@@ -3410,7 +3458,20 @@
     this._place(this.B.ibc, -27.4, -18.6, { r: 0.9, h: 1.2, collider: [0.55, 0.6, 0.62] });
     this._drumCluster(-27.0, -14.5, 5, false);
     this._place(this.B.coil, -26.4, -11.8, { r: 0.55, h: 0.2, low: true });
-    this._place(this.B.sign, -27.0, -8.0, { r: 0.5, h: 1.6, yaw: Math.PI * 0.5 });
+    // MOVED, AND IT NOW SAYS SOMETHING. At (-27, -8) this stood 2.24 m from the
+    // published hero3 eye and filled a large part of the lower centre with a
+    // blank, untextured, off-white rectangle - a direct hit on the instant-fail
+    // list, on the most prominent prop in a published framing, in a level whose
+    // brief asks for "warning placards in an invented script". Two separate
+    // faults: it was in the lens, and it carried no printing because `_place`
+    // alone puts up a bare board - every other sign in the level gets a
+    // `_placard` call after it and this one never did.
+    //
+    // At (-27, -13.5) it reads at 7.4 m as set dressing rather than as a
+    // subject, it still marks the pump-out set it belongs to, and it carries a
+    // FLAMMABLE diamond because that is what stands at the entrance to a crude
+    // tank farm.
+    this._signPost(-27.0, -13.5, Math.PI * 0.5, MARK.flam);
 
     // ---- THE BUND-WALL AISLE ------------------------------------------------
     // The 8 m strip between the west rack and the bund coping is the tank
@@ -3513,15 +3574,8 @@
     this._tapeRing(bx, bz, ring, ring, 0.92);
     for (var s = 0; s < 4; s++) {
       var sa = s * Math.PI * 0.5 + 0.4;
-      var sy = this._place(this.B.sign, bx + Math.cos(sa) * (ring + 1.6),
-        bz + Math.sin(sa) * (ring + 1.6),
-        { r: 0.5, h: 1.6, yaw: sa + Math.PI, tilt: 0.02 });
-      if (sy !== null) {
-        this._placard(s % 2 ? MARK.nosmoke : MARK.danger,
-          bx + Math.cos(sa) * (ring + 1.6) + Math.sin(sa + Math.PI) * 0.065, sy + 1.27,
-          bz + Math.sin(sa) * (ring + 1.6) + Math.cos(sa + Math.PI) * 0.065,
-          0.66, 0.48, sa + Math.PI);
-      }
+      this._signPost(bx + Math.cos(sa) * (ring + 1.6), bz + Math.sin(sa) * (ring + 1.6),
+        sa + Math.PI, s % 2 ? MARK.nosmoke : MARK.danger);
     }
     // the knock-out drum's own housekeeping, off the cordon to the east
     this._drumCluster(bx + ring + 3.0, bz + 4.0, 4, false);
@@ -3704,11 +3758,7 @@
     // the muster point: signage, a hose reel and a wash station by the door
     if (cb.door && cb.door.position) {
       var dp = cb.door.position;
-      var sy = this._place(this.B.sign, dp.x - 2.4, dp.z - 1.2,
-        { r: 0.5, h: 1.6, yaw: Math.PI * 0.5, tilt: 0.015 });
-      if (sy !== null) {
-        this._placard(MARK.ppe, dp.x - 2.4 + 0.065, sy + 1.27, dp.z - 1.2, 0.66, 0.48, Math.PI * 0.5);
-      }
+      this._signPost(dp.x - 2.4, dp.z - 1.2, Math.PI * 0.5, MARK.ppe, { bentP: 0.0 });
       this._place(this.B.ext, dp.x - 1.0, dp.z + 2.2, { r: 0.8, h: 1.5, yaw: Math.PI * 0.5 });
       this._mark(MARK.tread, dp.x - 2.0, dp.z, 2.4, 2.0, Math.PI * 0.5);
     }

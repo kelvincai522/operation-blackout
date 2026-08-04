@@ -1309,10 +1309,27 @@
   // `variant` 1 is a fatter, lower, more slumped bag on its own noise field, so
   // alternating the two through a wall breaks the instanced-prop tell without
   // paying for a second placement pass.
-  K.sack = function (rng, noise, seed, variant) {
+  //
+  // ROUND 2. Three things were wrong and the first one is a plain bug.
+  //
+  //   * THE SECOND LOT NEVER EXISTED. B.sackB was built from this function and
+  //     asked combo() for the bucket 'fabric2'; this function has only ever
+  //     written 'fabric', so item.merge('fabric2') returned null, the Combo got
+  //     an EMPTY batch list, and every third bag in the bond - the ones the
+  //     placement function alternates to break the instanced-prop tell - was
+  //     silently dropped. That is the visible gap lattice with the floor
+  //     showing through it. `bucket` fixes it.
+  //   * NO WEAVE AT ANY DISTANCE. See the tx note in _buildKit.
+  //   * NO SEAM. A sandbag is a flat-felled tube; the stitched seam running its
+  //     whole length is the one hard line on an object that is otherwise all
+  //     soft curvature, and without it a filled bag really is an ellipsoid.
+  K.sack = function (rng, noise, seed, variant, bucket) {
     var it = new Item();
     var V = variant ? 1 : 0;
-    var g = sph(0.5, 14, 9).clone();
+    var BK = bucket || 'fabric';
+    // 20 x 13, not 14 x 9: the pucker band below needs somewhere to live, and
+    // at 14 segments a 3 cm feature falls between two vertices.
+    var g = sph(0.5, 20, 13).clone();
     var p = g.attributes.position;
     var i;
     for (i = 0; i < p.count; i++) {
@@ -1325,6 +1342,18 @@
       var t = yy / 0.44;
       var wob = 1 + noise.fbm3(x * 3.4 + seed, y * 3.4, z * 3.4, 3, 2.1, 0.55) *
         (0.22 + V * 0.10);
+      // ---- THE PUCKER BAND --------------------------------------------
+      // A second, much higher-frequency displacement, and it is the thing the
+      // round-2 crop was actually missing. A 46-thread jute weave on a 0.46 m
+      // bag seen from four metres is FAR below one pixel and mips to a flat
+      // gradient no matter what texel density it is authored at - so the
+      // texture can never carry this object at the distance it is photographed
+      // at. What can is geometry: slack hessian over loose fill puckers at
+      // roughly 3 cm, which is 4-5 px at hero3 range and reads as cloth.
+      wob += noise.fbm3(x * 13.0 - seed, y * 13.0 + 4.0, z * 13.0, 2, 2.2, 0.5) * 0.055;
+      // and the pull lines that run round a filled bag from the tie
+      wob += Math.cos(Math.atan2(z, y) * 6.0 + x * 5.0 + seed) *
+        (0.014 + 0.010 * Math.abs(x));
       var waist = 1 - Math.abs(x) * 0.62;
       // the slump fold: two shallow creases running across the bag
       var fold = Math.cos(x * (7.2 + V * 3.1) + seed) * 0.5 + 0.5;
@@ -1339,17 +1368,43 @@
     p.needsUpdate = true;
     g.computeVertexNormals();
     g.scale(0.455, 0.400, 0.455);
-    it.add('fabric', g, null);
+    it.add(BK, g, null);
+    // ---- THE STITCHED SEAM, along the bag's whole length -------------------
+    // A raised welt with the stitch line running down it. ~130 triangles, and
+    // it is the only straight edge on the object: at 2 m it is what says
+    // "sewn hessian sack" rather than "smooth blob".
+    // The welt has to RIDE THE CREST, so its height is SOLVED from the same
+    // profile the bag is built from rather than picked. A picked constant either
+    // buries it - which is where the first cut of this put it, at 5 cm under the
+    // surface, so it cost 130 triangles and changed nothing - or floats it above
+    // the bag as a fin.
+    function crestY(fx) {
+      var sxx = Math.min(0.49, Math.abs(fx) * 2.154);
+      var ymax = Math.sqrt(Math.max(0, 0.25 - sxx * sxx));
+      var yy2 = ymax * 0.44 + 0.22;
+      return yy2 * (0.72 + 0.60 * (1 - sxx * 0.62)) * 0.90 * 0.400 * (1 - V * 0.12);
+    }
+    var sn = 13, si;
+    for (si = 0; si < sn - 1; si++) {
+      var sx0 = -0.198 + (si / (sn - 1)) * 0.396;
+      var sx1 = -0.198 + ((si + 1) / (sn - 1)) * 0.396;
+      var sh = crestY(sx0) - 0.005 + noise.fbm2(sx0 * 9.0 + seed, 3.4, 2) * 0.004;
+      var sh1 = crestY(sx1) - 0.005 + noise.fbm2(sx1 * 9.0 + seed, 3.4, 2) * 0.004;
+      it.strut(BK, sx0, sh, 0, sx1, sh1, 0, 0.017, 0.012);
+      // the stitches themselves, alternating side of the welt
+      it.add(BK, bx(0.009, 0.007, 0.026, 0.002),
+        Tn(sx0, sh + 0.004, (si % 2 ? 1 : -1) * 0.010, 0, 0, (si % 2 ? 0.26 : -0.26)));
+    }
     // the gathered tie at each end - a choked, wired-off neck
     for (var e2 = -1; e2 <= 1; e2 += 2) {
       var tg = lathe([
         [0.000, 0.000], [0.052, 0.006], [0.048, 0.038], [0.024, 0.062],
         [0.030, 0.086], [0.020, 0.108], [0.008, 0.118], [0.000, 0.120]
       ], 9, 1.0, 1.0);
-      it.add('fabric', tg, T(e2 * 0.213, 0.062 + V * -0.006, 0,
+      it.add(BK, tg, T(e2 * 0.213, 0.062 + V * -0.006, 0,
         0, 0, e2 * Math.PI * 0.5));
       // the wire twitch on the choke
-      it.add('fabric', lathe([[0.000, 0.000], [0.030, 0.004], [0.030, 0.020],
+      it.add(BK, lathe([[0.000, 0.000], [0.030, 0.004], [0.030, 0.020],
         [0.000, 0.024]], 8, 1.0, 1.0),
         T(e2 * 0.268, 0.062 + V * -0.006, 0, 0, 0, e2 * Math.PI * 0.5));
     }
@@ -1948,10 +2003,16 @@
     // there is what lets the wall separate from concrete on hue instead of
     // fighting the flood for value. Two lots, because a revetment is built from
     // whatever bags were on the truck.
+    // normalScale 1.35: the revetment is the nearest large prop in hero3 and it
+    // is lit almost edge-on by the vestibule flood, which is the one condition
+    // where a weave either reads or does not exist. At the library's own 1.25
+    // the thread was there in the map and gone in the render.
     m.fabric = this._material('sandbag',
-      W({ albedoTarget: 0x6b6446, roughness: 0.96, wearColor: 0x8a8268 }));
+      W({ albedoTarget: 0x6b6446, roughness: 0.96, wearColor: 0x8a8268,
+          normalScale: 1.35, chroma: 0.72 }));
     m.fabric2 = this._material('sandbag',
-      W({ albedoTarget: 0x585440, roughness: 0.97, wearColor: 0x7d7660 }));
+      W({ albedoTarget: 0x585440, roughness: 0.97, wearColor: 0x7d7660,
+          normalScale: 1.35, chroma: 0.72 }));
     m.canvas = this._material('canvas_awning',
       W({ albedoTarget: 0x6d6754, roughness: 0.95, wearColor: 0x968f7c }));
     m.grate = this._material('steel_grate',
@@ -2001,10 +2062,14 @@
     m.paper.shadowSide = THREE.DoubleSide;
     m.paper.name = 'bk_paper';
 
+    // FRONT SIDE. A stencilled case legend or a cylinder shoulder label is
+    // printed on ONE face; on DoubleSide, every crate and drum whose random yaw
+    // turned its label away from the lens rendered that label MIRRORED through
+    // its own back, which is the most obvious "this is broken" tell there is.
     m.marks = new THREE.MeshStandardMaterial({
       map: this.tex.marks || null, color: 0xffffff,
       roughness: 0.62, metalness: 0.0, vertexColors: true,
-      side: THREE.DoubleSide, alphaTest: 0.34, envMapIntensity: 1.0,
+      side: THREE.FrontSide, alphaTest: 0.34, envMapIntensity: 1.0,
       polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3
     });
     m.marks.name = 'bk_marks';
@@ -2563,16 +2628,26 @@
     // noise fields, in two different lots of hessian, alternated through the
     // bond, is the version that costs one extra draw call and actually works.
     //
-    // tx 3600 rather than 1000: at 1000 texels/m a 0.46 m bag received under
-    // half a texture tile, so no hessian weave resolved at ANY distance and the
-    // bags rendered as smooth blobs. 3600 puts about two tiles across a bag.
-    this.B.sack = combo('sack', K.sack(R, N, 3.1, 0), [
-      { b: 'fabric', w: wr(0.26, 0.12, 0.54, { hiY: 0.28 }), tx: 3600 }
-    ], 190);
+    // tx 4400 rather than 3600. Raising it further does NOT buy weave: at
+    // hero3 range a 0.46 m bag is about 55 px wide, so 46 threads a tile is
+    // already deep in the mip chain whatever the density, and pushing the
+    // density up only takes genSandbag's own 3-octave sag lobe - the one band
+    // that IS resolvable - below a pixel with it. 4400 lands the lobe at about
+    // 4 cm, and the weave itself is now carried by GEOMETRY (see K.sack's
+    // pucker band), which is the only thing that survives at this distance.
+    //
+    // AND the second lot is now built into its OWN bucket. It was asking for
+    // 'fabric2' from a builder that only ever wrote 'fabric', so its Combo had
+    // no batches in it at all and every third bag in the revetment simply did
+    // not exist - which is exactly the gap lattice with the floor visible
+    // through it that the round-2 note describes.
+    this.B.sack = combo('sack', K.sack(R, N, 3.1, 0, 'fabric'), [
+      { b: 'fabric', w: wr(0.26, 0.12, 0.54, { hiY: 0.28 }), tx: 4400 }
+    ], 220);
 
-    this.B.sackB = combo('sackB', K.sack(R, N, 8.7, 1), [
-      { b: 'fabric2', w: wr(0.34, 0.15, 0.66, { hiY: 0.30 }), tx: 3600 }
-    ], 150);
+    this.B.sackB = combo('sackB', K.sack(R, N, 8.7, 1, 'fabric2'), [
+      { b: 'fabric2', w: wr(0.34, 0.15, 0.66, { hiY: 0.30 }), tx: 4400 }
+    ], 180);
 
     this.B.cylinder = combo('cylinder', K.cylinder(R), [
       { b: 'ochre', w: wr(0.30, 0.26, 0.40, { hiY: 1.4 }), tx: 1000 },
@@ -3764,8 +3839,12 @@
     // ---- the emplacement ----------------------------------------------------
     // Two courses, stretcher bond, curved so it faces the aperture, with the
     // top course short on the firing side.
-    this._sandbagWall(V.x0 + 4.9, -2.55, V.x0 + 4.4, 1.35, 5, 0.148);
-    this._sandbagWall(V.x0 + 4.55, 1.60, V.x0 + 6.9, 3.35, 4, 0.148);
+    // SEVEN courses, not five: at five the parapet stood 0.71 m, which is a
+    // kerb, not a firing position, and from hero3's standpoint it read as two
+    // rows of bags lying on the floor. Seven puts the coping at 1.07 m - chest
+    // height behind it, which is what a revetment is for.
+    this._sandbagWall(V.x0 + 4.9, -2.55, V.x0 + 4.4, 1.35, 7, 0.148);
+    this._sandbagWall(V.x0 + 4.55, 1.60, V.x0 + 6.9, 3.35, 6, 0.148);
     this._drop(this.B.caseS, V.x0 + 5.65, -0.55, { r: 0.36, yaw: 1.4, tilt: 0.03 });
     this._drop(this.B.caseS, V.x0 + 5.60, -0.10, { r: 0.36, yaw: 1.2, tilt: 0.04, noClear: true });
     this._drop(this.B.bag, V.x0 + 6.15, 0.85, { r: 0.34, yaw: 0.6, tilt: 0.07 });
@@ -3863,6 +3942,37 @@
     for (i = 0; i < 10; i++) {
       var fx = R.range(V.x0 + 1.0, V.x1 - 1.0), fz = R.range(-hz + 0.6, hz - 0.6);
       this._floorPatch(R.bool(0.5) ? 3 : 0, fx, this._ground(fx, fz), fz, R.range(1.8, 3.6));
+    }
+    // ---- DRAG SCUFFS OFF THE THRESHOLD -------------------------------------
+    // hero3's foreground deck measured Lmean 15.4 / sat 0.073 with no readable
+    // structure at all - the largest near surface in the level's landmark frame
+    // and it carried nothing. Everything that ever came through this facility
+    // came through THIS aperture, and it was dragged: the scuffs fan out from
+    // the plug's opening into the room, and they are the one floor mark that is
+    // directional rather than blotchy.
+    for (i = 0; i < 16; i++) {
+      var da = R.range(-0.85, 0.85);
+      var dr = R.range(1.0, 6.4);
+      var dxs = V.x0 + 0.35 + Math.cos(da) * dr;
+      var dzs = Math.sin(da) * dr * 0.85;
+      if (dxs > V.x1 - 0.6) continue;
+      this._floorPatch(3, dxs, this._ground(dxs, dzs), dzs, R.range(1.5, 3.0));
+    }
+    // and the dust drift that collects against the wall base, both sides
+    for (i = 0; i < 12; i++) {
+      var wxs = R.range(V.x0 + 0.9, V.x1 - 0.9);
+      var wzs = (R.bool() ? 1 : -1) * (hz - R.range(0.10, 0.55));
+      this._floorPatch(0, wxs, this._ground(wxs, wzs), wzs, R.range(1.2, 2.4));
+    }
+    // spall off the soffit and the wall arrises, where a forty-year-old
+    // vestibule actually sheds
+    for (i = 0; i < 22; i++) {
+      var sxs = R.range(V.x0 + 0.8, V.x1 - 0.8);
+      var szs = (R.bool() ? 1 : -1) * (hz - R.range(0.12, 1.30));
+      this._drop(this.B.chunk, sxs, szs, {
+        r: 0.12, yaw: R.range(0, TAU), scale: R.range(0.28, 0.95), tilt: 0.32,
+        halo: false, noClear: true, dry: true
+      });
     }
   };
 
@@ -4591,7 +4701,13 @@
     // joints and DEEPENS the interstitial shadow instead of leaving a lit gap
     // between every pair. That lattice is what makes a stack of bags read as a
     // wall rather than as a grid of identical objects.
-    var per = 0.375;
+    // 0.345, not 0.375. The bags now carry a bedding spread and a seam welt, so
+    // a pitch shorter than the bag's own length makes the courses INTERLOCK -
+    // each bag overlaps its neighbour and the joint closes. At 0.375 there was
+    // a lit gap between every pair and the deck was visible straight through
+    // the wall, which is most of why a defensive revetment photographed as a
+    // tray of bread rolls rather than as a wall.
+    var per = 0.345;
     var n = Math.max(2, Math.round(len / per));
     var baseY = this._ground((x0 + x1) * 0.5, (z0 + z1) * 0.5);
     for (var c = 0; c < courses; c++) {
@@ -4602,15 +4718,24 @@
       for (var i = i0; i < i1; i++) {
         var t = (i + 0.5 + off) / n;
         if (t > 1.02) continue;
-        var px = x0 + dx * t + R.gaussian(0, 0.035);
-        var pz = z0 + dz * t + R.gaussian(0, 0.035);
+        var px = x0 + dx * t + R.gaussian(0, 0.030);
+        var pz = z0 + dz * t + R.gaussian(0, 0.030);
         // alternate the two lots on a 3-cycle offset per course, so neither the
         // colour nor the geometry falls into a stripe
         var bat = (((i * 2 + c * 5) % 3) === 1) ? this.B.sackB : this.B.sack;
+        // BEARING. A filled bag with three courses on top of it is 15% shorter
+        // than the one on the coping, and its neighbours squeeze it wider. That
+        // is what closes the course-to-course shadow lattice - which is almost
+        // the whole of how a stack of bags reads as a wall - and it is the
+        // thing a row of identical ellipsoids can never do.
+        var load = 1 - c / Math.max(1, courses - 1);          // 1 at the bottom
+        var squash = 1 - load * R.range(0.09, 0.14);
+        var spread = 1 + load * R.range(0.04, 0.08);
         this._drop(bat, px, pz, {
-          r: 0.15, y: baseY + c * bagH * 0.90 + R.range(-0.012, 0.012),
-          yaw: yaw + R.gaussian(0, 0.17), tilt: 0.06,
-          scale: R.range(0.92, 1.12), sy: R.range(0.86, 1.10),
+          r: 0.15, y: baseY + c * bagH * 0.86 + R.range(-0.010, 0.010),
+          yaw: yaw + R.gaussian(0, 0.10) + (i % 2 ? 0.045 : -0.045), tilt: 0.055,
+          scale: R.range(0.94, 1.10), sy: squash * R.range(0.94, 1.05),
+          sx: spread, sz: spread * R.range(0.97, 1.06),
           noClear: true, halo: c === 0, dry: true, lens: true, stack: c > 0
         });
       }

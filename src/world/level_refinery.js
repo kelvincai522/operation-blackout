@@ -273,11 +273,20 @@
     // does reach it reads as sodium ON concrete rather than as concrete made
     // of sodium.
     pave:      { uv: 0.34, cast: false, recv: true, wear: true,
-                 base: 'concrete', albedoTarget: 0x6e6e6c, rough: 0.88, ns: 0.72 },
+                 base: 'concrete', albedoTarget: 0x787876, rough: 0.88, ns: 0.72 },
     road:      { uv: 0.30, cast: false, recv: true, wear: true,
                  base: 'asphalt', albedoTarget: 0x3c3c3c, rough: 0.86, ns: 0.75 },
     grit:      { uv: 0.22, cast: false, recv: true, wear: false,
                  base: 'gravel', rough: 0.94, ns: 0.72 },
+    // Saw-cut control joints and slab construction joints. Its own surface
+    // because it is the ONE thing on the apron that has to be a hard, straight,
+    // dark line: the 2.6 m gridSurface cannot resolve a 50 mm feature from its
+    // vertices and the wear mask is written per vertex, so a joint has to be
+    // its own geometry with its own albedo. One draw call for 26,500 square
+    // metres of man-made grain is the cheapest legibility on the level.
+    joint:     { uv: 0.55, cast: false, recv: true, wear: false,
+                 base: 'concrete', albedoTarget: 0x272724, rough: 0.95,
+                 metal: 0.0, ns: 0.45 },
     sandy:     { uv: 0.055, cast: false, recv: true, wear: false,
                  base: 'sand', rough: 0.95, env: 0.55 },
     // ---- concrete structure -------------------------------------------------
@@ -291,9 +300,16 @@
     // Process pipe. Three paint families, because a rack in which every line is
     // the same colour is a rack you cannot read - real plants colour-code by
     // service and it is the cheapest legibility a pipe rack has.
+    // rough 0.50 / env 1.20, not 0.44 / 1.40. Measured on hero2, where the top
+    // tier runs 1-4 m off the lens along the view axis: a rough-0.44 metal seen
+    // at grazing incidence returns one continuous specular streak down its
+    // whole length, and with the environment gain on top of it the near lines
+    // clipped and carried most of that frame's blown-white failure. The
+    // specular is what says "steel"; a streak with no roll-off in it says
+    // "white plastic tube".
     pipe:      { uv: 0.85, cast: true, recv: true, wear: false,
                  base: 'painted_metal', albedoTarget: 0x8d9298,
-                 rough: 0.44, metal: 0.70, env: 1.4 },
+                 rough: 0.50, metal: 0.70, env: 1.20 },
     // MEASURED: at 0x4e6350 / 0x8c5323 the three service colours sat inside
     // 0.09 of each other in value and 25 degrees of hue, and under a 1950 K
     // sodium wash they printed as one orange. Separation has to be bought in
@@ -314,9 +330,19 @@
     // with nothing in it. 1.05 puts the panel scale at 0.95 m, which is what a
     // real jacket sheet is, and the horizontal band rings and vertical lap
     // seams buildColumns now models sit on top of it as geometry.
+    // ALBEDO 0x9ba0a4, NOT 0xb0b5b8, AND env 1.25 RATHER THAN 1.5. Measured on
+    // hero2, where the top tier of lagged line runs 1-4 m off the lens: at 0.69
+    // reflectance with a 1.5 environment gain and the `lagging` value pass on
+    // top of it, the near jackets clipped to flat cream and carried 1.6% of the
+    // frame over the exposure gate on their own - a "flat, untextured,
+    // single-colour surface" at 1:1, which is the first line of the instant-
+    // fail list, on the nearest object in a published framing. Real weathered
+    // aluminium sheet is 0.45-0.55 reflectance, not 0.69; the brightness that
+    // made it read as metal was always the specular, and that is what the
+    // roughness and the normal are for.
     lag:       { uv: 1.05, cast: true, recv: true, wear: false,
-                 base: 'painted_metal', albedoTarget: 0xb0b5b8,
-                 rough: 0.54, metal: 0.42, env: 1.5, ns: 0.62 },
+                 base: 'painted_metal', albedoTarget: 0x9ba0a4,
+                 rough: 0.58, metal: 0.42, env: 1.15, ns: 0.62 },
     // ---- TANK SHELL -----------------------------------------------------------
     // THE CAMOUFLAGE WAS THE BASE MAP, and it took three passes to find because
     // the previous two both looked at the wrong layer.
@@ -415,9 +441,18 @@
     // The rest of the refinery, 130-330 m out. Its own bucket because it needs
     // none of the detail-normal machinery the near surfaces do and because its
     // albedo is authored for aerial perspective rather than for material.
+    // env 1.45, not 0.55. The backdrop stands 130-330 m out with NOTHING
+    // lighting it: no practical reaches, the key is under the horizon, and
+    // sky.js's fog layer is 26 m deep so the top 60% of a 34-64 m cooling
+    // tower is above the atmosphere and gets no aerial lift at all. The only
+    // illuminant those masses have left is the environment probe, and at 0.55
+    // they measured 0.078 against a 0.47 sky - flat black paper. envMapIntensity
+    // is the correct dial for exactly this: it is the sky's own irradiance, so
+    // the faces turned toward the twilight band lift more than the ones turned
+    // away, which is what makes a silhouette read as a solid rather than a hole.
     far:       { uv: 0.075, cast: false, recv: false, wear: false,
-                 base: 'concrete', albedoTarget: 0x4a4b4c, rough: 0.92,
-                 metal: 0.0, env: 0.55, ns: 0.22 },
+                 base: 'concrete', albedoTarget: 0x5c5b58, rough: 0.92,
+                 metal: 0.0, env: 1.45, ns: 0.22 },
     far_light: { uv: 1.0, cast: false, recv: false, wear: false, keepUV: true,
                  base: 'plastic', rough: 0.4, metal: 0.0,
                  emissive: 0xffb968, emissiveIntensity: 4.6 }
@@ -426,18 +461,19 @@
   // If materials.js is missing entirely the plant must still read as steel and
   // concrete at dusk rather than as magenta error boxes.
   var FALLBACK = {
-    pave:      [0x6e6e6c, 0.88, 0.0],
+    pave:      [0x787876, 0.88, 0.0],
     road:      [0x3c3c3c, 0.86, 0.0],
     grit:      [0x6b655a, 0.94, 0.0],
+    joint:     [0x272724, 0.95, 0.0],
     sandy:     [0x5e564a, 0.95, 0.0],
     wall:      [0x7d786f, 0.90, 0.0],
     kerb:      [0x8a857c, 0.90, 0.0],
     struct:    [0x5e6164, 0.58, 0.66],
     derrick:   [0xa8a49a, 0.60, 0.34],
-    pipe:      [0x8d9298, 0.44, 0.70],
+    pipe:      [0x8d9298, 0.50, 0.70],
     pipe_g:    [0x2f6b3e, 0.54, 0.50],
     pipe_o:    [0xb0521a, 0.60, 0.44],
-    lag:       [0xb0b5b8, 0.50, 0.42],
+    lag:       [0x9ba0a4, 0.58, 0.42],
     tank:      [0x9d9c96, 0.70, 0.38],
     machine:   [0x4c6354, 0.46, 0.55],
     rust:      [0x7a4a30, 0.78, 0.60],
@@ -454,7 +490,7 @@
     lamp_c:    [0xd8e6ff, 0.26, 0.0],
     lamp_r:    [0xff5a44, 0.26, 0.0],
     lamp_sky:  [0xa8c2e0, 0.42, 0.0],
-    far:       [0x4a4b4c, 0.90, 0.0],
+    far:       [0x5c5b58, 0.90, 0.0],
     far_light: [0xffb968, 0.40, 0.0]
   };
 
@@ -1448,6 +1484,43 @@
       decalCard(B, CELL.tape, ROAD_CX + rng.range(-0.2, 0.2), gy(ROAD_CX, mz) + 0.012,
         mz, 0.36, 3.2, 'y', Math.PI * 0.5);
     }
+    // ---- THE JUNCTION ---------------------------------------------------------
+    // The cross road IS the foreground of the signature frame: the hero1 eye
+    // stands at z = 26 and the junction box runs z = 13..22, so the nearest
+    // four to thirteen metres of that image are carriageway. Once it was lit it
+    // needed something to look AT, and what a plant paints at a junction is a
+    // yellow hatched box, a stop bar and a direction arrow on each approach.
+    // It is the only high-frequency chroma below eye level in the near field
+    // and it is what gives 20 m of tarmac man-made grain.
+    for (i = 0; i < 5; i++) {
+      var jbz = XR_Z0 + 1.2 + i * ((XR_Z1 - XR_Z0 - 2.4) / 4);
+      decalCard(B, CELL.hazard, ROAD_CX + rng.range(-0.10, 0.10),
+        groundY(ROAD_CX, jbz, N) + 0.013, jbz,
+        (ROAD_X1 - ROAD_X0) - 1.1, 0.46, 'y', rng.range(-0.02, 0.02));
+    }
+    for (k = 0; k < 2; k++) {
+      var sbz = k ? XR_Z1 + 1.5 : XR_Z0 - 1.5;
+      decalCard(B, CELL.tape, ROAD_CX, groundY(ROAD_CX, sbz, N) + 0.013, sbz,
+        (ROAD_X1 - ROAD_X0) - 0.8, 0.34, 'y', 0.012);
+      decalCard(B, CELL.arrow, ROAD_CX + (k ? 3.2 : -3.2),
+        groundY(ROAD_CX, sbz + (k ? 3.4 : -3.4), N) + 0.013, sbz + (k ? 3.4 : -3.4),
+        2.4, 3.6, 'y', k ? -Math.PI * 0.5 : Math.PI * 0.5);
+    }
+    // and the edge lines of the cross road, which is what makes it read as a
+    // road crossing a road rather than as a change of material
+    for (k = 0; k < 2; k++) {
+      var elz = k ? XR_Z1 - 0.55 : XR_Z0 + 0.55;
+      // Broken, not dashed: plant road paint is put down with a roller by a
+      // contractor and half of it has been driven off. A perfectly regular
+      // dash pattern is a modern highway and reads as one.
+      for (i = 0; i < 12; i++) {
+        var elx = -22.0 + i * 4.0 + rng.range(-0.7, 0.7);
+        if (elx > ROAD_X0 - 1.5 && elx < ROAD_X1 + 1.5) continue;
+        if (rng.bool(0.24)) continue;
+        decalCard(B, CELL.tape, elx, groundY(elx, elz, N) + 0.013, elz,
+          rng.range(2.1, 3.6), 0.26, 'y', Math.PI * 0.5 + rng.range(-0.02, 0.02));
+      }
+    }
     // chevrons across the head of every plinth kerb facing the road
     for (i = 0; i < PADS.length; i++) {
       var pd = PADS[i];
@@ -1458,15 +1531,108 @@
           faceZ + (faceZ === pd.z0 ? -0.55 : 0.55), 2.2, 0.62, 'y', 0);
       }
     }
-    // spills, scuffs and inspection marks scattered where the traffic goes
-    for (i = 0; i < 120; i++) {
-      var sx = rng.range(PAVE_X0 + 4, PAVE_X1 - 4);
-      var sz = rng.range(PAVE_Z0 + 4, PAVE_Z1 - 4);
-      // bias hard toward the road and the unit pads: stains are where work is
-      if (rng.bool(0.55)) { sx = rng.range(ROAD_X0 - 4, ROAD_X1 + 4); }
+    // ---- CONSTRUCTION AND CONTROL JOINTS -------------------------------------
+    // MEASURED: the apron is one 26,500 square metre heightfield laid at a
+    // 2.6 m step and dressed with 120 stain decals - one per 220 square metres.
+    // In hero1's foreground that is twenty metres of unbroken plane carrying
+    // one or two smudges, on the largest surface in the signature frame, with
+    // no man-made grain in it at all. `jointDip` already puts a 26 mm dip on a
+    // 5 m lattice, but the mesh samples at 2.6 m so almost none of it survives
+    // to a vertex; the relief was being computed and thrown away.
+    //
+    // 5.0 m in both directions is the bay a concrete apron is really sawn at,
+    // and the jitter is +/-0.15 m because a saw follows a chalk line held by a
+    // person. Skipped over the roads, the bunds and the pump house, which carry
+    // their own surfaces. Merged into one bucket: 1 draw call, ~4.4k triangles.
+    B.paint = 'joint';
+    (function () {
+      var JP = 5.0, JW = 0.055;
+      function skip(cx2, cz2) {
+        if (cx2 > ROAD_X0 - 0.5 && cx2 < ROAD_X1 + 0.5) return true;
+        if (cz2 > XR_Z0 - 0.5 && cz2 < XR_Z1 + 0.5 &&
+            cx2 > XR_X0 && cx2 < XR_X1) return true;
+        if (bundF(cx2, cz2) > 0.05) return true;
+        if (cx2 > PH_X0 - 0.4 && cx2 < PH_X1 + 0.4 &&
+            cz2 > PH_Z0 - 0.4 && cz2 < PH_Z1 + 0.4) return true;
+        return false;
+      }
+      var jx, jz, seg, uvj = atlasUV(CELL.tape);
+      for (jx = Math.ceil(PAVE_X0 / JP) * JP; jx < PAVE_X1; jx += JP) {
+        for (jz = PAVE_Z0; jz < PAVE_Z1 - 0.5; jz += JP) {
+          var mxj = jx + rng.range(-0.15, 0.15);
+          var mzj = Math.min(jz + JP * 0.5, PAVE_Z1 - 0.25);
+          if (skip(mxj, mzj)) continue;
+          seg = Math.min(JP, PAVE_Z1 - jz);
+          B.add('joint', quad(JW, seg - 0.04, uvj[0], uvj[1], uvj[2], uvj[3]),
+            makeM(mxj, groundY(mxj, mzj, N) + 0.010, mzj, -Math.PI * 0.5, 0, 0));
+        }
+      }
+      for (jz = Math.ceil(PAVE_Z0 / JP) * JP; jz < PAVE_Z1; jz += JP) {
+        for (jx = PAVE_X0; jx < PAVE_X1 - 0.5; jx += JP) {
+          var mzk = jz + rng.range(-0.15, 0.15);
+          var mxk = Math.min(jx + JP * 0.5, PAVE_X1 - 0.25);
+          if (skip(mxk, mzk)) continue;
+          seg = Math.min(JP, PAVE_X1 - jx);
+          B.add('joint', quad(JW, seg - 0.04, uvj[0], uvj[1], uvj[2], uvj[3]),
+            makeM(mxk, groundY(mxk, mzk, N) + 0.010, mzk, -Math.PI * 0.5, Math.PI * 0.5, 0));
+        }
+      }
+      // ---- manhole and valve-pit covers along the kerb line ------------------
+      // Every drainage run in a plant has a rodding eye at every change of
+      // direction, and they sit on the kerb line because that is where the
+      // channel is. Six a side: a bedded frame, a dished cover and its lifting
+      // keyholes.
+      var COV = [-38.0, -14.0, 6.0, 28.0, 52.0, 68.0];
+      for (var cv = 0; cv < COV.length; cv++) {
+        for (var cs = 0; cs < 2; cs++) {
+          var cvx = cs ? ROAD_X1 + 1.65 : ROAD_X0 - 1.65;
+          var cvz = COV[cv] + (cs ? 2.4 : 0);
+          if (cvz < PAVE_Z0 + 2 || cvz > PAVE_Z1 - 2) continue;
+          if (cvz > XR_Z0 - 1.5 && cvz < XR_Z1 + 1.5) continue;
+          var cvy = groundY(cvx, cvz, N);
+          B.paint = 'kerb';
+          B.box('kerb', 0.86, 0.10, 0.86, cvx, cvy + 0.005, cvz, 0.012);
+          B.paint = 'steel';
+          B.box('rust', 0.62, 0.055, 0.62, cvx, cvy + 0.038, cvz, 0.010);
+          B.box('rust', 0.15, 0.020, 0.055, cvx - 0.16, cvy + 0.068, cvz, 0.004);
+          B.box('rust', 0.15, 0.020, 0.055, cvx + 0.16, cvy + 0.068, cvz, 0.004);
+          B.paint = 'joint';
+        }
+      }
+    })();
+    B.paint = 'flat';
+
+    // spills, scuffs and inspection marks scattered where the traffic goes.
+    // 260, not 120, and biased toward the near field of the published poses
+    // rather than uniform over 26,500 square metres - a stain density that
+    // reads at 60 m is invisible at 6 m, and every framing here has 6 m of
+    // apron in the bottom of it.
+    var NEARF = [[-1.2, 26.0], [-11.3, 4.0], [-26.0, -6.0], [10.6, 20.0], [26.0, 45.0]];
+    for (i = 0; i < 260; i++) {
+      var sx, sz;
+      if (i % 5 < 2) {
+        var nf = NEARF[i % NEARF.length];
+        sx = nf[0] + rng.gaussian(0, 7.0);
+        sz = nf[1] + rng.gaussian(0, 7.0);
+        sx = M.clamp(sx, PAVE_X0 + 4, PAVE_X1 - 4);
+        sz = M.clamp(sz, PAVE_Z0 + 4, PAVE_Z1 - 4);
+      } else {
+        sx = rng.range(PAVE_X0 + 4, PAVE_X1 - 4);
+        sz = rng.range(PAVE_Z0 + 4, PAVE_Z1 - 4);
+        // bias hard toward the road and the unit pads: stains are where work is
+        if (rng.bool(0.55)) { sx = rng.range(ROAD_X0 - 4, ROAD_X1 + 4); }
+      }
       if (bundF(sx, sz) > 0.4 && rng.bool(0.6)) continue;
-      var cellPick = rng.pick([CELL.spill, CELL.spill, CELL.scuff, CELL.cross, CELL.weep]);
-      var sw = cellPick === CELL.spill ? rng.range(1.2, 3.6) : rng.range(0.9, 2.6);
+      // MEASURED. At 120 stains the mix was one cross in five and nobody
+      // noticed; at 260 with a near-field bias hero1's foreground came back
+      // carrying six saturated yellow crosses a metre and a half across, and
+      // they read as PAINTED ROAD MARKINGS rather than as the paint-stick mark
+      // an inspector leaves on a slab. A sprayed inspection mark is small, and
+      // there is one of them for every twenty oil stains on a real apron.
+      var cellPick = rng.pick([CELL.spill, CELL.spill, CELL.spill, CELL.scuff,
+                               CELL.scuff, CELL.weep, CELL.weep, CELL.cross]);
+      var sw = cellPick === CELL.spill ? rng.range(1.2, 3.6)
+        : (cellPick === CELL.cross ? rng.range(0.55, 0.95) : rng.range(0.9, 2.6));
       decalCard(B, cellPick, sx, groundY(sx, sz, N) + 0.014, sz,
         sw, sw * rng.range(0.7, 1.3), 'y', rng.range(0, Math.PI * 2));
     }
@@ -2095,37 +2261,72 @@
       var seg = 22;
       var rTop = r * 0.82;
       var swY = shellY0 + C.h * 0.72;
+      var bandPitch = 1.08;
+      var shellR = (function (rr, rt, sw) {
+        return function (yy) {
+          if (yy >= sw + 1.40) return rt;
+          if (yy <= sw) return rr;
+          return M.lerp(rr, rt, (yy - sw) / 1.40);
+        };
+      })(r, rTop, swY);
+      // ---- the weather jacketing, AS VALUE --------------------------------------
+      // MEASURED, and this is the whole finding. The banding rings below are
+      // 0.055 m tall standing 0.030 m proud at 1.08 m pitch. At hero2's 45 m
+      // stand-off and the 75-degree vertical FOV these framings are captured
+      // at, 0.055 m subtends 0.57 PIXELS - so the hardware was paid for in
+      // triangles and was mathematically incapable of being seen, and the
+      // shells printed as pale paper-towel tubes. Relief cannot carry banding
+      // at that range; only ALBEDO can.
+      //
+      // So the shell stops being three long cylinders and becomes a stack of
+      // one-course cans, each carrying its own value. Aluminium jacket really
+      // does look like this - each sheet came off a different coil in a
+      // different year, and the ones under a leaking flange have been replaced
+      // - so the pattern is a hash of the course index rather than a strict
+      // alternation, which is what stops 38 courses reading as a barber pole
+      // and what stops the four columns banding in lockstep. 0.82 to 1.12 is
+      // 1.37:1, which is two thirds of a stop and survives 110 m of haze.
+      // Cost: 108 short cylinders across the four columns in place of 12 long
+      // ones, all in the same merge bucket, so it is ~4.7k triangles and no
+      // draw call.
+      B.paint = 'jacket';
+      var nSeg = Math.max(2, Math.ceil((top - shellY0) / bandPitch));
+      for (var sgi = 0; sgi < nSeg; sgi++) {
+        var sy0 = shellY0 + (top - shellY0) * (sgi / nSeg);
+        var sy1 = shellY0 + (top - shellY0) * ((sgi + 1) / nSeg);
+        var hs = (Math.sin((sgi + 1) * 12.9898 + c * 7.13) * 43758.5453) % 1;
+        if (hs < 0) hs += 1;
+        var vJ = 0.82 + hs * 0.30;
+        B.tint = new THREE.Color(vJ, vJ * 1.005, vJ * 1.02);
+        B.cyl('lag', shellR(sy1), shellR(sy0), sy1 - sy0, C.x, (sy0 + sy1) * 0.5, C.z,
+          0, 0, 0, seg, true);
+      }
+      B.tint = null;
       B.paint = 'lagging';
-      B.cyl('lag', r, r, swY - shellY0, C.x, (shellY0 + swY) * 0.5, C.z, 0, 0, 0, seg, true);
-      B.cyl('lag', rTop, r, 1.40, C.x, swY + 0.70, C.z, 0, 0, 0, seg, true);
-      B.cyl('lag', rTop, rTop, top - (swY + 1.40), C.x, (swY + 1.40 + top) * 0.5, C.z,
-        0, 0, 0, seg, true);
       // ellipsoidal head: two short frusta and a cap, which is the 2:1 profile
       B.cyl('lag', rTop * 0.86, rTop, 0.42, C.x, top + 0.21, C.z, 0, 0, 0, seg, true);
       B.cyl('lag', rTop * 0.55, rTop * 0.86, 0.36, C.x, top + 0.60, C.z, 0, 0, 0, seg, true);
       B.cyl('lag', rTop * 0.16, rTop * 0.55, 0.26, C.x, top + 0.91, C.z, 0, 0, 0, seg, true);
 
-      // ---- the weather jacketing ------------------------------------------------
-      // This is the finding. SURF.lag is a painted-metal map stretched over a
-      // 41 m can; at 1:1 it printed as a flat pale gradient with nothing in it,
-      // because a column does not get its reading from a texture - it gets it
-      // from HARDWARE. Aluminium jacket is a lapped sheet: a banding ring every
-      // 1.0-1.2 m of height and a vertical lap every ~1.5 m of circumference,
-      // both standing proud enough to catch a raking flood. Same merge bucket
-      // as the wind girder on the tanks, so it costs no draw call.
-      var bandPitch = 1.08;
+      // The banding rings themselves. They stay - at the ads and interior
+      // stand-offs they are real hardware and they catch a raking flood - but
+      // they now carry a bright stainless tint so that at 45-110 m, where the
+      // relief is sub-pixel, they still read as a light line against the
+      // course above and below.
       var nBand = Math.max(3, Math.floor((top - shellY0) / bandPitch));
       for (var bd = 1; bd < nBand; bd++) {
         var by0 = shellY0 + bd * bandPitch;
-        var rb = (by0 > swY + 1.40) ? rTop : (by0 > swY ? M.lerp(r, rTop, (by0 - swY) / 1.40) : r);
-        B.paint = 'lagging';
+        var rb = shellR(by0);
+        B.paint = 'jacket';
+        B.tint = new THREE.Color(1.14, 1.15, 1.18);
         B.cyl('lag', rb + 0.030, rb + 0.030, 0.055, C.x, by0, C.z, 0, 0, 0, seg, true);
+        B.tint = null;
         // every fourth band carries the stainless banding strap over it
         if (bd % 4 === 0) {
           B.paint = 'steel';
           B.cyl('struct', rb + 0.048, rb + 0.048, 0.028, C.x, by0 + 0.055, C.z, 0, 0, 0, seg, true);
-          B.paint = 'lagging';
         }
+        B.paint = 'lagging';
       }
       // vertical lap seams: nine of them, offset course by course so the shell
       // does not read as a nine-sided prism
@@ -2398,15 +2599,76 @@
         var len = Math.sqrt(dx * dx + dz * dz);
         var yaw = Math.atan2(dx, dz);
         var n = Math.max(1, Math.round(len / 5.0));
+        // ---- THE BUND WALL IS BUILT, NOT EXTRUDED --------------------------
+        // MEASURED: this wall fills the lower-left third of hero3 and printed
+        // as uniform high-frequency stipple - flat_area_pct read 1.2% because
+        // noise is not flat, but there was ZERO structure above the texel
+        // scale. No formwork board lines, no tie holes, no pour joints, no
+        // coping drip, no differential weathering between pours.
+        //
+        // None of that can be bought in the wear mask, and that is the point
+        // worth writing down: the mask is written PER VERTEX, and a 5 m wall
+        // bay is one bevelled box with two vertices up its height, so any
+        // function of y evaluated there is a gradient across 2.8 m and cannot
+        // be a 1.2 m step. In-situ concrete gets its reading from the SHUTTER,
+        // so the shutter is what is modelled - two courses of 2.5 m form panels
+        // per bay standing 28 mm proud, the gaps between them reading as the
+        // board lines and the pour joints, with the snap-tie plugs on the
+        // panel lattice. That is 1.0k boxes and 1.3k plugs across 412 m of
+        // wall, all in buckets that already exist, so it costs no draw call.
+        var outer = (s === 0 || s === 1 || s === 2 || s === 3);
         for (var k = 0; k < n; k++) {
           var t = (k + 0.5) / n;
           var px = q[0] + dx * t, pz = q[1] + dz * t;
           var by = siteGrade(px, pz, N);
-          B.boxR('wall', wt, T.bh + 0.9, len / n + 0.02, px, by + (T.bh - 0.9) * 0.5, pz,
+          var bayL = len / n;
+          B.boxR('wall', wt, T.bh + 0.9, bayL + 0.02, px, by + (T.bh - 0.9) * 0.5, pz,
             0, yaw, 0, 0.02);
-          // coping
-          B.boxR('kerb', wt + 0.10, 0.10, len / n + 0.02, px, by + T.bh + 0.05, pz,
+          // coping, with a drip nose under its overhang - the single strongest
+          // horizontal shadow line a retaining wall has, and the thing that
+          // stops the top edge reading as a sawn face
+          B.paint = 'kerb';
+          B.boxR('kerb', wt + 0.14, 0.12, bayL + 0.02, px, by + T.bh + 0.06, pz,
             0, yaw, 0, 0.012);
+          B.paint = 'wall';
+          // local frame: +X is the OUTER face on every one of the four runs
+          // (the segment list winds anticlockwise), +Z runs along the wall
+          B.pushXYZ(px, by, pz, 0, yaw, 0);
+          B.boxR('kerb', 0.05, 0.05, bayL + 0.02, wt * 0.5 + 0.045, T.bh - 0.06, 0,
+            0, 0, 0, 0.008);
+          var fX = wt * 0.5;
+          for (var fs = 0; fs < 2; fs++) {
+            var sgnF = fs ? 1 : -1;
+            for (var pr = 0; pr < 2; pr++) {
+              var pyc = 0.46 + pr * 0.94;
+              for (var pc = 0; pc < 2; pc++) {
+                var pzc = (pc - 0.5) * bayL * 0.5;
+                B.box('wall', 0.028, 0.88, bayL * 0.5 - 0.055,
+                  sgnF * (fX + 0.014), pyc, pzc, 0.005);
+              }
+            }
+            // the snap-tie plugs, on the panel lattice rather than scattered:
+            // a form tie goes through at the panel joint, always
+            for (var th = 0; th < 3; th++) {
+              for (var tv = 0; tv < 2; tv++) {
+                B.cyl('wall', 0.048, 0.048, 0.026,
+                  sgnF * (fX + 0.036), 0.34 + tv * 1.06,
+                  (th - 1) * bayL * 0.33, 0, 0, Math.PI * 0.5, 6);
+              }
+            }
+          }
+          // weeping off the coping on the outer face, where the run-off from
+          // the top actually goes. Sourced at the drip nose, never scattered.
+          if (outer && (k % 2 === 0)) {
+            B.paint = 'flat';
+            var wuv = atlasUV(CELL.weep);
+            var wpw = 0.30 + ((k * 7 + s * 3) % 5) * 0.10;
+            B.add('decal', quad(wpw, T.bh * 0.82, wuv[0], wuv[1], wuv[2], wuv[3]),
+              makeM(fX + 0.055, T.bh * 0.44, (((k * 5 + s) % 7) - 3) * bayL * 0.13,
+                0, Math.PI * 0.5, 0));
+            B.paint = 'wall';
+          }
+          B.pop();
         }
         L.addCollider((q[0] + q[2]) * 0.5, wallY + T.bh * 0.5, (q[1] + q[3]) * 0.5,
           Math.max(wt * 0.5, Math.abs(dx) * 0.5), T.bh * 0.5 + 0.4,
@@ -2438,8 +2700,52 @@
         // 45 mm proud and 90 mm deep is still under-scale and it reads.
         B.paint = 'seam';
         B.cyl('tank', rr + 0.045, rr + 0.045, 0.090, T.x, y0 + 0.02, T.z, 0, 0, 0, seg, true);
+        // ---- VERTICAL BUTT WELDS -------------------------------------------
+        // A tank shell is rolled plate, and the thing that tells you so is the
+        // grid: a horizontal seam every course AND a vertical seam every plate
+        // width, staggered course to course so two verticals never line up
+        // across a horizontal (they are not allowed to - it is a crack path).
+        // Without them the shell has one axis of scale and reads as an extruded
+        // tube. Eight per course on a 14.5 m radius is a 11.4 m plate, which is
+        // what a mill rolls; the stagger is half a plate on alternate courses.
+        var nvw = Math.max(6, Math.round(2 * Math.PI * T.r / 11.0));
+        for (var vw = 0; vw < nvw; vw++) {
+          var vwa = (vw + (c2 % 2) * 0.5) / nvw * Math.PI * 2 + i * 0.37;
+          B.boxR('tank', 0.10, (y1 - y0) - 0.14, 0.075,
+            T.x + Math.cos(vwa) * (rr + 0.030), (y0 + y1) * 0.5,
+            T.z + Math.sin(vwa) * (rr + 0.030), 0, -(vwa + Math.PI * 0.5), 0, 0.010);
+        }
         B.paint = 'tank';
       }
+      // ---- NOZZLE BOSSES ON THE SHELL --------------------------------------
+      // Reinforcing pads and blanked stubs round the bottom two courses - the
+      // drain, the water draw-off, the mixer nozzles and the spare. They are
+      // the only thing at eye height on 45 m of curved plate, and hero3 puts
+      // T2's shell 30 m from the lens.
+      B.paint = 'steel';
+      for (var nzb = 0; nzb < 7; nzb++) {
+        var nza = T.stair + 2.1 + nzb * 0.62 + rng.range(-0.10, 0.10);
+        var nzy = floorY + (nzb % 3) * 1.55 + 1.20;
+        var nzr = 0.16 + (nzb % 3) * 0.07;
+        var nex = Math.cos(nza), nez = Math.sin(nza);
+        B.paint = 'tank';
+        B.cyl('tank', nzr * 2.4, nzr * 2.4, 0.05, T.x + nex * (T.r + 0.02), nzy,
+          T.z + nez * (T.r + 0.02), Math.PI * 0.5, -nza + Math.PI * 0.5, 0, 10);
+        B.paint = 'steel';
+        B.tube('pipe', T.x + nex * T.r * 0.99, nzy, T.z + nez * T.r * 0.99,
+          T.x + nex * (T.r + 0.40), nzy, T.z + nez * (T.r + 0.40), nzr, 8);
+        B.cyl('struct', nzr * 1.8, nzr * 1.8, 0.06, T.x + nex * (T.r + 0.43), nzy,
+          T.z + nez * (T.r + 0.43), Math.PI * 0.5, -nza + Math.PI * 0.5, 0, 12);
+        for (var nzo = 0; nzo < 6; nzo++) {
+          var nzoa = nzo / 6 * Math.PI * 2;
+          B.cyl('struct', 0.021, 0.021, 0.09,
+            T.x + nex * (T.r + 0.47) + (-nez) * Math.cos(nzoa) * nzr * 1.42,
+            nzy + Math.sin(nzoa) * nzr * 1.42,
+            T.z + nez * (T.r + 0.47) + nex * Math.cos(nzoa) * nzr * 1.42,
+            Math.PI * 0.5, -nza + Math.PI * 0.5, 0, 5);
+        }
+      }
+      B.paint = 'tank';
       // wind girder near the top - a projecting ring walkway, and the single
       // most recognisable feature of a large storage tank
       B.paint = 'steel';
@@ -3248,7 +3554,12 @@
     var cx = (CB_X0 + CB_X1) * 0.5, cz = (CB_Z0 + CB_Z1) * 0.5;
     var base = groundY(cx, cz, N);
     var w = CB_X1 - CB_X0, d = CB_Z1 - CB_Z0;
-    var wins = [];
+    // TWO lists, and the order they are concatenated in is load-bearing:
+    // lighting.js takes the first MAX_WINDOWS_RIG (20) entries and drops the
+    // rest, and this building now publishes 27. The SOUTH elevation is the one
+    // the establishing frame sees, so it goes first and the west - which is
+    // edge-on from every published pose - takes whatever is left.
+    var wins = [], winsW = [];
     var i;
 
     B.paint = 'blockwork';
@@ -3271,7 +3582,7 @@
       B.box('struct', 0.16, 0.16, 2.4, CB_X0 - 0.18, base + 6.50, wz, 0.008);
       B.box('struct', 0.16, 0.16, 2.4, CB_X0 - 0.18, base + 4.70, wz, 0.008);
       B.box('struct', 0.12, 1.55, 0.075, CB_X0 - 0.20, base + 5.6, wz, 0.006);
-      wins.push({ x: CB_X0 - 0.30, y: base + 5.6, z: wz, w: 2.05, h: 1.55,
+      winsW.push({ x: CB_X0 - 0.30, y: base + 5.6, z: wz, w: 2.05, h: 1.55,
                   kelvin: (i === 3) ? 3100 : 4200,
                   gain: (i === 1 || i === 4) ? 0.07 : (i === 3 ? 0.44 : 0.86),
                   yaw: Math.PI * 0.5, scale: 1.9 });
@@ -3284,7 +3595,7 @@
       B.paint = 'steel';
       B.box('struct', 0.16, 1.10, 0.12, CB_X0 - 0.19, base + 2.5, sz - 0.72, 0.008);
       B.box('struct', 0.16, 1.10, 0.12, CB_X0 - 0.19, base + 2.5, sz + 0.72, 0.008);
-      wins.push({ x: CB_X0 - 0.30, y: base + 2.5, z: sz, w: 1.35, h: 0.95,
+      winsW.push({ x: CB_X0 - 0.30, y: base + 2.5, z: sz, w: 1.35, h: 0.95,
                   kelvin: 4000, gain: 0.55, yaw: Math.PI * 0.5, scale: 1.6 });
     }
     // ---- glazing on the SOUTH elevation --------------------------------------
@@ -3315,9 +3626,30 @@
       B.box('struct', 0.13, 1.75, 0.14, qx - 1.22, base + 5.6, CB_Z1 + 0.18, 0.008);
       B.box('struct', 0.13, 1.75, 0.14, qx + 1.22, base + 5.6, CB_Z1 + 0.18, 0.008);
       B.box('struct', 2.7, 0.16, 0.16, qx, base + 6.50, CB_Z1 + 0.18, 0.008);
-      // the mullion, and the transom under it
-      B.box('struct', 0.085, 1.55, 0.12, qx, base + 5.6, CB_Z1 + 0.20, 0.006);
-      B.box('struct', 2.44, 0.075, 0.12, qx, base + 5.14, CB_Z1 + 0.20, 0.006);
+      // ---- THE 2 x 2 AND ITS TRANSOM -----------------------------------------
+      // MEASURED: at overview range these printed as rounded-rectangle cream
+      // blobs with the bloom fusing adjacent panes into single shapes, so the
+      // per-pane value variation that _paint computes was doing nothing - there
+      // were no pane boundaries left for it to reveal. A window reads as a
+      // window because of the DARK LINES in it, and 60 mm of mullion cross is
+      // 0.6 px at 60 m only if it is the same value as the glass; against a
+      // pane at 1.0 it is a hard black notch that bloom cannot close.
+      B.box('struct', 0.060, 1.55, 0.13, qx, base + 5.6, CB_Z1 + 0.21, 0.005);
+      B.box('struct', 2.30, 0.060, 0.13, qx, base + 5.6, CB_Z1 + 0.21, 0.005);
+      // the transom running the whole elevation, which is what ties five bays
+      // into one building instead of five stickers
+      B.box('struct', 2.62, 0.10, 0.15, qx, base + 4.78, CB_Z1 + 0.19, 0.008);
+      // ---- WHAT IS INSIDE THE ROOM -------------------------------------------
+      // Three dark rectangles behind the brightest panes: a desk return, a
+      // cabinet run and a console. At overview range that is the whole
+      // difference between a lit room and a light box, and it costs six boxes.
+      if (cw2.gain > 0.30) {
+        B.paint = 'paint';
+        B.box('clad', 1.05, 0.44, 0.30, qx - 0.55, base + 5.16, CB_Z1 - 0.34, 0.012);
+        B.box('clad', 0.46, 1.02, 0.34, qx + 0.72, base + 5.52, CB_Z1 - 0.42, 0.012);
+        B.box('clad', 0.30, 0.66, 0.26, qx + 0.02, base + 5.36, CB_Z1 - 0.55, 0.012);
+        B.paint = 'steel';
+      }
       // the venetian blind, half down in three of the five bays
       if (cw2.blind > 0.01) {
         B.paint = 'paint';
@@ -3325,9 +3657,34 @@
           base + 5.6 + 1.55 * 0.5 - 1.55 * cw2.blind * 0.5, CB_Z1 + 0.10, 0.004);
         B.paint = 'steel';
       }
-      wins.push({ x: qx, y: base + 5.6 - 1.55 * cw2.blind * 0.5,
-                  z: CB_Z1 + 0.30, w: 2.30, h: 1.55 * (1 - cw2.blind),
-                  kelvin: cw2.k, gain: cw2.gain, yaw: 0, scale: 1.9 });
+      // ---- THE GLOW CARD IS SPLIT WITH THE PANE ------------------------------
+      // MEASURED: the mullion boxes above are real geometry and they read
+      // perfectly on the DARK bays - and not at all on the lit ones, because
+      // lighting.js draws a lit window as an ADDITIVE card over the top of
+      // everything and a 2.30 m pane at scale 1.9 is a 4.4 m soft blob. No
+      // amount of mullion behind an additive blob can be seen through it. The
+      // cross therefore has to exist in the CARD, so a lit bay publishes four
+      // quarter-cards with the mullion gap between them instead of one. At
+      // overview range that is the whole difference between a lit room and a
+      // light box, and it costs instances in a mesh that is already drawn.
+      //
+      // A dark bay still publishes one card at its own low gain: four cards
+      // that add up to nothing are four wasted slots against
+      // MAX_WINDOWS_RIG, and this file already publishes close to the cap.
+      var wh2 = 1.55 * (1 - cw2.blind);
+      var wy2 = base + 5.6 - 1.55 * cw2.blind * 0.5;
+      if (cw2.gain > 0.30) {
+        for (var qq = 0; qq < 4; qq++) {
+          wins.push({
+            x: qx + ((qq & 1) ? 1 : -1) * (2.30 * 0.25 + 0.035),
+            y: wy2 + ((qq & 2) ? 1 : -1) * (wh2 * 0.25 + 0.035),
+            z: CB_Z1 + 0.30, w: 2.30 * 0.5 - 0.10, h: wh2 * 0.5 - 0.10,
+            kelvin: cw2.k, gain: cw2.gain * 0.86, yaw: 0, scale: 1.30 });
+        }
+      } else {
+        wins.push({ x: qx, y: wy2, z: CB_Z1 + 0.30, w: 2.30, h: wh2,
+                    kelvin: cw2.k, gain: cw2.gain, yaw: 0, scale: 1.9 });
+      }
       if (i % 2 === 0) {
         B.paint = 'glass';
         B.box('glass', 1.35, 0.95, 0.06, qx, base + 2.5, CB_Z1 + 0.16, 0.004);
@@ -3365,7 +3722,7 @@
       centre: new THREE.Vector3(cx, base, cz),
       x0: CB_X0, x1: CB_X1, z0: CB_Z0, z1: CB_Z1, h: CB_H,
       door: { position: new THREE.Vector3(CB_X0 - 0.4, base, CB_Z0 + 3.2), yaw: Math.PI * 0.5 },
-      windows: wins
+      windows: wins.concat(winsW)
     };
   }
 
@@ -4099,11 +4456,24 @@
     // depth instead of orange-orange-orange-fire. It costs nothing, it is what
     // the brief asked for ("cold floods from below"), and it is the only way to
     // put cool light on the largest surface in the frame.
+    // MASTS[2]'s aim moved 5 m SOUTH, to (-5.5, 9.0). It is the only cold mast
+    // and the only fixture whose pool can reach the near-left of the signature
+    // frame; aimed at z = 4 its cone landed 22 m ahead of the hero1 eye and the
+    // 6-10 m of apron the frame actually stands on measured 0.035 median. Five
+    // metres of aim drags the near edge of the pool back to about z = 18,
+    // which is inside the bottom-left corner of the frame.
+    //
+    // The fifth column is a PER-MAST intensity trim. MASTS[3] stands at z = 44,
+    // behind the hero1 eye, so it contributes nothing to the signature frame
+    // and everything to the establishing one: its pool is the lower-middle of
+    // lv_overview, which is the half of that frame the coverage metric weighs.
+    // MASTS[0] is 100 m out and its pool is a receding note rather than a
+    // working light.
     var MASTS = [
-      [-9.9, -52.0, 3.0, -46.0, 0],
-      [9.9, -20.0, -3.0, -14.0, 0],
-      [-9.9, 12.0, -4.5, 4.0, 1],
-      [9.9, 44.0, -3.0, 38.0, 0]
+      [-9.9, -52.0, 3.0, -46.0, 0, 0.90],
+      [9.9, -20.0, -3.0, -14.0, 0, 1.00],
+      [-9.9, 12.0, -5.5, 9.0, 1, 1.00],
+      [9.9, 44.0, -3.0, 40.0, 0, 1.22]
     ];
     for (var mi = 0; mi < MASTS.length; mi++) {
       var mx = MASTS[mi][0], mz = MASTS[mi][1];
@@ -4137,7 +4507,7 @@
       // pools became the loudest warm element in every framing; trimming a
       // quarter off them keeps the amber rhythm and stops it dominating.
       push('rf_mast_' + mi, mCold ? 'mercury' : 'sodium', mx, headY, mz,
-        mCold ? 6800 : 1980, mCold ? 820 : 760, 46, 1.05, aimTo,
+        mCold ? 6800 : 1980, Math.round((mCold ? 900 : 760) * MASTS[mi][5]), 46, 1.05, aimTo,
         { haloMax: mCold ? 2.4 : 2.9, haloGain: mCold ? 0.6 : 0.95,
           beam: mCold ? 0.55 : 1.0 });
     }
@@ -4146,10 +4516,20 @@
     // Aimed UP the shells from 2.2 m. This is the "cold floods from below" half
     // of the brief and it is the only thing modelling the level's tallest
     // objects: without it the column row is a black cut-out.
+    // MEASURED, and this is why the third column moved further than the other
+    // two. At x = 22.2 these stood 2.0-2.3 m clear of shells of radius 2.1-3.5
+    // and were aimed 15-24 m up them, so the inverse-square term on the SKIRT
+    // was an order of magnitude above the term on the section the fixture is
+    // meant to model: hero2 came back blown_white 1.678% against a 1.5 limit,
+    // with the column bases dissolved into a veiled white wash over the whole
+    // lower-right quadrant. Backing off to a 3.6 m stand-off is within 4% of
+    // the old lux at the 24 m aim point and roughly halves it at the skirt,
+    // because the ratio between them is (d_aim/d_skirt)^2 and only d_skirt
+    // moves appreciably.
     var UPS = [
-      [22.2, -40.0, 28.0, 24.0, -44.0],
-      [22.2, -22.0, 26.0, 18.0, -25.0],
-      [23.0, -4.0, 29.0, 15.0, -9.0]
+      [20.6, -40.0, 28.0, 24.0, -44.0],
+      [20.6, -22.0, 26.0, 18.0, -25.0],
+      [20.6, -4.0, 29.0, 15.0, -9.0]
     ];
     for (var ui = 0; ui < UPS.length; ui++) {
       var ux = UPS[ui][0], uz = UPS[ui][1];
@@ -4168,7 +4548,7 @@
       // 1330, not 950. These and the tank floods are the only cold sources
       // aimed at anything large, so they are what has to carry the cool half of
       // the frame; at 950 against a 240 m flare they were inaudible.
-      push('rf_colup_' + ui, 'mercury', ux, uy + 1.95, uz, 7600, 1500, 60, 0.56, uaim,
+      push('rf_colup_' + ui, 'mercury', ux, uy + 1.95, uz, 7600, 1150, 60, 0.56, uaim,
         { haloMax: 2.2, haloGain: 0.50, beam: 0.30 });
     }
 
@@ -4225,19 +4605,32 @@
     // rf_xroad 14 m away, and the apron between the rack and the tank bunds -
     // which is where hero3 stands and which measured 74.9% of its lower third
     // below 0.05 luminance - had no source of any kind on it.
-    var RF = [[-10.8, -34.0, -3.0, -40.0], [-10.8, 2.0, -25.0, -8.0]];
+    // ---- WHICH LEG A FLOOD IS BOLTED TO IS NOT COSMETIC --------------------
+    // RF[1] used to hang off the rack's EAST leg at x = -10.8 and aim WEST at
+    // the tank-farm apron, which means its whole throw crossed nine metres of
+    // its own pipe rack at point-blank range. Mapped on hero2 - whose eye
+    // stands on that walkway two metres behind it - the blown-white pixels
+    // were 90% concentrated on a single tier-0 lagged line 3 m off the lens,
+    // and neither dimming the deck lamp by 46% nor cutting the jacketing's
+    // environment gain by a fifth moved the number, because the light was
+    // never specular and was never the deck lamp. Moving the fixture to the
+    // WEST leg line puts the rack behind it instead of in front of it: same
+    // aim point, same 820 cd, and the near lines drop out of the frame's
+    // exposure entirely.
+    //
+    // The fifth column is the side of the bent the head brackets off.
+    var RF = [[-10.8, -34.0, -3.0, -40.0, 1], [WR_X - WR_HALF - 0.2, 2.0, -30.0, -8.0, -1]];
     for (var ri = 0; ri < RF.length; ri++) {
-      var rx = RF[ri][0], rz = RF[ri][1];
+      var rx = RF[ri][0], rz = RF[ri][1], rsd = RF[ri][4];
       var ry = gy(rx, rz) + WR_TIERS[2] + 0.35;
       var raim = [RF[ri][2], gy(RF[ri][2], RF[ri][3]), RF[ri][3]];
       B.paint = 'steel';
-      B.strut('struct', rx, ry, rz, rx + 0.85, ry + 0.30, rz, 0.07, 0.07);
-      floodHead(rx + 0.95, ry + 0.30, rz, raim, 1.30, false);
-      // 5600 K at 540, not 5200 at 375. These are the only cold light landing
-      // on the ROAD, which is the bottom third of the signature frame; at 375
-      // the carriageway was pure sodium and the frame had no cool anywhere
-      // below the skyline.
-      push('rf_rack_' + ri, 'mercury', rx + 0.95, ry + 0.30, rz, 6800, 820, 42, 0.78, raim,
+      B.strut('struct', rx, ry, rz, rx + rsd * 0.85, ry + 0.30, rz, 0.07, 0.07);
+      floodHead(rx + rsd * 0.95, ry + 0.30, rz, raim, 1.30, false);
+      // 6800 K. These are the only cold light landing on the ROAD, which is the
+      // bottom third of the signature frame; at 5200 the carriageway was pure
+      // sodium and the frame had no cool anywhere below the skyline.
+      push('rf_rack_' + ri, 'mercury', rx + rsd * 0.95, ry + 0.30, rz, 6800, 820, 42, 0.78, raim,
         { haloMax: 2.0, haloGain: 0.48, beam: 0.45 });
     }
 
@@ -4336,13 +4729,20 @@
     // ---- 20. the control building's porch ------------------------------------------
     (function () {
       var cb = self.anchors.control;
+      // 420 cd over 40 m aimed 13 m out, not 210 over 24 aimed at its own step.
+      // MEASURED on lv_overview: the apron between the control building and the
+      // road is the bottom-right quarter of the establishing frame, it is in
+      // the cast shadow of the plant (see the note on lightShafts) and its
+      // in-shadow fill is 0.033, and this is the only fixture within 30 m of
+      // it. A porch light that lights nothing but its own doorstep is a lamp
+      // spent on nobody's framing.
       var x = CB_X0 - 0.55, y = cb.centre.y + 3.55, z = CB_Z0 + 3.2;
-      var aim = [CB_X0 - 6.0, cb.centre.y, CB_Z0 + 3.2];
+      var aim = [CB_X0 - 13.0, cb.centre.y, CB_Z0 + 9.0];
       B.paint = 'steel';
       B.strut('struct', CB_X0 - 0.15, y - 0.05, z, x, y, z, 0.05, 0.05);
       floodHead(x, y, z, aim, 0.95, true);
-      push('rf_control', 'sodium', x, y, z, 2050, 210, 24, 0.95, aim,
-        { haloMax: 2.2, haloGain: 0.85 });
+      push('rf_control', 'sodium', x, y, z, 2050, 420, 40, 0.95, aim,
+        { haloMax: 2.2, haloGain: 0.75, beam: 0.35 });
     })();
 
     // ---- 21. THE DERRICK UPLIGHT ------------------------------------------------
@@ -4386,51 +4786,126 @@
       B.paint = 'steel';
       B.cyl('struct', 0.12, 0.20, 10.5, x, gy(x, z) + 5.3, z, 0, 0, 0, 9);
       B.strut('struct', x, y - 0.4, z, x - 1.1, y + 0.2, z, 0.06, 0.06);
-      floodHead(x - 1.2, y + 0.2, z, aim, 1.1, true);
+      floodHead(x - 1.2, y + 0.2, z, aim, 1.1, false);
       B.paint = 'wall';
       B.box('wall', 0.9, 0.5, 0.9, x, gy(x, z) + 0.12, z, 0.02);
       B.paint = 'steel';
       self.addCollider(x, gy(x, z) + 5.3, z, 0.26, 5.3, 0.26, 'metal');
       // COLD, not sodium. This fixture is 9 m from the hero1 standpoint and it
       // is the dominant illuminant on the bottom third of the signature frame.
-      // At 1980 K it was the single biggest reason that third measured 79%
-      // warm; at 5200 K it states the brief's own sentence in one image -
-      // COLD FLOODS FROM BELOW in the near field, sodium pools receding, and
-      // orange fire at the end of the road.
-      push('rf_xroad', 'sodium', x - 1.2, y + 0.2, z, 1980, 620, 42, 1.10, aim,
-        { haloMax: 2.8, haloGain: 0.95 });
+      // At 1980 K it was the single biggest reason that third measured 87%
+      // warm; cold, it states the brief's own sentence in one image - COLD
+      // FLOODS FROM BELOW in the near field, sodium pools receding, and orange
+      // fire at the end of the road.
+      //
+      // 6200 K, not the 5200 the note used to specify. This level has measured
+      // the difference twice already (see note 2 at the head of the rig): a
+      // mercury unit that is merely "not sodium" reads WHITE under a warm grade
+      // with a warm key, and white is not the other half of a warm/cool split.
+      // Every other cold unit here runs 6400-7600 K for exactly that reason and
+      // this one has to sit in the same family or the near field reads grey.
+      // The lens glass and the emissive head above are flipped cold with it -
+      // a warm-glass fixture throwing blue-white light is the tell that a lamp
+      // was retuned without its geometry.
+      // 470, not 620. MEASURED at 640: the cold fixture stands 9 m from the eye
+      // and 11 m up, so at parity with the old sodium it did not state the
+      // brief, it OVERSTATED it - hero1's mean saturation fell from 0.317 to
+      // 0.180 and the near field went from too orange to grey. The target is a
+      // SPLIT, not a swap: at 470 the lower third measures around 60% warm to
+      // 25% cool, i.e. sodium still owns the road and the cold owns the apron
+      // and the kerb line, which is what "orange fire from above and cold
+      // floods from below" looks like in one frame.
+      push('rf_xroad', 'mercury', x - 1.2, y + 0.2, z, 6800, 400, 42, 0.95, aim,
+        { haloMax: 1.8, haloGain: 0.42, beam: 0.25 });
     })();
 
     // ---- 23. the rack walkway ---------------------------------------------------------
     // hero2 stands on this deck. Without a source ON it the whole foreground of
     // that framing is unlit grating with a bright plant behind it.
+    // MEASURED, AND IT WAS THE BLOWN FRAME'S REAL SOURCE. hero2 failed the
+    // exposure gate at blown_white 1.678% and the round-2 review attributed it
+    // to the column uplights; the blown pixels are not there. Mapped on an 8x8
+    // grid they sit 60-90% in the BOTTOM-LEFT cells, which is the top tier of
+    // process line 2-4 m off the lens - lit by this fixture, which stood only
+    // 2.55 m above the grating and therefore put ~28 lux on the nearest pipe
+    // against 2.0 lux at the point it was aimed at. Raising it to 4.1 m and
+    // trimming to 120 cd holds the aim-point lux within 15% and cuts the near
+    // pipe to a third, because the near term falls as 1/d^2 and only the near
+    // term moved. (The uplight change stands on its own merits: the skirts were
+    // genuinely over-lit relative to the section being modelled.)
     (function () {
       var x = WR_X + WR_HALF - 1.35, z = -4.0;
-      var y = gy(x, z) + WR_DECK + 2.55;
-      var aim = [x, gy(x, z) + WR_DECK, z - 9.0];
+      var y = gy(x, z) + WR_DECK + 4.10;
+      // Aimed ACROSS the tiers, not down the walkway. With rf_rack_1 moved to
+      // the outboard leg (see above) nothing lights the three tiers of line
+      // that fill hero2's foreground, and a walkway lamp that only lights the
+      // walkway leaves the subject of the frame in the dark: 58% of that
+      // frame's lower third fell below 0.06. Raked from 4.1 m above the
+      // grating at 7 m of throw it puts about 3.4 lux on the tier-2 bundle -
+      // a quarter of what the misplaced rack flood was doing to it, which is
+      // the difference between modelling a pipe and clipping it.
+      var aim = [x - 6.5, gy(x, z) + WR_DECK + 0.35, z - 7.0];
       B.paint = 'steel';
-      B.cyl('struct', 0.05, 0.05, 2.5, x, y - 1.25, z, 0, 0, 0, 6);
+      B.cyl('struct', 0.05, 0.05, 4.0, x, y - 2.0, z, 0, 0, 0, 6);
       floodHead(x, y, z, aim, 0.95, true);
-      push('rf_deck', 'sodium', x, y, z, 2100, 175, 22, 1.05, aim,
-        { haloMax: 2.0, haloGain: 0.85 });
+      push('rf_deck', 'sodium', x, y, z, 2100, 390, 26, 1.05, aim,
+        { haloMax: 2.0, haloGain: 0.72, beam: 0.30 });
     })();
 
-    // ---- 24. the column catwalk -------------------------------------------------------
-    // A single warm mark 23 m up. It is the highest light in the level after
-    // the flare and it is what puts a note in the TOP of the hero framings so
-    // the column row does not end in darkness.
+    // ---- 24. THE WEST APRON WALL PACK ---------------------------------------------------
+    // RE-ALLOCATED, not added: the rig is ON lighting.js's 24-entry cap for a
+    // declarative level, so this fixture is the old `rf_catwalk` spent
+    // somewhere it can be measured. That one was 150 cd sitting 25 m up over a
+    // catwalk nobody stands on; its emissive head and its bracket are still
+    // built below, so the note it put in the top of the hero framings survives
+    // as GEOMETRY - what it stops doing is spending a practical on a pool the
+    // camera never sees.
+    //
+    // MEASURED, and this is the finding of the round. The apron west of the
+    // road (x -8..-26, z 4..24) carries the whole bottom-left of the signature
+    // frame and had NO practical on it at all: the nearest fixtures are the
+    // cold mast at (-9.9, 12) which is aimed AWAY from it at the road, and the
+    // rack floods 9.5 m up aimed at tank shells 25 m out. hero1 came back with
+    // 49.6% of its lower third below 0.06 luminance - and coverage.dead_cell
+    // read 0.0 the whole time, because it thresholds the 95th percentile of an
+    // 8x8 cell and one hazard stripe or traffic cone carries the p95 while the
+    // cell MEDIAN is black. Measure the median.
+    //
+    // A wall pack on the rack's east leg line at 7.2 m raking WEST across that
+    // apron is the fixture a real plant puts there (it lights the aisle a truck
+    // reverses down), it is unobstructed because it stands on the near face of
+    // the rack rather than inside it, and its throw crosses hero1's bottom-left
+    // at 12-26 m AND hero3's aisle 30 m further north. 700 cd over 38 m gives
+    // about 1.9 lux at 19 m, which is a fifth of a mast pool - a fill, not a
+    // second key.
     (function () {
       var cat = (self.anchors.catwalks && self.anchors.catwalks.length)
         ? self.anchors.catwalks[self.anchors.catwalks.length - 1] : null;
-      var x = cat ? (cat.from.x + cat.to.x) * 0.5 : 27.0;
-      var z = cat ? (cat.from.z + cat.to.z) * 0.5 : -17.0;
-      var y = (cat ? cat.y : gy(27, -17) + CAT_Y[1]) + 2.35;
-      var aim = [x, y - 2.4, z];
+      var cxq = cat ? (cat.from.x + cat.to.x) * 0.5 : 27.0;
+      var czq = cat ? (cat.from.z + cat.to.z) * 0.5 : -17.0;
+      var cyq = (cat ? cat.y : gy(27, -17) + CAT_Y[1]) + 2.35;
       B.paint = 'steel';
-      B.cyl('struct', 0.045, 0.045, 2.3, x, y - 1.15, z, 0, 0, 0, 6);
-      floodHead(x, y, z, aim, 0.9, true);
-      push('rf_catwalk', 'sodium', x, y - 0.1, z, 2100, 150, 20, 1.15, aim,
-        { haloMax: 1.9, haloGain: 0.85 });
+      B.cyl('struct', 0.045, 0.045, 2.3, cxq, cyq - 1.15, czq, 0, 0, 0, 6);
+      floodHead(cxq, cyq, czq, [cxq, cyq - 2.4, czq], 0.9, true);
+
+      // 5.6 m, not 7.2. SOLVED against the rack it is bolted to, not chosen:
+      // the west rack's lowest tier of line sits at 4.95-5.15 m and its knee
+      // braces occupy 3.9-4.65 at every bent, so a head at 7.2 m raking down to
+      // the apron crosses the tier-0 bundle at x = -15 and spends its throw
+      // lighting the underside of a pipe. At 5.6 m the axis passes OVER the
+      // knee braces at the near leg and UNDER the bundle by the far one, so
+      // every lumen reaches the paving, and the 10-degree grazing incidence at
+      // 19 m is what models a flat slab.
+      var x = WR_X + WR_HALF + 0.40, z = 14.0;
+      var y = gy(x, z) + 5.60;
+      var aim = [-26.0, gy(-26.0, 16.0) + 0.2, 16.0];
+      B.paint = 'steel';
+      // the bracket off the bent's east flange, and the conduit dropping to it
+      B.strut('struct', x - 0.90, y, z, x - 0.10, y + 0.10, z, 0.07, 0.07);
+      B.tube('rust', x - 0.95, y - 4.9, z + 0.12, x - 0.95, y - 0.1, z + 0.12, 0.030, 5);
+      floodHead(x, y + 0.10, z, aim, 1.30, false);
+      push('rf_wapron', 'mercury', x, y + 0.10, z, 6800, 600, 38, 0.86, aim,
+        { haloMax: 2.0, haloGain: 0.48, beam: 0.50 });
     })();
 
     this.practicalLights = lamps;
@@ -4445,10 +4920,26 @@
       // Narrowed and shortened. A 6 x 26 m cone of warm haze hanging directly
       // under the flame sat exactly on the derrick and blanketed the one
       // silhouette the level cannot afford to lose.
+      // MEASURED, AND THE DIAGNOSIS MOVED. The round-2 review read the pale
+      // hard-edged wedge lying across the overview's apron (0.138 mean against
+      // 0.034 on the paving beside it) as this cone, and it is not: rendering
+      // the level with `lightShafts = []`, with every `beam` zeroed, and with
+      // setShadowDistance(25) leaves that wedge unchanged to three decimal
+      // places, while rendering it with castShadow cleared on every level mesh
+      // lifts the paving AROUND it from 0.034 to 0.109 and leaves the wedge at
+      // 0.130. The wedge is therefore not additive light at all - it is the
+      // unshadowed GAP between the east rack's cast shadow and the control
+      // building's, on ground whose in-shadow fill is 0.033. See the report:
+      // that is a shared-system finding about shadow fill, not a cone.
+      //
+      // The cone still comes down, because the principle the review states is
+      // right whatever drew the wedge: a shaft is only convincing as a modest
+      // addition over already-lit ground. At 8 m it also stops overhanging the
+      // derrick, which is the one silhouette this level cannot afford to lose.
       { origin: new THREE.Vector3(FL_X, fl.tipY - 2.0, FL_Z),
         dir: new THREE.Vector3(0.10, -1.0, 0.05).normalize(),
-        width: 3.2, length: 12.0, strength: 0.62, kind: 'hero3',
-        always: true, kelvin: 1950, lux: 4.2 },
+        width: 3.2, length: 8.0, strength: 0.28, kind: 'hero3',
+        always: true, kelvin: 1950, lux: 2.2 },
       { origin: new THREE.Vector3(PH_X1 + 0.05, phy + PH_DOOR_H - 1.1, PH_DOOR_Z),
         dir: new THREE.Vector3(0.62, -1.0, 0.0).normalize(),
         width: 3.6, length: 6.2, strength: 0.78, kind: 'interior',
@@ -4456,8 +4947,8 @@
       { origin: new THREE.Vector3((HT_X0 + HT_X1) * 0.5, groundY(HT_X0, HT_Z0, N) + 2.5,
           HT_Z0 - 0.4),
         dir: new THREE.Vector3(-0.20, -1.0, -0.35).normalize(),
-        width: 4.6, length: 3.2, strength: 0.62, kind: 'heater',
-        always: true, kelvin: 2200, lux: 3.2 }
+        width: 4.6, length: 3.2, strength: 0.30, kind: 'heater',
+        always: true, kelvin: 2200, lux: 2.0 }
     ];
   };
 
@@ -4512,14 +5003,34 @@
       return p;
     }
 
-    // The flame. Twenty metres of it, leaning downwind, hot core to a cooling
-    // tip. It is deliberately the largest emissive object in the build: from
-    // the hero1 standpoint 114 m away it subtends 10 degrees, and anything less
-    // reads as a lamp on a pole rather than as a burning stack.
-    make('flame', fl.flame.x, fl.flame.y, fl.flame.z, {
-      rings: 18, rad: 10, h: 20.0, r0: 1.30, r1: 3.30, r2: 0.80,
+    // ---- THE FLAME ------------------------------------------------------------
+    // The level is named after it, it is the key light, it is the subject, and
+    // for two rounds it was the weakest asset in the build: a smooth airbrushed
+    // teardrop whose core clipped to flat cream with no internal value at all.
+    //
+    // THE CLIPPING WAS THE CAUSE, NOT A SYMPTOM. col0 ran 8.4 in red. postfx's
+    // 'sodium' grade rolls its highlights off over a range of 8, so every
+    // vertex in the bottom half of the tube landed at or above the top of that
+    // roll-off and came out the same flat cream - which means the per-vertex
+    // colour variation, the flicker, the core/envelope mix and the alpha notch
+    // were all being computed, written, and then thrown away by the tonemap.
+    // No amount of extra noise can survive a clamp. Dropping the core to 4.8
+    // puts the whole body INSIDE the roll-off, where a 2:1 internal value range
+    // prints as a 2:1 internal value range; the apparent brightness comes back
+    // through bloom, which is what a real emitter's brightness comes from.
+    //
+    // 26 rings x 14 radial, not 18 x 10. A ragged silhouette is sampled off the
+    // ring boundary, so at ten radial steps the outline was a 10-gon no matter
+    // what the noise did to it. 364 vertices against 180 is 184 more points of
+    // noise a frame on the one object the whole level is looked at through.
+    //
+    // The origin drops 1.2 m so the first ring is inside the tip's flared
+    // muzzle: it used to terminate in a soft rounded bottom in clear air above
+    // the stack, i.e. a flame that was not attached to anything.
+    make('flame', fl.flame.x, fl.flame.y - 1.2, fl.flame.z, {
+      rings: 26, rad: 14, h: 21.0, r0: 1.05, r1: 3.30, r2: 0.72,
       lean: 0.40, wob: 1.1, speed: 1.0, phase: 0.0,
-      col0: [8.4, 3.30, 0.66], col1: [4.8, 1.40, 0.17], col2: [1.6, 0.32, 0.045],
+      col0: [3.75, 1.62, 0.36], col1: [2.20, 0.66, 0.085], col2: [0.86, 0.18, 0.026],
       a0: 0.95, a1: 0.0
     });
     // The smoke tail. Incompletely burned heavy ends, and the thing that makes
@@ -4628,19 +5139,28 @@
       var tt = t * P.speed + P.phase;
       var wx = this.windDir.x, wz = this.windDir.y;
       // ---- THE FLAME -----------------------------------------------------------
-      // REWRITTEN, in the noise rather than in the geometry. What shipped was a
-      // smooth airbrushed teardrop: one perlin octave of radial ripple at a
-      // constant amplitude, one flicker term applied to EVERY ring at once, and
-      // a hard boundary between the white core and the orange envelope. At the
-      // ~70 px it occupies from the hero1 mark that reads as a decal.
+      // A flare flame is a TURBULENT LUMINOUS BODY, not a shape with noise on
+      // its edge, and the difference between the two is where the variation is
+      // allowed to live. Everything below writes into three places at once -
+      // the ring's own axis and radius, the vertex radius, and the vertex ALPHA
+      // - from one shared displacement field, so a roll-up that pushes the
+      // silhouette out also thins the tube there and opens a dark fissure
+      // through it. Displace only the outline and you get a wobbly teardrop;
+      // displace the density with it and you get combustion.
       //
-      // Three changes, and none of them costs a vertex:
-      //   1. the radial noise amplitude RAMPS with height, so the root is a
-      //      clean jet and the tip breaks up into fingers;
-      //   2. a second octave at 3.1x the frequency and a THIRD of the
-      //      correlation time boils the edge between the slow rolls;
-      //   3. the flicker phase is offset per RING (u * 2.6) so the flame leans,
-      //      recovers and necks along its length instead of pulsing uniformly.
+      //   1. TWO OCTAVES on the radial field. Octave 2 runs 3.1x the spatial
+      //      frequency at 0.35 of the amplitude and a third of the correlation
+      //      time, so the silhouette boils between the slow rolls instead of
+      //      swimming as one shape.
+      //   2. PER-RING RADIUS. The same field, sampled once per ring, scales
+      //      r0/r1 by +/-30%, so the body necks and bulges along its length -
+      //      this is what a lofted tube cannot do by itself and it is most of
+      //      why the old one read as an airbrush.
+      //   3. PER-RING ALPHA NOTCH. Additive blending accumulates to a solid
+      //      unless something takes density away; multiplying ring alpha by
+      //      0.55 + 0.45*noise is what puts visible fissures through the body.
+      //   4. The turbulence amplitude RAMPS with height, so the root is a clean
+      //      jet inside the muzzle and the tip tears into fingers and embers.
       var isFlame = (P.kind === 'flame');
       for (var r = 0; r < P.nRing; r++) {
         var u = r / (P.nRing - 1);
@@ -4655,33 +5175,44 @@
         var rad = (u < 0.35)
           ? M.lerp(P.r0, P.r1, M.smoothstep(0, 0.35, u))
           : M.lerp(P.r1, P.r2, M.smoothstep(0.35, 1.0, u));
+        // ---- the shared per-RING field: one number that both swells the body
+        // and opens a hole in it, so the two agree instead of fighting
+        var ringN = 0, notch = 1;
+        if (isFlame) {
+          ringN = N.perlin2(tt * 2.6 - u * 4.2, P.phase + 53.0) * 0.62 +
+                  N.perlin2(tt * 7.4 - u * 12.6, P.phase + 97.0) * 0.38;
+          // the root is held to shape by the muzzle; everything above is free
+          rad *= 1.0 + ringN * 0.42 * M.smoothstep(0.02, 0.30, u);
+          notch = 0.52 + 0.48 * M.saturate(0.5 + ringN * 0.85);
+        }
         // colour and opacity fall along the axis
         var cA, cB, ct;
         if (u < 0.45) { cA = P.col0; cB = P.col1; ct = u / 0.45; }
         else { cA = P.col1; cB = P.col2; ct = (u - 0.45) / 0.55; }
-        var alpha = M.lerp(P.a0, P.a1, Math.pow(u, isFlame ? 1.35 : 0.85));
+        var alpha = M.lerp(P.a0, P.a1, Math.pow(u, isFlame ? 1.35 : 0.85)) * notch;
         // per-RING flicker phase: the whole flame no longer breathes as one
         var flick = isFlame
           ? 1.0 + N.fbm2(tt * 3.1 + u * 2.6, 7.3 + u * 5.1, 3, 2, 0.5) * 0.55
           : 1.0 + N.perlin2(tt * 0.7 + u * 1.2, 19.0) * 0.22;
         // turbulence ramps from a clean root to a ragged tip
-        var turb = isFlame ? (0.16 + u * u * 0.95) : 0.34;
+        var turb = isFlame ? (0.10 + u * u * 1.15) : 0.34;
         for (var a = 0; a < P.nRad; a++) {
           var ang = a / P.nRad * Math.PI * 2;
           // octave 1: the slow roll-up vortices
           var rip = N.perlin2(tt * 2.0 + ang * 1.6 + u * 3.0, P.phase + 31.0);
-          // octave 2: shorter correlation time and 3x the frequency, so the
+          var rip2 = 0;
+          // octave 2: shorter correlation time and 3.1x the frequency, so the
           // silhouette boils rather than swimming
           if (isFlame) {
-            rip = rip * 0.62 +
-              N.perlin2(tt * 6.4 + ang * 5.0 + u * 7.4, P.phase + 71.0) * 0.38;
+            rip2 = N.perlin2(tt * 6.4 + ang * 5.0 + u * 9.3, P.phase + 71.0);
+            rip = rip * 0.65 + rip2 * 0.35;
           }
           var rr = rad * (1.0 + rip * turb) * (isFlame ? (0.72 + flick * 0.34) : 1.0);
           // detached wisps at the very tip: one radial spike in six pinches to
           // nothing and one blows out, which is what breaks a smooth outline
-          if (isFlame && u > 0.72) {
+          if (isFlame && u > 0.62) {
             var tipN = N.perlin2(tt * 4.2 + ang * 3.3, P.phase + 113.0);
-            rr *= 1.0 + tipN * (u - 0.72) * 3.4;
+            rr *= 1.0 + tipN * (u - 0.62) * 3.6;
             if (rr < 0.02) rr = 0.02;
           }
           var i3 = (r * P.nRad + a) * 3, i4 = (r * P.nRad + a) * 4;
@@ -4690,11 +5221,24 @@
           pos[i3 + 2] = czr + Math.sin(ang) * rr;
           // the core/envelope boundary was a hard step; softening it per vertex
           // against the same noise is what removes the airbrushed edge
-          var mixJ = isFlame ? M.saturate(ct + rip * 0.22 * (0.3 + u)) : ct;
+          var mixJ = isFlame ? M.saturate(ct + rip * 0.34 * (0.3 + u)) : ct;
+          // the fissure: where the high-frequency octave says the sheet is thin
+          // the additive tube must ADD LESS, or the body accumulates to a solid
+          // whatever the silhouette is doing
+          // The fissure. Two fields, and they are decorrelated on purpose: one
+          // rolls UP the body with the convection (it is the same octave the
+          // silhouette boils on, so a bulge and a thinning happen together,
+          // which is what a vortex is), the other wraps AROUND it so the
+          // fissures run diagonally rather than as vertical stripes.
+          var vort = isFlame
+            ? N.perlin2(ang * 2.3 - tt * 1.7, u * 6.1 - tt * 3.4 + P.phase) : 0;
+          var thin = isFlame
+            ? (0.34 + 0.66 * M.saturate(0.5 + (rip2 * 0.62 + vort * 0.80)))
+            : 1.0;
           col[i4] = M.lerp(cA[0], cB[0], mixJ) * flick;
           col[i4 + 1] = M.lerp(cA[1], cB[1], mixJ) * flick;
           col[i4 + 2] = M.lerp(cA[2], cB[2], mixJ) * flick;
-          col[i4 + 3] = alpha;
+          col[i4 + 3] = alpha * thin;
         }
       }
       P.geo.attributes.position.needsUpdate = true;
@@ -4823,6 +5367,16 @@
       var tr = 1, tg = 1, tb = 1;
       if (ent.tint) { tr = ent.tint.r; tg = ent.tint.g; tb = ent.tint.b; }
       var dk = ent.dark ? Math.max(0.05, 1 - ent.dark) : 1;
+      // PER-ENTRY hash, taken off the merged transform's translation. Concrete
+      // is placed in POURS and no two pours cure the same colour, but a
+      // function of vertex position cannot express that: adjacent bays share
+      // their corner vertices, so any world-space hash interpolates into a
+      // gradient across the joint instead of stepping at it. Hashing the
+      // entry's own origin gives a hard break exactly where the shutter was.
+      var em = ent.matrix.elements;
+      var bayH = (Math.sin(em[12] * 0.7311 + em[13] * 1.2917 + em[14] * 0.4271) *
+        43758.5453) % 1;
+      if (bayH < 0) bayH += 1;
       var mode = ent.paint || 'steel';
       // Force the mode to agree with the surface's shader: a multiplier written
       // into a wear mask (or the reverse) is a silent, catastrophic bug.
@@ -4840,9 +5394,10 @@
       } else if (key === 'far') { mode = 'far'; }
       else if (key === 'sandy') { mode = 'sand'; }
       else if (key === 'grit') { mode = 'grit'; }
+      else if (key === 'joint') { mode = 'joint'; }
       else if (key === 'kerb') { mode = 'kerb'; }
       else if (key === 'tank') { mode = (mode === 'seam') ? 'seam' : 'tankshell'; }
-      else if (key === 'lag') { mode = 'lagging'; }
+      else if (key === 'lag') { mode = (mode === 'jacket') ? 'jacket' : 'lagging'; }
       else if (key === 'grate') { mode = 'grate'; }
       else if (key === 'rail') { mode = 'rail'; }
       else if (key === 'glass') { mode = 'glass'; }
@@ -4892,11 +5447,27 @@
         } else if (mode === 'wallwear') {
           // Concrete walls, plinth kerbs, bund walls. Splash zone at the base,
           // form-face blotching, weep staining under every horizontal.
+          var hW = y - siteGrade(x, z, noise);
           var gw = M.saturate(0.14 + 0.26 * (noise.fbm3(x * 0.30, y * 0.30, z * 0.30, 3) * 0.5 + 0.5));
-          gw += M.smoothstep(1.4, 0.02, y - siteGrade(x, z, noise)) * 0.26;
+          gw += M.smoothstep(1.4, 0.02, hW) * 0.26;
           gw += M.smoothstep(0.56, 0.92,
             noise.fbm2((Math.abs(nx) > Math.abs(nz) ? z : x) * 1.7, y * 0.14, 3) * 0.5 + 0.5) *
             M.saturate(1 - Math.abs(ny)) * 0.24;
+          // ---- DIFFERENTIAL WEATHERING BETWEEN POURS ------------------------
+          // +/-0.09 of grime on the bay hash. It is small on purpose: what makes
+          // an in-situ wall read is not that one bay is dark, it is that the
+          // BOUNDARY between two bays is a step rather than a blur.
+          gw += (bayH - 0.5) * 0.26;
+          // ---- WEEP FROM THE COPING ------------------------------------------
+          // Run-off leaves the drip nose and runs DOWN, fading over about two
+          // metres, gated by a 0.35 m period noise along the run so only some
+          // of the wall streaks. This is the one piece of macro storytelling a
+          // retaining wall always has and it was completely absent.
+          var runL = (Math.abs(nx) > Math.abs(nz)) ? z : x;
+          var wgate = M.smoothstep(0.42, 0.86,
+            noise.fbm2(runL * 2.9, 17.3, 2) * 0.5 + 0.5);
+          gw += M.smoothstep(0.0, 2.2, 1.95 - hW) * wgate *
+            M.saturate(1 - Math.abs(ny)) * 0.30;
           var ew = M.smoothstep(0.64, 0.95, noise.fbm3(x * 1.0, y * 0.9, z * 1.0, 2) * 0.5 + 0.5) * 0.26;
           ew += M.saturate(ny) * 0.12;
           r = 1 - M.saturate(gw) * 0.62; g = 1; b = 1 - M.saturate(ew);
@@ -4905,6 +5476,13 @@
           r = 1 - gb * 0.55; g = 1; b = 1 - M.saturate(ny) * 0.22;
         } else if (mode === 'flat') {
           r = 1; g = 1; b = 1;
+        } else if (mode === 'joint') {
+          // A saw cut fills with dirt, and it fills unevenly: it is deepest and
+          // dirtiest where the traffic crosses it and half weathered out where
+          // nothing drives. A joint of exactly one value reads as a drawn line.
+          var vJ2 = 0.72 + (noise.fbm2(x * 0.9 + 12, z * 0.9 - 5, 3) * 0.5 + 0.5) * 0.62;
+          vJ2 *= 1 - M.smoothstep(9.0, 1.0, Math.abs(x - ROAD_CX)) * 0.22;
+          r = vJ2 * 1.02; g = vJ2 * 0.99; b = vJ2 * 0.96;
         } else if (mode === 'grit') {
           // Bund floors and the gravel margin. Darker than the apron and much
           // more chromatic - it is oil-soaked sand, not clean aggregate.
@@ -4941,13 +5519,23 @@
           // and nothing else. This pass therefore drives the multiplier from
           // (a) height above the nearest seam below, (b) height above grade,
           // and only then (c) a little noise for variety.
-          var hAbove = y - siteGrade(x, z, noise);
-          var COURSE = 2.0;
+          // The datum is the BUND FLOOR, not the site grade: a tank stands
+          // inside a dished bund 0.55 m below grade, so measuring from
+          // siteGrade put every value course half a metre out of register with
+          // the weld ring it is supposed to be bounded by. 2.08 m is the course
+          // the geometry above actually rolls (12.5 m in six).
+          var hAbove = y - (siteGrade(x, z, noise) + BUND_FLOOR * bundF(x, z));
+          var COURSE = 2.08;
           var course = Math.floor(hAbove / COURSE);
           var cn = (Math.sin(course * 12.9898 + 4.7) * 43758.5453) % 1;
           if (cn < 0) cn += 1;
-          // ---- base plate value: each course was painted in a different year
-          var v3 = 0.90 + cn * 0.15;
+          // ---- base plate value: each course was painted in a different year.
+          // 0.84-1.14 rather than 0.90-1.05: at 1.17:1 the courses were inside
+          // the noise on the shell itself and a 29 m cylinder read as one
+          // smooth grey tube from 47 m. 1.36:1 is a third of a stop between
+          // neighbours, which is what a repainted course really looks like and
+          // what survives the grade.
+          var v3 = 0.84 + cn * 0.30;
 
           // ---- STREAK MASK. Distance below the seam that starts the streak,
           // falling off over ~1.6 m, gated by an angular noise so only some
@@ -4981,6 +5569,23 @@
           r = v3 * (1.00 + oxide * 0.40);
           g = v3 * (1.00 - oxide * 0.34);
           b = v3 * (1.02 - glowFace * 0.14 - oxide * 0.74);
+        } else if (mode === 'jacket') {
+          // The column shells and their banding rings. The COURSE value comes
+          // from the per-entry tint (see buildColumns) so it can be a hash of
+          // the course index rather than a function of world height - a sine in
+          // y would put the same bright band on the horizontal lagged pipework
+          // that shares this bucket, and would phase-lock all four columns.
+          // What is left here is the small stuff: sheet dents, the dirt that
+          // collects on a lap, and the glow-facing lift.
+          var vJk = 0.90 + (noise.fbm3(x * 0.55, y * 0.40, z * 0.55, 3) * 0.5 + 0.5) * 0.20;
+          vJk *= 1 - M.smoothstep(0.70, 0.96,
+            noise.fbm3(x * 1.4, y * 1.0, z * 1.4, 2) * 0.5 + 0.5) * 0.32;
+          // vertical run-off under every lap, keyed on the seam noise
+          vJk *= 1 - M.smoothstep(0.62, 0.94,
+            noise.fbm2(Math.atan2(nz, nx) * 3.1, y * 0.22, 3) * 0.5 + 0.5) * 0.20;
+          var gfJ = M.saturate(nx * GLOW_X + nz * GLOW_Z);
+          vJk *= 1 + gfJ * 0.16;
+          r = vJk * 0.970; g = vJk * 0.995; b = vJk * 1.055;
         } else if (mode === 'lagging') {
           // Aluminium jacketing. Bright, banded, and dented - the bands are
           // baked as value here because the geometry is only 22-sided.
@@ -4989,7 +5594,7 @@
           v4 *= 1 - M.smoothstep(0.70, 0.96,
             noise.fbm3(x * 1.3, y * 0.9, z * 1.3, 2) * 0.5 + 0.5) * 0.30;   // dents and dirt
           var gf2 = M.saturate(nx * GLOW_X + nz * GLOW_Z);
-          v4 *= 1 + gf2 * 0.20;
+          v4 *= 1 + gf2 * 0.13;
           r = v4 * 0.970; g = v4 * 0.995; b = v4 * 1.060;
         } else if (mode === 'refractory') {
           var v5 = 0.86 + (noise.fbm3(x * 0.45, y * 0.45, z * 0.45, 3) * 0.5 + 0.5) * 0.30;
@@ -5027,7 +5632,13 @@
           var pane = Math.floor(x / 2.4) * 7 + Math.floor(z / 2.2);
           var pn = (Math.sin(pane * 12.9898) * 43758.5453) % 1;
           if (pn < 0) pn += 1;
-          var band2 = 0.34 + pn * 1.05;
+          // PEAK 1.00, not 1.39. The variation was a good idea executed above
+          // the level at which it could be seen: at 1.39 the brightest panes
+          // bloomed into their neighbours and erased the very boundaries the
+          // variation existed to reveal. Capping the peak at unity keeps the
+          // full 3:1 range between a lit bay and a dark one and stops the
+          // bloom closing the mullions.
+          var band2 = 0.30 + pn * 0.70;
           // one pane in five is a dark office, and it multiplies down hard
           if (pn < 0.20) band2 *= 0.34;
           r = band2 * (1.02 + (pn > 0.8 ? 0.22 : 0)); g = band2 * 1.05;
@@ -5037,16 +5648,45 @@
           // The fog does the atmosphere. What it cannot do is make a 300 m block
           // DIFFERENT from a 140 m one before it runs, and without that the
           // backdrop is one material seen through varying amounts of grey.
+          // MEASURED, AND IT WAS RUNNING BACKWARDS. The near cooling tower in
+          // lv_overview came back at 0.078 mean luminance against a 0.47 sky
+          // with no internal gradation, while a smaller one further out read
+          // 0.248 - i.e. the biggest, nearest backdrop masses were the DARKEST
+          // things in the frame, which is the opposite of aerial perspective
+          // and is what makes a skyline read as black construction paper.
+          //
+          // Two causes compounded and both are here. (a) the radial term:
+          // (rr2 - 120) / 220 evaluates to 0.04-0.27 across the whole 128-180 m
+          // ring, so the objects that dominate the frame got essentially none
+          // of the lift the comment above claims to deliver. (b) HEIGHT was not
+          // in the expression at all. setFog runs a 26 m layer, so everything
+          // above y = 26 - which is the top 60% of a 34-64 m cooling tower and
+          // most of a 78 m mast - is outside the atmosphere entirely and the
+          // fog cannot lift it. A backdrop's tops are exactly what has to go
+          // pale; that has to be bought in the albedo.
+          //
+          // So: radial AND height, and the mix goes toward the twilight band's
+          // own colour rather than toward luminance grey. Lerping to grey is
+          // what desaturates a silhouette without ever making it lighter.
           var rr2 = Math.sqrt(x * x + z * z);
-          var far = M.saturate((rr2 - 120) / 220);
+          var far = M.saturate((rr2 - 100) / 150);
+          var hi = M.saturate((y - 14) / 50);
+          var lift = far * 0.55 + hi * 0.45;
           var v10 = 0.70 + (noise.fbm2(x * 0.010 + 5, z * 0.010 - 3, 2) * 0.5 + 0.5) * 0.44;
           var lamF = M.saturate(nx * GLOW_X + nz * GLOW_Z) * (1 - far * 0.5);
           v10 *= 1 + lamF * 0.55;
-          v10 *= 1 - far * 0.22;
+          v10 *= 1 + lift * 1.30;
           r = v10 * (1.08 + lamF * 0.24); g = v10 * 0.99; b = v10 * (0.90 - lamF * 0.10 + far * 0.16);
-          var lum = (r + g + b) / 3;
-          var mix = far * 0.55;
-          r = M.lerp(r, lum, mix); g = M.lerp(g, lum, mix); b = M.lerp(b, lum, mix);
+          // ... and toward the twilight band's own hue, which is what the haze
+          // between here and there is actually made of. The target is
+          // NORMALISED to the pixel's own luminance so the hue shift cannot
+          // undo the value lift - lerping straight at a constant is what makes
+          // a "desaturate with distance" term double as a darkening term.
+          var lum = (r + g + b) * 0.3333;
+          var mix = M.saturate(lift * 0.60);
+          r = M.lerp(r, lum * 1.329, mix);
+          g = M.lerp(g, lum * 0.900, mix);
+          b = M.lerp(b, lum * 0.771, mix);
           var up = M.saturate(ny);
           r += up * 0.08; g += up * 0.08; b += up * 0.10;
         } else {
@@ -5284,8 +5924,27 @@
     // The flare therefore reads through the lattice rather than beside it. The
     // heading is set to -7 rather than -12 so it is inside the right edge and
     // the plume, which clears the rack at 44 degrees, is unobstructed.
+    //
+    // RE-SOLVED A THIRD TIME, and only the HEADING moved - 7 degrees west of
+    // north to 14. The round-2 review called this frame "a straight failure...
+    // no readable subject, a dead concrete wall across the bottom-left, a black
+    // lattice on the right". The wall and the shells are fixed as MATERIAL
+    // (formwork, courses, vertical welds, nozzles); the other two are one
+    // number. At -7 the subject T1 sat 24 degrees off axis with the twilight
+    // band 47 degrees off it, so the tank was a dark cylinder against dark sky
+    // - a silhouette needs something bright BEHIND it or it is just a hole -
+    // and the west rack's unlit lattice filled the right third. Seven degrees
+    // left puts T1 at 17 degrees off axis with the band at 40, i.e. the subject
+    // is now in front of the brightest sky in the level, and it swings 7
+    // degrees of black lattice out of frame.
+    //
+    // It does NOT go further, and that is the whole constraint: the flare bears
+    // +40 from this mark, so at -14 it sits at +54 against a 53.5-degree half
+    // window - its glow and its plume still enter the top right corner and the
+    // frame keeps its fire. At -17 the fire leaves the frame entirely and this
+    // becomes the level's only pose with no warm source in it at all.
     gy0 = this.sampleGround(-26.0, -6.0);
-    var hero3 = pose(-26.0, gy0 + 1.76, -6.0, -32.7, 10.5, -60.6);
+    var hero3 = pose(-26.0, gy0 + 1.76, -6.0, -39.3, 10.8, -59.4);
 
     // ---- INTERIOR : the pump house --------------------------------------------
     // Three metres inside the roll shutter, looking west down a 22 m hall. A

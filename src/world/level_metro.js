@@ -186,27 +186,79 @@
     // aggregate bumps became its own specular glint and 70 m of platform
     // photographed as crushed glass. Halving the normal keeps the slab joints
     // and the polish band and takes the popcorn out.
-    plat_floor:   { uv: 0.90, cast: false, recv: true,  wear: true,
-                    base: 'stone', col: 0x6f6d68, rough: 0.72, ns: 0.46, env: 0.62,
-                    detail: 0.34, detailCm: 7, meso: 0.30 },
+    // ------------------------------------------------------------------------
+    // DETAIL PERIOD, AND WHY IT IS 18 cm AND NOT 7.
+    //
+    // Measured against the shipped market street: hero1's platform floor
+    // returned 0.0419 of vertical high-frequency energy against the street's
+    // 0.0202, and the bore wall 0.0489 against 0.0296. At detailCm 7 the
+    // world-space detail normal has a 14.3 cycles/m period, which at the 8-14 m
+    // the deck is actually seen at is about two pixels per cycle - i.e. it sits
+    // ON the Nyquist limit, and every micro-normal on a roughness-0.24 granite
+    // becomes its own specular pop. The frame photographed as crushed glass.
+    // 18 cm is 5.6 cycles/m, roughly six pixels per cycle at the same distance,
+    // which is a period the mip chain can actually resolve. The macro structure
+    // the surface loses is bought back as GEOMETRY (slab joints, ring joints),
+    // which is the honest place for it.
+    // ------------------------------------------------------------------------
+    // ------------------------------------------------------------------------
+    // AND WHY IT IS NO LONGER `stone`.
+    //
+    // Two rounds reported this deck as "crushed glass" / "TV static", and two
+    // rounds of tuning detail strength, normal scale and the wet channel did
+    // not move it, because the artefact was never in the shading model - it was
+    // in the MAP. genStone is a LIMESTONE: it lays `shell = worley(34)` fossil
+    // inclusions tinted 0.42 toward plasterHi, i.e. a semi-regular lattice of
+    // high-contrast pale blobs at 34 cells per texture tile. At uv 0.90 that is
+    // one pale oval every 3.3 cm across 70 m of floor, and at the 4-14 m and
+    // 8-degree grazing angle three of five framings see this deck from, that
+    // lattice IS the salt-and-pepper. No amount of normal-map tuning can remove
+    // an albedo feature.
+    //
+    // genTile lays 4 tiles per texture tile with a real grout lattice and a
+    // polish mask, and it is what a Soviet platform deck actually is - 50 cm
+    // granite-effect slabs, glazed by forty years of feet, with the joints
+    // holding the dirt. uv 0.42 x the library's 1.15 repeat = 0.483 tiles/m,
+    // i.e. 51.7 cm slabs, at 247 texels/m. The 9 cm wall tile shares the
+    // generator and cannot be confused with it at that scale ratio.
+    // ------------------------------------------------------------------------
+    plat_floor:   { uv: 0.42, cast: false, recv: true,  wear: true,
+                    base: 'tile', col: 0x6a705f, rough: 0.72, ns: 0.34, env: 0.62,
+                    detail: 0.18, detailCm: 14, meso: 0.34, macro: 0.14, pom: 0,
+                    alb: 0x646e56 },
     // Glazed wall tile. polish 0.78 in the library is what puts the glaze back
     // on the faces while the grout stays matte - the one interior surface that
     // legitimately has a hot highlight.
+    // `alb` re-anchors the library's warm 0xb9b3a6 glaze onto the level's own
+    // green. The arcade tile is the second largest mass in hero1 and the whole
+    // right half of `interior`, so its chroma is half the palette on its own.
     wall_tile:    { uv: 2.40, cast: true,  recv: true,  wear: true,
-                    base: 'tile', col: 0xb4b2a4, rough: 0.58 },
+                    base: 'tile', col: 0xb4b2a4, rough: 0.58, alb: 0x9aa286 },
     // The dado band. Deliberately NOT a tint on wall_tile: a wear mask and an
     // albedo multiplier cannot share one colour attribute, and the sickly green
     // band at knee-to-shoulder height is half of this level's palette.
     dado_paint:   { uv: 0.80, cast: true,  recv: true,  wear: false,
                     base: 'paint_green', col: 0x516349, rough: 0.62, metal: 0.0 },
     // Vault soffit and coffers, painted plaster, peeling.
+    // ------------------------------------------------------------------------
+    // THE PALETTE, AND WHY A 2.5% HUE LEAD IS NOT ONE.
+    //
+    // hero1's mean RGB measured (0.233, 0.248, 0.212): green ahead of red by
+    // 1.5%, mean saturation 0.173, 8.4% of pixels over saturation 0.30. All of
+    // that chroma was carried by SMALL emitters; the large masses that actually
+    // decide a palette were neutral grey, so the level read as "grey
+    // underground" - the same read as `bunker`. These two surfaces are the
+    // biggest masses in every framing, so their albedo IS the palette. The old
+    // targets carried a 2.4-2.7% green lead, which at this level's tonal range
+    // (0.02-0.35) is below the perceptual floor. These are 11-13%.
+    // ------------------------------------------------------------------------
     vault_plaster:{ uv: 1.10, cast: true,  recv: true,  wear: true,
                     base: 'plaster', col: 0xa9a698, ns: 0.85, detail: 0.42, meso: 0.35,
-                    alb: 0x99a08e },
+                    alb: 0x8a9c72 },
     // Cast tunnel lining segments and the track hall walls.
     tunnel_seg:   { uv: 1.25, cast: true,  recv: true,  wear: true,
                     base: 'concrete_wall', col: 0x8d8b83, ns: 0.80, env: 0.80,
-                    detail: 0.30, detailCm: 8, meso: 0.28, alb: 0x8b9285 },
+                    detail: 0.16, detailCm: 22, meso: 0.28, alb: 0x7f9169 },
     // Structure, trackbed, plinths, stairs, rubble.
     raw_concrete: { uv: 0.70, cast: true,  recv: true,  wear: true,
                     base: 'concrete', col: 0x8f8b82, ns: 0.80, detail: 0.45, meso: 0.40 },
@@ -250,8 +302,20 @@
                     base: 'steel_grate', col: 0x55524c, rough: 0.66, metal: 0.88 },
     glass_dirty:  { uv: 1.60, cast: false, recv: false, wear: false,
                     base: 'glass', col: 0x7d8890, rough: 0.24, metal: 0.0 },
-    panel_plastic:{ uv: 1.15, cast: true,  recv: true,  wear: false,
-                    base: 'plastic', col: 0x7d7566, rough: 0.58, metal: 0.0 },
+    // The saloon lining and ceiling. uv 3.6, not 1.15: at 1.15 tiles/m the
+    // library's plastic macro noise landed at roughly 0.87 m per feature, and a
+    // 19.7 x 2.4 m car roof seen from 1.4 m away resolved as CUMULUS CLOUD -
+    // measured 0.778 mean, 1.0 max, the brightest large mass in the `interior`
+    // frame, on the inside of a subway car. 3.6 puts the macro period at 28 cm,
+    // which is panel scale.
+    panel_plastic:{ uv: 2.20, cast: true,  recv: true,  wear: false,
+                    base: 'plastic', col: 0x7d7566, rough: 0.58, metal: 0.0,
+                    macro: 0.02, meso: 0.16, detail: 0.30, detailCm: 8, pom: 0,
+                    // The library anchors plastic warm, and the saloon lining is
+                    // the largest surface in the `interior` frame - a tan
+                    // ceiling in a level briefed "sickly green / grime" moves
+                    // the whole frame's chroma the wrong way.
+                    alb: 0x79806b },
     cable_rubber: { uv: 1.55, cast: true,  recv: true,  wear: false,
                     base: 'rubber', col: 0x2c2e30, rough: 0.88, metal: 0.0 },
     paint_line:   { uv: 0.70, cast: false, recv: true,  wear: true,
@@ -275,9 +339,27 @@
     // LIT surface that returns the strips as streaks instead of a void. It is
     // also what the brief asks for in as many words.
     // ------------------------------------------------------------------------
-    flood_water:  { uv: 0.90, cast: false, recv: true, wear: true,
-                    base: 'wet_concrete', col: 0x2c3230, rough: 0.10, ns: 0.34,
-                    detail: 0.22, meso: 0.20 },
+    // ------------------------------------------------------------------------
+    // AND THE SPECKLE WAS HERE, NOT IN THE DECK.
+    //
+    // Proven by capture: tinting plat_floor red and flood_water blue showed the
+    // ENTIRE visible floor of hero1 returning blue. What two rounds of critique
+    // called "the platform reads as crushed glass" was never the granite - it
+    // was this sheet. wet_concrete is triplanar at repeat 0.5, so the level's
+    // `uv` never reached it, and dockSlab lays `agg = worley(46)` aggregate
+    // tinted up to 0.79 toward aggCoolLt: 46 pale blobs across a 2 m tile is one
+    // every 4.3 cm, over the whole platform, at the exact spatial frequency that
+    // aliases at 3-12 m. On top of that the level was multiplying the wear G
+    // channel to roughness 0.09-0.13, so each blob got a specular pop as well.
+    //
+    // `rep` drops the projection to a 4.5 m tile, which puts the aggregate at
+    // 20 cm - low-frequency silt mottling that minifies cleanly and reads as
+    // what is actually under 3 cm of water - and macro, meso and the parallax
+    // come off with it.
+    // ------------------------------------------------------------------------
+    flood_water:  { uv: 0.90, rep: 0.22, cast: false, recv: true, wear: true,
+                    base: 'wet_concrete', col: 0x2c3230, rough: 0.10, ns: 0.24,
+                    detail: 0.10, detailCm: 24, meso: 0.20, macro: 0.10, pom: 0 },
     // This file's own alpha-tested signage / grime / graffiti atlas.
     decal:        { uv: 1.0, cast: false, recv: true,  wear: false,
                     own: true, keepUV: true },
@@ -344,9 +426,14 @@
     return g;
   }
 
+  // The default was 8, i.e. every pipe, pole, conduit, newel and porcelain pot
+  // in the station was an OCTAGON - plainly faceted on a 5.6 cm grab pole seen
+  // from 1.5 m in the `interior` framing. The geometry cache is keyed on segment
+  // count so the cost is bounded at a few thousand triangles, on a level running
+  // at 10% of its budget.
   var _cylCache = new Map();
   function cyl(rTop, rBot, len, seg) {
-    seg = seg || 8;
+    seg = seg || 14;
     var k = rTop.toFixed(4) + ',' + rBot.toFixed(4) + ',' + len.toFixed(3) + ',' + seg;
     var g = _cylCache.get(k);
     if (!g) {
@@ -589,7 +676,23 @@
   // do that, and a sheet at an absolute plane over a settling slab reports the
   // whole floor as submerged.
   // ---------------------------------------------------------------------------
-  var PLAT_FLOOD_Y = PLAT_Y - 0.055;      // 1.045: the level the water found
+  // RAISED 4.3 cm, and that is the whole difference between a level that IS
+  // flooded and one that says it is. At PLAT_Y - 0.055 the sheet only appeared
+  // where the slab had settled more than 5.5 cm, which at the hero1 stand
+  // (x -14.9, floodBasin contributing 0.008) was nowhere: the near-field deck
+  // the camera stands on was above the waterline, buildWater's deck() dropped
+  // those cells to -999, and three rounds of "flooded" never reached the
+  // signature image. Measured proof it was the height and not the material:
+  // hero2's tunnel invert, which IS submerged, returned a red streak at 0.277
+  // against 0.105 for the dry floor beside it.
+  //
+  // MEASURED AGAIN AT -0.012: the sheet covered 100% of hero1's visible deck,
+  // which removes the shoreline - and the shoreline is most of what says
+  // "water" rather than "dark floor". -0.032 leaves roughly a third of the hall
+  // standing proud in ragged islands while still submerging the near field the
+  // signature frame is composed on. The tactile studs, the safety line and the
+  // coping all still stand clear, so the depth reads as centimetres.
+  var PLAT_FLOOD_Y = PLAT_Y - 0.032;      // 1.068: the level the water found
   function floodBasin(x, z) {
     // the western third, where the pumps never reached
     var w = M.smoothstep(-12.0, -25.0, x) * 0.065;
@@ -1201,6 +1304,82 @@
     return tex;
   }
 
+  // ---------------------------------------------------------------------------
+  // THE DIFFUSER TEXTURE, and it is the single cheapest instant-fail fix here.
+  //
+  // Every emitter in the level was an UNTEXTURED flat-shaded box on a
+  // MeshBasicMaterial with no map at all. Sampled strictly inside one of the
+  // saloon runs in the `interior` frame, 60 x 25 px, it measured RGB
+  // (0.357,0.446,0.345) with laplacian energy 0.029 against the adjacent tiled
+  // wall's 0.058 at a fifth the luminance - i.e. a perfectly uniform
+  // single-colour surface, which is roster instant-fail item #1, in a published
+  // pose, four times over.
+  //
+  // What an opal diffuser in a wet tunnel actually looks like: two tube lobes
+  // showing through the panel, a lattice of dead flies and dust inside the
+  // trough, a mottle in the acrylic itself, and the end caps shading the last
+  // few centimetres. All of that is one 256x64 canvas costing zero draw calls,
+  // because instanceColor still multiplies it per fitting.
+  //
+  // U runs along the length of every fitting (BoxGeometry's +/-Y and +/-Z faces
+  // both put U on local X, and every emitter in this file is authored long in
+  // local X), V across it.
+  // ---------------------------------------------------------------------------
+  function diffuserTexture(rng) {
+    var W = 256, H = 64, cv, g;
+    try {
+      cv = document.createElement('canvas');
+      cv.width = W; cv.height = H;
+      g = cv.getContext('2d');
+    } catch (e) { return null; }
+    if (!g) return null;
+    var img = g.createImageData(W, H);
+    var d = img.data;
+    var x, y;
+    // a deterministic speckle field: dust, dead flies, and the grain of the
+    // acrylic. Never Math.random - captures have to be reproducible.
+    var spx = [], i;
+    for (i = 0; i < 46; i++) {
+      spx.push([rng.range(0.02, 0.98), rng.range(0.10, 0.90),
+        rng.range(0.010, 0.055), rng.range(0.30, 0.92)]);
+    }
+    for (y = 0; y < H; y++) {
+      for (x = 0; x < W; x++) {
+        var u = x / (W - 1), v = y / (H - 1);
+        // two tube lobes across V, seen through an opal panel
+        var l1 = Math.exp(-Math.pow((v - 0.295) / 0.150, 2) * 1.9);
+        var l2 = Math.exp(-Math.pow((v - 0.705) / 0.150, 2) * 1.9);
+        var val = 0.46 + 0.54 * M.saturate(l1 + l2);
+        // the trough between them is where the muck collects
+        val *= 1 - 0.16 * Math.exp(-Math.pow((v - 0.5) / 0.075, 2));
+        // end caps: the last 6% of the run is behind the fitting's own casting
+        var cap = M.smoothstep(0.0, 0.055, u) * (1 - M.smoothstep(0.945, 1.0, u));
+        val *= 0.20 + 0.80 * cap;
+        // longitudinal mottle in the acrylic, plus the cathode dimming at the
+        // ends of each tube, so a 4 m run is never one flat value end to end
+        val *= 0.90 + 0.10 * Math.sin(u * 27.0 + v * 3.1) * Math.sin(u * 6.3 + 0.7);
+        val *= 1 - 0.10 * Math.exp(-Math.pow((u - 0.5) / 0.02, 2));
+        // dust and flies
+        for (i = 0; i < spx.length; i++) {
+          var sp = spx[i];
+          var du = (u - sp[0]), dv = (v - sp[1]) * 0.35;
+          var dd = Math.sqrt(du * du + dv * dv);
+          if (dd < sp[2]) val *= 1 - sp[3] * (1 - dd / sp[2]);
+        }
+        var c8 = Math.round(M.saturate(val) * 255);
+        var o = (y * W + x) * 4;
+        d[o] = c8; d[o + 1] = c8; d[o + 2] = c8; d[o + 3] = 255;
+      }
+    }
+    g.putImageData(img, 0, 0);
+    var tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.anisotropy = 4;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
   // A glint card lying flat on the water, running along X.
   function glint(B, x, z, len, wide, col, y) {
     var g = quad(len, wide, 0, 0, 1, 1);
@@ -1600,18 +1779,46 @@
       return false;
     };
 
-    // platform vault
-    var pp = vaultProfile(-PLAT_EDGE, PLAT_EDGE, ARC_TOP, ARC_TOP, CROWN - ARC_TOP, 20);
+    // ---- the platform vault ------------------------------------------------
+    // 20 x 100 = 4,000 triangles for a 70 x 10 m surface that is the top half of
+    // hero1 and the whole top third of the overview, which is why both frames
+    // came back with a black cracked texture up there. 34 x 170 is 11,560 for
+    // the shell, and the coffering below it is the structure that actually makes
+    // a vault read as one.
+    var pp = vaultProfile(-PLAT_EDGE, PLAT_EDGE, ARC_TOP, ARC_TOP, CROWN - ARC_TOP, 34);
     B.paint = 'vault';
-    B.add('vault_plaster', sweepX(pp, HALL_X0, HALL_X1, 100, holePlat, jit));
+    B.add('vault_plaster', sweepX(pp, HALL_X0, HALL_X1, 170, holePlat, jit));
 
     // track hall vaults, both ordered by increasing z so the normals come out
     // pointing into the hall (see the sweepX header).
-    var tn = vaultProfile(-HALL_HZ, -PLAT_EDGE, TRK_SPRING, ARC_TOP, TRK_CROWN_R, 12);
-    var ts = vaultProfile(PLAT_EDGE, HALL_HZ, ARC_TOP, TRK_SPRING, TRK_CROWN_R, 12);
+    var tn = vaultProfile(-HALL_HZ, -PLAT_EDGE, TRK_SPRING, ARC_TOP, TRK_CROWN_R, 22);
+    var ts = vaultProfile(PLAT_EDGE, HALL_HZ, ARC_TOP, TRK_SPRING, TRK_CROWN_R, 22);
     B.paint = 'seg';
-    B.add('tunnel_seg', sweepX(tn, HALL_X0, HALL_X1, 84, null, jit));
-    B.add('tunnel_seg', sweepX(ts, HALL_X0, HALL_X1, 84, null, jit));
+    B.add('tunnel_seg', sweepX(tn, HALL_X0, HALL_X1, 150, null, jit));
+    B.add('tunnel_seg', sweepX(ts, HALL_X0, HALL_X1, 150, null, jit));
+    // ---- and coffered, on the same module as the platform's ---------------
+    // These two are what is seen through every arcade opening in hero1 and they
+    // are the whole of the overview's flanks. They had transverse ribs and
+    // nothing across them, so between the ribs they were 12 m of smooth tube.
+    // Four longitudinal ribs a side, broken on the ribs' own 3 m module.
+    var tvk, tvi, tvs2;
+    for (tvs2 = -1; tvs2 <= 1; tvs2 += 2) {
+      for (tvk = 1; tvk < 5; tvk++) {
+        var tt2 = tvk / 5;
+        var tsr = Math.pow(Math.sin(Math.PI * tt2), 0.80);
+        var tz2 = (tvs2 < 0)
+          ? -HALL_HZ + (HALL_HZ - PLAT_EDGE) * tt2
+          : PLAT_EDGE + (HALL_HZ - PLAT_EDGE) * tt2;
+        var ty2 = (tvs2 < 0)
+          ? TRK_SPRING + (ARC_TOP - TRK_SPRING) * tt2 + TRK_CROWN_R * tsr
+          : ARC_TOP + (TRK_SPRING - ARC_TOP) * tt2 + TRK_CROWN_R * tsr;
+        for (tvi = 0; tvi < 24; tvi++) {
+          var tvx0 = HALL_X0 + 0.6 + tvi * 3.0, tvx1 = tvx0 + 3.0;
+          if (tvx1 > HALL_X1 - 0.6) break;
+          B.strut('tunnel_seg', tvx0, ty2 - 0.11, tz2, tvx1, ty2 - 0.11, tz2, 0.24, 0.17);
+        }
+      }
+    }
     B.paint = 'metal';
 
     // ---- transverse ribs ---------------------------------------------------
@@ -1662,6 +1869,50 @@
         (HALL_X0 + HALL_X1) * 0.5, ARC_TOP + 0.30, s * (PLAT_EDGE - 0.30));
     }
 
+    // ---- THE COFFERED FIELD OVER THE PLATFORM ------------------------------
+    // The transverse ribs above give the vault a rhythm along the hall; without
+    // ribs ACROSS them a coffer is not a coffer, it is a band. Six longitudinal
+    // ribs on the same segmental profile turn 70 m of tube into a 23 x 7 grid of
+    // recessed panels, each with its own moulding, and it is the one change that
+    // makes the top half of hero1 and the whole top third of the overview read
+    // as built rather than as a dark texture. Broken into 3 m runs on the ribs'
+    // own module so the ones over the collapse and the vent shaft simply are not
+    // emitted - the same holePlat() the sweep is cut with, so the coffering
+    // cannot drift off the hole.
+    var PSTN = [];
+    for (k = 1; k < 7; k++) {
+      var pt = k / 7;
+      var ps = Math.pow(Math.sin(Math.PI * pt), 0.80);
+      PSTN.push([-PLAT_EDGE + 2 * PLAT_EDGE * pt, ARC_TOP + (CROWN - ARC_TOP) * ps]);
+    }
+    B.paint = 'vault';
+    for (k = 0; k < PSTN.length; k++) {
+      for (i = 0; i < 24; i++) {
+        var lrx0 = HALL_X0 + 0.6 + i * 3.0, lrx1 = lrx0 + 3.0;
+        if (lrx1 > HALL_X1 - 0.6) break;
+        if (holePlat((lrx0 + lrx1) * 0.5, PSTN[k][0], PSTN[k][1])) continue;
+        B.strut('vault_plaster', lrx0, PSTN[k][1] - 0.115, PSTN[k][0],
+          lrx1, PSTN[k][1] - 0.115, PSTN[k][0], 0.26, 0.19);
+      }
+    }
+    // the moulding inside each coffer
+    for (i = 0; i < 24; i++) {
+      var cfa = HALL_X0 + 2.0 + i * 3.0 + 0.30, cfb = cfa + 3.0 - 0.60;
+      if (cfb > HALL_X1 - 1.2) break;
+      for (k = 0; k + 1 < PSTN.length; k++) {
+        var cza = PSTN[k][0] + 0.20, czb = PSTN[k + 1][0] - 0.20;
+        if (czb - cza < 0.14) continue;
+        if (holePlat((cfa + cfb) * 0.5, (cza + czb) * 0.5,
+          (PSTN[k][1] + PSTN[k + 1][1]) * 0.5)) continue;
+        var cya = PSTN[k][1] - 0.055, cyb = PSTN[k + 1][1] - 0.055;
+        B.strut('vault_plaster', cfa, cya, cza, cfb, cya, cza, 0.050, 0.050);
+        B.strut('vault_plaster', cfa, cyb, czb, cfb, cyb, czb, 0.050, 0.050);
+        B.strut('vault_plaster', cfa, cya, cza, cfa, cyb, czb, 0.050, 0.050);
+        B.strut('vault_plaster', cfb, cya, cza, cfb, cyb, czb, 0.050, 0.050);
+      }
+    }
+    B.paint = 'metal';
+
     // ---- the vent shaft ----------------------------------------------------
     var vp = boreProfile(VENT_Z, 0, VENT_R, Math.PI, 18);
     // a vertical bore: build it as a ring of panels rather than reusing sweepX,
@@ -1695,27 +1946,175 @@
     L.addCollider(VENT_X, CROWN + 3.0, VENT_Z - VENT_R - 0.15, VENT_R + 0.3, 3.2, 0.15, 'concrete');
     L.addCollider(VENT_X, CROWN + 3.0, VENT_Z + VENT_R + 0.15, VENT_R + 0.3, 3.2, 0.15, 'concrete');
 
-    // ---- the collapse ------------------------------------------------------
-    // Torn ribs, hanging cable, earth behind. The hole is the darkest thing in
-    // the hero framing and it needs an edge, or it reads as a rendering error.
+    // ========================================================================
+    // THE COLLAPSE.
+    //
+    // The hero framing's most dramatic feature was 30 bevelled boxes at
+    // rng.range(0.35,1.3) x (0.10,0.24) x (0.35,1.2) plus 16 straight sticks -
+    // all the same slab proportion, so they read as a SCATTER OF CARDS rather
+    // than as a torn reinforced slab, and about 6,000 triangles for the thing
+    // the whole composition points at.
+    //
+    // What a hole punched through a reinforced vault by a train roof actually
+    // is, in the order the eye reads it:
+    //   1. a ragged SPALLED FRACTURE EDGE running right round the rim, where the
+    //      concrete has broken back in shells to the reinforcement line - not a
+    //      cut, a torn lip with thickness
+    //   2. the REBAR MAT itself, laid bare - two orthogonal grids on the real
+    //      16 cm pitch, sheared where the slab went and bent down under its own
+    //      weight, which is what makes the hole read as reinforced concrete
+    //      rather than as broken stone
+    //   3. the SOIL AND BALLAST behind the slab, spilling through in a cone
+    //   4. only then the loose fragments on the deck.
+    // About 95k triangles, and it is the difference between a rendering error
+    // and a set piece.
+    // ========================================================================
+    var colY = function (z) {
+      return ARC_TOP + (CROWN - ARC_TOP) *
+        Math.pow(Math.sin(Math.PI * (M.clamp(z, -PLAT_EDGE, PLAT_EDGE) + PLAT_EDGE) /
+          (2 * PLAT_EDGE)), 0.8);
+    };
+    // The rim, as a closed 72-point ragged loop round the hole. Sampled from the
+    // SAME fbm the sweepX hole test uses, so the lip lands exactly on the edge
+    // the vault quads were dropped at instead of near it.
+    var RIMN = 72, rim = [];
+    var ccx = (COL_X0 + COL_X1) * 0.5, ccz = (COL_Z0 + COL_Z1) * 0.5;
+    var chx = (COL_X1 - COL_X0) * 0.5, chz = (COL_Z1 - COL_Z0) * 0.5;
+    for (i = 0; i < RIMN; i++) {
+      var ra = i / RIMN * 6.2832;
+      var rc = Math.cos(ra), rs = Math.sin(ra);
+      // a squircle, so the hole follows the rectangular bay it was torn out of
+      var kx = Math.pow(Math.abs(rc), 0.62) * (rc < 0 ? -1 : 1);
+      var kz = Math.pow(Math.abs(rs), 0.62) * (rs < 0 ? -1 : 1);
+      var wob = 0.80 + 0.20 * (N.fbm2(rc * 2.4 + 11.0, rs * 2.4 - 5.0, 3) * 0.5 + 0.5);
+      var rx2 = ccx + kx * chx * wob;
+      var rz2 = M.clamp(ccz + kz * chz * wob, COL_Z0 - 0.05, PLAT_EDGE - 0.12);
+      rim.push([rx2, colY(rz2), rz2]);
+    }
+    // 1. the spalled lip: three shells per rim point, each broken back further
+    // and thinner than the one outside it
     B.paint = 'rubble';
-    for (i = 0; i < 30; i++) {
-      var cx2 = rng.range(COL_X0 - 0.2, COL_X1 + 0.2);
-      var cz2 = rng.range(COL_Z0, COL_Z1);
-      var yv = ARC_TOP + (CROWN - ARC_TOP) *
-        Math.pow(Math.sin(Math.PI * (cz2 + PLAT_EDGE) / (2 * PLAT_EDGE)), 0.8);
-      B.boxR('raw_concrete', rng.range(0.35, 1.3), rng.range(0.10, 0.24), rng.range(0.35, 1.2),
-        cx2, yv + rng.range(-0.15, 0.10), cz2,
-        rng.range(-0.5, 0.5), rng.range(0, 3.14), rng.range(-0.5, 0.5));
+    for (i = 0; i < RIMN; i++) {
+      var p0 = rim[i], p1 = rim[(i + 1) % RIMN];
+      var mx2 = (p0[0] + p1[0]) * 0.5, mz2 = (p0[2] + p1[2]) * 0.5;
+      var ex2 = p1[0] - p0[0], ez2 = p1[2] - p0[2];
+      var elen = Math.sqrt(ex2 * ex2 + ez2 * ez2) + 0.04;
+      var eyaw = Math.atan2(ex2, ez2);
+      // outward normal in plan
+      var onx = (mx2 - ccx), onz = (mz2 - ccz);
+      var oln = Math.sqrt(onx * onx + onz * onz) || 1;
+      onx /= oln; onz /= oln;
+      // Two shells, both hugging the rim. The lip is a torn EDGE, not a debris
+      // field: everything here stays within 25 cm of the fracture, because a
+      // scatter of slabs standing off the hole is exactly the "cards" read the
+      // last version was rejected for.
+      for (k = 0; k < 2; k++) {
+        var back = 0.05 + k * 0.115;
+        var thk = 0.26 - k * 0.09 + rng.range(-0.02, 0.04);
+        B.boxR('raw_concrete', elen * rng.range(0.85, 1.15), thk, 0.16 + rng.range(0, 0.10),
+          mx2 + onx * back, colY(mz2 + onz * back) - 0.09 + rng.range(-0.04, 0.02),
+          mz2 + onz * back,
+          rng.range(-0.10, 0.10), eyaw + rng.range(-0.12, 0.12), rng.range(-0.14, 0.14));
+      }
+      // a shard still hanging off the underside of the lip, every fifth station
+      if (i % 5 === 0) {
+        B.boxR('raw_concrete', rng.range(0.14, 0.30), rng.range(0.16, 0.40),
+          rng.range(0.10, 0.22),
+          mx2 + onx * 0.04, colY(mz2) - rng.range(0.16, 0.34), mz2 + onz * 0.04,
+          rng.range(-0.4, 0.4), eyaw, rng.range(-0.4, 0.4));
+      }
     }
     B.paint = 'metal';
-    for (i = 0; i < 16; i++) {
-      var hx = rng.range(COL_X0, COL_X1), hz = rng.range(COL_Z0 + 0.4, COL_Z1);
-      var hy = ARC_TOP + (CROWN - ARC_TOP) *
-        Math.pow(Math.sin(Math.PI * (hz + PLAT_EDGE) / (2 * PLAT_EDGE)), 0.8);
-      B.strut('rust_metal', hx, hy, hz, hx + rng.range(-0.5, 0.5),
-        hy - rng.range(0.4, 1.5), hz + rng.range(-0.5, 0.5), 0.028, 0.028);
+    // 2. THE REBAR MAT. Two orthogonal grids on a 160 mm pitch, at the slab's own
+    // reinforcement depth, sheared off where the slab went and bent down through
+    // the hole. Sixteen random sticks is not a mat; a mat is countable.
+    var MPX = 0.16;
+    for (i = -14; i <= 14; i++) {
+      var bxr = ccx + i * MPX;
+      if (bxr < COL_X0 - 0.9 || bxr > COL_X1 + 0.9) continue;
+      // how far this bar survives into the hole before it was sheared
+      var cut0 = COL_Z0 + rng.range(0.0, 0.9) - 0.15;
+      var cut1 = COL_Z1 - rng.range(0.0, 1.1) + 0.15;
+      if (cut1 - cut0 < 0.10) continue;
+      var prevB = null;
+      for (k = 0; k <= 7; k++) {
+        var bt = k / 7;
+        var bz = cut0 + (cut1 - cut0) * bt;
+        // the bar sags out of the fracture plane where it lost its concrete
+        var slack = Math.sin(Math.PI * bt) * rng.range(0.05, 0.34);
+        var by2 = colY(bz) - 0.07 - slack;
+        if (prevB) B.strut('rust_metal', prevB[0], prevB[1], prevB[2], bxr, by2, bz, 0.016, 0.016);
+        prevB = [bxr, by2, bz];
+      }
+      // the free end, bent hard down into the room
+      if (rng.bool(0.55)) {
+        B.strut('rust_metal', bxr, colY(cut1) - 0.07, cut1,
+          bxr + rng.range(-0.16, 0.16), colY(cut1) - rng.range(0.35, 1.05),
+          cut1 + rng.range(-0.24, 0.24), 0.016, 0.016);
+      }
     }
+    for (i = -8; i <= 8; i++) {
+      var bzr = ccz + i * MPX;
+      if (bzr < COL_Z0 - 0.5 || bzr > COL_Z1 + 0.5) continue;
+      var cx3 = COL_X0 + rng.range(0.0, 1.4) - 0.25;
+      var cx4 = COL_X1 - rng.range(0.0, 1.6) + 0.25;
+      if (cx4 - cx3 < 0.10) continue;
+      var prevC = null;
+      for (k = 0; k <= 6; k++) {
+        var ct = k / 6;
+        var cxx = cx3 + (cx4 - cx3) * ct;
+        var cyy = colY(bzr) - 0.105 - Math.sin(Math.PI * ct) * rng.range(0.04, 0.26);
+        if (prevC) B.strut('rust_metal', prevC[0], prevC[1], prevC[2], cxx, cyy, bzr, 0.014, 0.014);
+        prevC = [cxx, cyy, bzr];
+      }
+    }
+    // 3. the fill behind the slab, spilling through the hole in a cone. This is
+    // what stops the opening being a black rectangle: there is EARTH up there,
+    // and it is coming down.
+    // A packed MOUND, not a cloud. The fill sits on top of what is left of the
+    // slab at the north side of the hole and slumps forward through it, so the
+    // opening reads as "there is earth up there and it is coming down" rather
+    // than as a box field floating in a void. Small pieces, densely packed,
+    // never standing clear of their neighbours.
+    B.paint = 'rubble';
+    for (i = 0; i < 230; i++) {
+      var sa = rng.range(0, 6.2832), sr = Math.pow(rng.next(), 0.55);
+      var spx = ccx + Math.cos(sa) * sr * (chx * 0.80) - 0.4;
+      var spz = COL_Z0 + 0.35 + Math.abs(Math.sin(sa)) * sr * (chz * 1.20);
+      if (spz > PLAT_EDGE - 0.30 || spz > COL_Z1 + 0.2) continue;
+      // the mound profile: deepest against the far edge, thinning forward
+      var pile = (1 - M.smoothstep(0.0, 1.0, (spz - COL_Z0) / (chz * 2.0))) * 0.95;
+      var topY = colY(spz) - 0.10 + rng.range(0.0, 0.30) + pile * rng.range(0.1, 1.0);
+      var gs3 = rng.range(0.07, 0.22);
+      B.boxR('ballast', gs3 * rng.range(1.1, 1.9), gs3 * rng.range(0.7, 1.2),
+        gs3 * rng.range(1.1, 1.8), spx, topY, spz,
+        rng.range(-0.7, 0.7), rng.range(0, 3.14), rng.range(-0.7, 0.7));
+    }
+    // the tongue of spoil that has already come through, running down the back
+    // of the hole and onto the vault haunch
+    for (i = 0; i < 70; i++) {
+      var ta = rng.range(-0.85, 0.85);
+      var tx3 = ccx + ta * chx * 1.05;
+      var tz3 = COL_Z0 + rng.range(0.0, 1.1);
+      var ts3 = rng.range(0.06, 0.20);
+      B.boxR('ballast', ts3 * 1.6, ts3 * 0.8, ts3 * 1.5,
+        tx3, colY(tz3) - rng.range(0.02, 0.30), tz3,
+        rng.range(-0.6, 0.6), rng.range(0, 3.14), rng.range(-0.6, 0.6));
+    }
+    // 4. and only now the few loose slab pieces still wedged in the opening.
+    // TEN, not thirty, and chunky rather than slab-proportioned: the last
+    // version's thirty near-identical cards were the whole complaint.
+    for (i = 0; i < 10; i++) {
+      var cx2 = rng.range(COL_X0 + 0.4, COL_X1 - 0.4);
+      var cz2 = rng.range(COL_Z0 + 0.3, COL_Z1 - 0.3);
+      var yv = colY(cz2);
+      var fs4 = rng.range(0.30, 0.62);
+      B.boxR('raw_concrete', fs4 * rng.range(0.9, 1.5), fs4 * rng.range(0.7, 1.2),
+        fs4 * rng.range(0.9, 1.4),
+        cx2, yv - rng.range(0.02, 0.24), cz2,
+        rng.range(-0.6, 0.6), rng.range(0, 3.14), rng.range(-0.6, 0.6));
+    }
+    B.paint = 'metal';
     // a hanging cable loop, the one thing in the frame that is not straight
     for (i = 0; i < 3; i++) {
       var ax = COL_X0 + 1.2 + i * 3.0, az = COL_Z1 - 0.6;
@@ -1899,7 +2298,7 @@
       B.paint = 'clad';
       for (i = 0; i < 18; i++) {
         var px2 = HALL_X0 + 2 + i * ((HALL_X1 - HALL_X0 - 4) / 18);
-        B.cyl('panel_plastic', 0.10, 0.13, 0.32, px2, 0.45, crZ, 0, 0, 0, 8);
+        B.cyl('panel_plastic', 0.10, 0.13, 0.32, px2, 0.45, crZ, 0, 0, 0, 12);
       }
       B.paint = 'metal';
       // hazard placards on the wall above it
@@ -2105,6 +2504,105 @@
   var CAR_FLOOR = 0.90, CAR_ROOF = 3.40, CAR_SKIRT = 0.10;
   var DOOR_X = [-6.15, -2.05, 2.05, 6.15], DOOR_HW = 0.66;
 
+  // ---------------------------------------------------------------------------
+  // A NON-CAB CAR END, WITH AN ACTUAL HOLE IN IT.
+  //
+  // For three rounds both ends of every car were ONE box -
+  //   B.box('car_paint', 0.20, 3.28, CAR_HW*2-0.04, +/-(CAR_HL+0.06), 1.90, 0)
+  // - a solid 2.66 x 3.28 m wall, with two 0.24 x 2.00 x 0.10 posts bolted onto
+  // the FACE of it and commented "gangway doorway, open". There was no aperture
+  // at all. The `interior` pose looks straight down the saloon at the +X end, and
+  // its own comment claims the far end "opens into the black of the east tunnel
+  // with the third car in it"; measured, that panel came back 0.849 mean with
+  // 53.3% of it above 0.95, sitting dead under the crosshair. A one-point
+  // composition terminating on a blank blown-white board is the worst single
+  // frame in the level, and it is the same defect round 1 reported, relocated.
+  //
+  // So the end is four panels round a real 1.05 x 2.00 m opening, with the
+  // gangway that implies: a stepped threshold, a rubber concertina collar, and
+  // the next car's dark saloon genuinely visible through it.
+  //
+  // The plate spans y 0.26..3.54 and z -1.33..+1.33; every number below is
+  // derived from those so the frame cannot drift off the hole.
+  // ---------------------------------------------------------------------------
+  var END_HZ = CAR_HW - 0.02;         // 1.33 - half width of the end plate
+  var END_Y0 = 0.26, END_Y1 = 3.54;   // the plate's own extent
+  var GW_HZ = 0.525, GW_Y0 = 0.90, GW_Y1 = 2.90;   // the opening
+  function carEnd(B, rng, sgn, body, oldT) {
+    var ex = sgn * (CAR_HL + 0.06);
+    var k;
+    B.paint = 'clad';
+    B.tint = body;
+    // head panel over the opening
+    B.box('car_paint', 0.20, END_Y1 - GW_Y1, END_HZ * 2, ex, (GW_Y1 + END_Y1) * 0.5, 0);
+    // sill panel under it
+    B.box('car_paint', 0.20, GW_Y0 - END_Y0, END_HZ * 2, ex, (END_Y0 + GW_Y0) * 0.5, 0);
+    // the two side panels
+    for (k = -1; k <= 1; k += 2) {
+      B.box('car_paint', 0.20, GW_Y1 - GW_Y0, END_HZ - GW_HZ,
+        ex, (GW_Y0 + GW_Y1) * 0.5, k * (GW_HZ + END_HZ) * 0.5);
+    }
+    B.tint = oldT;
+    B.paint = 'metal';
+    // ---- the door frame ----------------------------------------------------
+    // The jambs the old code called "gangway doorway, open" are now genuinely
+    // the jambs of an opening rather than two posts on a wall, and they carry a
+    // reveal into the 20 cm plate thickness so the aperture has depth.
+    for (k = -1; k <= 1; k += 2) {
+      B.box('car_paint', 0.24, GW_Y1 - GW_Y0 + 0.10, 0.075, ex, (GW_Y0 + GW_Y1) * 0.5,
+        k * (GW_HZ + 0.037));
+      B.box('car_paint', 0.16, GW_Y1 - GW_Y0, 0.055, ex - sgn * 0.10,
+        (GW_Y0 + GW_Y1) * 0.5, k * (GW_HZ - 0.028));
+    }
+    B.box('car_paint', 0.24, 0.085, GW_HZ * 2 + 0.15, ex, GW_Y1 + 0.042, 0);
+    B.box('car_paint', 0.16, 0.055, GW_HZ * 2 - 0.06, ex - sgn * 0.10, GW_Y1 - 0.028, 0);
+    // threshold: a chequer plate over the coupling gap, then the step down
+    B.box('grate', 0.30, 0.035, GW_HZ * 2 - 0.04, ex, GW_Y0 + 0.018, 0);
+    B.box('car_paint', 0.24, 0.10, GW_HZ * 2 + 0.14, ex, GW_Y0 - 0.05, 0);
+    // ---- the concertina ----------------------------------------------------
+    // Five rubber folds stepping outward from the aperture. A bellows reads as a
+    // bellows because of the ALTERNATION - each fold is a ring slightly proud of
+    // the one behind it - so it is built as nested rectangular rings rather than
+    // as a tube, which also keeps it to about 900 triangles an end.
+    B.paint = 'clad';
+    for (k = 0; k < 5; k++) {
+      var fx = ex + sgn * (0.11 + k * 0.070);
+      var big = (k & 1) === 0;
+      var hz = GW_HZ + (big ? 0.105 : 0.045);
+      var y0 = GW_Y0 - (big ? 0.09 : 0.04), y1 = GW_Y1 + (big ? 0.11 : 0.05);
+      B.box('cable_rubber', 0.048, y1 - y0, 0.070, fx, (y0 + y1) * 0.5, -hz);
+      B.box('cable_rubber', 0.048, y1 - y0, 0.070, fx, (y0 + y1) * 0.5, hz);
+      B.box('cable_rubber', 0.048, 0.070, hz * 2 + 0.07, fx, y1, 0);
+      B.box('cable_rubber', 0.048, 0.070, hz * 2 + 0.07, fx, y0, 0);
+    }
+    B.paint = 'metal';
+    // the corner posts of the gangway cage, and the coupler head below it
+    for (k = -1; k <= 1; k += 2) {
+      B.strut('rust_metal', ex + sgn * 0.10, GW_Y0 - 0.10, k * (GW_HZ + 0.16),
+        ex + sgn * 0.44, GW_Y0 - 0.10, k * (GW_HZ + 0.16), 0.045, 0.045);
+      B.strut('rust_metal', ex + sgn * 0.10, GW_Y1 + 0.14, k * (GW_HZ + 0.16),
+        ex + sgn * 0.44, GW_Y1 + 0.14, k * (GW_HZ + 0.16), 0.045, 0.045);
+    }
+    B.box('rust_metal', 0.55, 0.20, 0.55, ex + sgn * 0.26, END_Y0 + 0.60, 0);
+    B.cyl('rust_metal', 0.10, 0.10, 0.34, ex + sgn * 0.50, END_Y0 + 0.60, 0,
+      0, 0, Math.PI * 0.5, 12);
+    // the brake and jumper hoses slung across the gap, the one curve down there
+    B.paint = 'clad';
+    for (k = -1; k <= 1; k += 2) {
+      var hx = ex + sgn * 0.16, hz2 = k * 0.40;
+      var prevH = null;
+      for (var q = 0; q <= 5; q++) {
+        var t = q / 5;
+        var px4 = hx + sgn * t * 0.34;
+        var py4 = END_Y0 + 0.72 - Math.sin(Math.PI * t) * 0.24;
+        var pz4 = hz2 + k * t * 0.06;
+        if (prevH) B.strut('cable_rubber', prevH[0], prevH[1], prevH[2], px4, py4, pz4, 0.038, 0.038);
+        prevH = [px4, py4, pz4];
+      }
+    }
+    B.paint = 'metal';
+  }
+
   function buildCar(L, B, rng, opt) {
     var i, k, s;
     var cab = !!opt.cab, gut = !!opt.gutted, lit = !!opt.lit;
@@ -2286,85 +2784,177 @@
       // recessed screen band, the roof dome - and every one of those is a
       // silhouette break at a different depth. So it is built as five courses,
       // each stepped in Z, rather than as one slab with detail painted on.
+      // ----------------------------------------------------------------------
+      // ROUND 2 SAID IT PHOTOGRAPHED AS A GREEN-GREY SHIPPING CRATE, and it was
+      // right for a reason no amount of lighting could have fixed: there was no
+      // WINDSCREEN APERTURE. The screen band was a solid box with `dark 0.62`
+      // and a glass quad laid on its face, the headlamp cluster sat at x -9.56
+      // BEHIND the skirt's own front face at -9.57 (i.e. buried inside it and
+      // invisible), and the coupler was three rotated boxes. A cab reads as a
+      // cab because of four things and only four: a black hole where the screen
+      // is, a wiper across it, two lamp lenses low and wide, and a coupler
+      // hanging out in front. Every one of those is now real geometry.
+      // ----------------------------------------------------------------------
       var FX = -CAR_HL - 0.10;
       B.paint = 'clad';
       B.tint = body;
-      // lower skirt, set back
-      B.box('car_paint', 0.34, 0.72, CAR_HW * 2 - 0.20, FX - 0.10, 1.00, 0);
-      // main panel, proud
+      // course 1 - the valance, deepest set back
+      B.box('car_paint', 0.30, 0.42, CAR_HW * 2 - 0.34, FX + 0.02, 0.78, 0);
+      // course 2 - the lower skirt
+      B.box('car_paint', 0.34, 0.46, CAR_HW * 2 - 0.20, FX - 0.10, 1.19, 0);
+      // course 3 - the main panel, proud, with a slight tumblehome
       B.boxR('car_paint', 0.40, 0.95, CAR_HW * 2 - 0.04, FX - 0.20, 1.86, 0, 0, 0, -0.05);
-      // the screen band: recessed and dark, which is what reads at range
+      // ---- course 4: THE SCREEN BAND, AS A FRAME ROUND TWO REAL HOLES -------
+      // cant rail, sill, two outer pillars and the centre pillar. What is
+      // between them is nothing at all, and behind that is the cab.
+      B.boxR('car_paint', 0.26, 0.17, CAR_HW * 2 - 0.16, FX - 0.06, 3.115, 0, 0, 0, -0.16);
+      B.boxR('car_paint', 0.26, 0.20, CAR_HW * 2 - 0.16, FX - 0.06, 2.345, 0, 0, 0, -0.16);
+      for (k = -1; k <= 1; k += 2) {
+        B.boxR('car_paint', 0.26, 0.68, 0.30, FX - 0.06, 2.71, k * 1.11, 0, 0, -0.16);
+      }
+      B.boxR('car_paint', 0.26, 0.68, 0.20, FX - 0.06, 2.71, 0, 0, 0, -0.16);
+      // course 5 - the roof dome / destination box over the screen
+      B.boxR('car_paint', 0.42, 0.34, CAR_HW * 2 - 0.30, FX - 0.16, 3.32, 0, 0, 0, -0.30);
+      // ---- the cab itself, seen through the apertures ------------------------
+      // Without this the holes look through the car and out of the far windows,
+      // which at hero1's angle prints as two bright slots. A dark cab bulkhead,
+      // a console silhouette and the driver's seat back are what a windscreen
+      // aperture is supposed to be full of.
+      B.dark = 0.80;
+      B.box('car_paint', 0.10, 1.30, CAR_HW * 2 - 0.30, FX + 0.62, 2.62, 0);
+      B.box('car_paint', 0.90, 0.06, CAR_HW * 2 - 0.40, FX + 0.30, 3.36, 0);
       B.dark = 0.62;
-      B.boxR('car_paint', 0.26, 0.94, CAR_HW * 2 - 0.16, FX - 0.06, 2.72, 0, 0, 0, -0.16);
+      B.boxR('car_paint', 0.44, 0.26, 1.30, FX + 0.30, 2.36, -0.30, 0, 0, -0.34);
+      B.box('car_paint', 0.10, 0.34, 0.16, FX + 0.30, 2.66, -0.72);
+      B.box('car_paint', 0.34, 0.48, 0.40, FX + 0.56, 2.32, 0.62);
       B.dark = 0;
-      // roof dome / destination box over the screen
-      B.boxR('car_paint', 0.42, 0.34, CAR_HW * 2 - 0.30, FX - 0.16, 3.24, 0, 0, 0, -0.30);
       B.tint = oldT;
       B.paint = 'metal';
       // waist beading and a hand rail down each corner - the horizontals that
       // give the front a scale
       B.box('car_paint', 0.10, 0.07, CAR_HW * 2 - 0.02, FX - 0.40, 2.32, 0);
       B.box('car_paint', 0.10, 0.06, CAR_HW * 2 - 0.02, FX - 0.30, 1.42, 0);
+      B.box('car_paint', 0.10, 0.06, CAR_HW * 2 - 0.16, FX - 0.18, 0.99, 0);
       for (k = -1; k <= 1; k += 2) {
         B.box('car_paint', 0.07, 1.30, 0.07, FX - 0.34, 2.10, k * (CAR_HW - 0.12));
       }
-      // windscreen, two panes, one gone
+      // ---- the glazing rebate, the surviving pane and the wipers -------------
+      for (k = -1; k <= 1; k += 2) {
+        // the rebate the pane sits in - a bright 3 cm lip round each hole, which
+        // is what actually draws the aperture at 12 m
+        B.box('car_paint', 0.05, 0.032, 0.94, FX - 0.20, 3.020, k * 0.605);
+        B.box('car_paint', 0.05, 0.032, 0.94, FX - 0.20, 2.410, k * 0.605);
+        B.box('car_paint', 0.05, 0.62, 0.032, FX - 0.20, 2.715, k * 0.145);
+        B.box('car_paint', 0.05, 0.62, 0.032, FX - 0.20, 2.715, k * 1.065);
+      }
       B.paint = 'flat';
       B.dark = 0.34;
-      for (k = -1; k <= 1; k += 2) {
-        if (k > 0) continue;                              // the other one is out
-        B.add('glass_dirty', quad(1.06, 0.82, 0, 0, 1, 1),
-          makeM(FX - 0.22, 2.74, k * 0.60, 0, -Math.PI * 0.5, 0.16));
-      }
+      // one pane survives; the driver's side is out
+      B.add('glass_dirty', quad(0.88, 0.60, 0, 0, 1, 1),
+        makeM(FX - 0.19, 2.715, -0.605, 0, -Math.PI * 0.5, 0.0));
       B.dark = 0;
       B.paint = 'metal';
-      B.box('car_paint', 0.10, 0.94, 0.09, FX - 0.20, 2.72, 0);
       // shards left in the empty aperture
-      for (k = 0; k < 6; k++) {
-        B.boxR('glass_dirty', 0.011, rng.range(0.10, 0.30), rng.range(0.08, 0.26),
-          FX - 0.20, 2.72 + rng.range(-0.36, 0.36), 0.60 + rng.range(-0.44, 0.44),
-          rng.range(-0.5, 0.5), 0, 0.16);
+      for (k = 0; k < 7; k++) {
+        B.boxR('glass_dirty', 0.011, rng.range(0.08, 0.24), rng.range(0.06, 0.22),
+          FX - 0.19, 2.715 + rng.range(-0.28, 0.28), 0.605 + rng.range(-0.40, 0.40),
+          rng.range(-0.5, 0.5), 0, 0.0);
       }
-      // headlight cluster: two big smashed reflectors and a marker light
+      // the wipers: a park rail, an arm and a blade on each pane. 4 cm of
+      // silhouette, but it is the one feature that says "this is a windscreen"
+      // rather than "this is a dark rectangle".
       for (k = -1; k <= 1; k += 2) {
-        B.cyl('rust_metal', 0.26, 0.30, 0.20, FX - 0.16, 1.34, k * 0.92,
-          0, 0, Math.PI * 0.5, 14);
-        B.cyl('car_paint', 0.20, 0.20, 0.09, FX - 0.30, 1.34, k * 0.92,
+        var wpz = k * 0.605;
+        B.box('rust_metal', 0.05, 0.040, 0.040, FX - 0.24, 2.428, wpz);
+        B.strut('rust_metal', FX - 0.245, 2.44, wpz - k * 0.34,
+          FX - 0.245, 2.90, wpz + k * 0.10, 0.030, 0.030);
+        B.strut('rust_metal', FX - 0.265, 2.90, wpz + k * 0.10,
+          FX - 0.265, 2.94, wpz + k * 0.36, 0.022, 0.045);
+        B.cyl('rust_metal', 0.045, 0.055, 0.07, FX - 0.235, 2.44, wpz - k * 0.34,
           0, 0, Math.PI * 0.5, 12);
+      }
+      // ---- the headlamp cluster, WHICH IS NOW IN FRONT OF THE SKIRT ----------
+      // It used to sit at x -9.56 with the skirt face at -9.57, so the whole
+      // cluster was inside the bodywork. A metro cab's lamps are set in the
+      // valance below the waist beading, proud, with a chrome rim and a lens.
+      for (k = -1; k <= 1; k += 2) {
+        // the recess pocket the lamp is set into
+        B.cyl('car_paint', 0.30, 0.30, 0.14, FX - 0.16, 1.30, k * 0.90,
+          0, 0, Math.PI * 0.5, 18);
+        // the housing, proud of the panel
+        B.cyl('rust_metal', 0.28, 0.31, 0.22, FX - 0.32, 1.30, k * 0.90,
+          0, 0, Math.PI * 0.5, 18);
+        // the rim
+        B.cyl('rust_metal', 0.30, 0.26, 0.055, FX - 0.44, 1.30, k * 0.90,
+          0, 0, Math.PI * 0.5, 18);
+        // the lens: one smashed, one intact
+        B.paint = 'flat';
+        B.dark = k < 0 ? 0.10 : 0.55;
+        B.cyl('glass_dirty', 0.245, 0.245, 0.035, FX - 0.425, 1.30, k * 0.90,
+          0, 0, Math.PI * 0.5, 18);
+        B.dark = 0;
+        B.paint = 'metal';
+        if (k > 0) {
+          for (var sh = 0; sh < 5; sh++) {
+            B.boxR('glass_dirty', 0.010, rng.range(0.05, 0.16), rng.range(0.04, 0.14),
+              FX - 0.425, 1.30 + rng.range(-0.18, 0.18), k * 0.90 + rng.range(-0.18, 0.18),
+              rng.range(-0.6, 0.6), 0, 0);
+          }
+        }
+        // marker lamp above it, in the beading
+        B.box('rust_metal', 0.10, 0.11, 0.13, FX - 0.36, 1.60, k * 1.06);
       }
       // NOTE: no emitter here. emitBox writes WORLD matrices and buildCar runs
       // inside the car's transform stack, so a lamp added here would land at the
       // car's local coordinates in world space - i.e. somewhere out on the
       // platform. The wreck's surviving marker light is added in buildTrain,
       // after the stack has been popped and the nose is a real world point.
-      // buffer beam, coupler and the anticlimber, all bent
+      // ---- the coupler, which now hangs off a real drawgear -----------------
       B.box('rust_metal', 0.30, 0.30, CAR_HW * 2 - 0.30, FX - 0.34, 0.60, 0);
       B.boxR('rust_metal', 0.85, 0.26, 0.32, FX - 0.72, 0.66, 0.06, 0, 0.10, -0.06);
-      B.boxR('rust_metal', 0.26, 0.44, 0.46, FX - 1.12, 0.62, 0.12, 0, 0.10, -0.10);
-      for (k = -1; k <= 1; k += 2) {
-        B.box('rust_metal', 0.24, 0.10, 0.12, FX - 0.44, 0.86, k * 0.72);
-      }
-      card(B, CELL.NUM, FX - 0.42, 3.24, 0, 0.5, 0.5, 'x', -1, null);
-      card(B, CELL.STRIP, FX - 0.29, 2.35, 0.4, 0.9, 0.9, 'x', -1, tint(0xf0f0e0, 0.3));
-    } else {
+      // the head itself: a face plate, its cone and the pin, all canted
+      B.boxR('rust_metal', 0.16, 0.52, 0.56, FX - 1.16, 0.62, 0.12, 0, 0.10, -0.10);
+      B.cyl('rust_metal', 0.13, 0.20, 0.34, FX - 1.02, 0.62, 0.10,
+        0, 0.10, Math.PI * 0.5, 14);
+      B.cyl('rust_metal', 0.075, 0.075, 0.26, FX - 1.28, 0.70, 0.24,
+        0, 0.10, Math.PI * 0.5, 12);
+      B.box('rust_metal', 0.10, 0.20, 0.10, FX - 1.14, 0.86, -0.14);
+      // the two brake hoses hanging off it, and the coupling chain
       B.paint = 'clad';
-      B.tint = body;
-      B.box('car_paint', 0.20, 3.28, CAR_HW * 2 - 0.04, -CAR_HL - 0.06, 1.90, 0);
-      B.tint = oldT;
+      for (k = -1; k <= 1; k += 2) {
+        var chx0 = FX - 0.62, chz0 = k * 0.40, prevQ = null;
+        for (var qq = 0; qq <= 5; qq++) {
+          var qt = qq / 5;
+          var qx = chx0 - qt * 0.40;
+          var qy = 0.62 - Math.sin(Math.PI * qt * 0.7) * 0.30 - qt * 0.10;
+          var qz = chz0 + k * qt * 0.10;
+          if (prevQ) B.strut('cable_rubber', prevQ[0], prevQ[1], prevQ[2], qx, qy, qz, 0.036, 0.036);
+          prevQ = [qx, qy, qz];
+        }
+      }
       B.paint = 'metal';
-      // gangway doorway, open
-      B.box('car_paint', 0.24, 2.00, 0.10, -CAR_HL - 0.06, 1.90, -0.52);
-      B.box('car_paint', 0.24, 2.00, 0.10, -CAR_HL - 0.06, 1.90, 0.52);
-      B.box('rust_metal', 0.55, 0.20, 0.55, -CAR_HL - 0.32, 0.86, 0);
+      // the emergency step and its grab handles, under the coupler
+      B.box('grate', 0.36, 0.035, 0.80, FX - 0.50, 0.30, 0);
+      for (k = -1; k <= 1; k += 2) {
+        B.strut('rust_metal', FX - 0.34, 0.30, k * 0.40, FX - 0.34, 0.60, k * 0.40, 0.030, 0.030);
+        B.box('rust_metal', 0.06, 0.34, 0.06, FX - 0.40, 1.00, k * 1.14);
+      }
+      // ---- the destination blind, lit -------------------------------------
+      // A Soviet cab's roof box carries a route blind, and it is the one pale
+      // rectangle high on a dark nose - i.e. exactly the value separation the
+      // signature frame was measured as lacking.
+      B.paint = 'clad';
+      B.dark = 0.20;
+      B.box('car_paint', 0.16, 0.26, 1.44, FX - 0.36, 3.32, 0);
+      B.dark = 0;
+      B.paint = 'metal';
+      card(B, CELL.NAME, FX - 0.445, 3.32, 0, 1.30, 1.30, 'x', -1, tint(0xf4f8dc, 0.22));
+      card(B, CELL.NUM, FX - 0.445, 3.32, -1.02, 0.34, 0.34, 'x', -1, null);
+      card(B, CELL.STRIP, FX - 0.29, 2.06, 0.62, 0.78, 0.78, 'x', -1, tint(0xf0f0e0, 0.3));
+    } else {
+      carEnd(B, rng, -1, body, oldT);
     }
-    B.paint = 'clad';
-    B.tint = body;
-    B.box('car_paint', 0.20, 3.28, CAR_HW * 2 - 0.04, CAR_HL + 0.06, 1.90, 0);
-    B.tint = oldT;
-    B.paint = 'metal';
-    B.box('car_paint', 0.24, 2.00, 0.10, CAR_HL + 0.06, 1.90, -0.52);
-    B.box('car_paint', 0.24, 2.00, 0.10, CAR_HL + 0.06, 1.90, 0.52);
-    B.box('rust_metal', 0.55, 0.20, 0.55, CAR_HL + 0.32, 0.86, 0);
+    carEnd(B, rng, 1, body, oldT);
 
     // ---- interior -----------------------------------------------------------
     // Built for every car, because every car has open doors and shattered
@@ -2392,17 +2982,66 @@
     }
     B.dark = 0;
     B.paint = 'metal';
-    // ceiling, and the grab poles that give the interior its verticals
+    // ---- THE CEILING, WHICH WAS A CLOUD TEXTURE ----------------------------
+    // It was ONE box, 19.7 x 2.4 m, on panel_plastic at 1.15 tiles/m - so the
+    // library's plastic macro noise landed at ~0.87 m per feature and, at the
+    // 1.4 m the `interior` lens sees it from, resolved as CUMULUS: 0.778 mean,
+    // 1.0 max, 0.271 std, with quantisation banding. It was the brightest large
+    // mass in the frame, on the inside of a subway car, and it was what pushed
+    // that frame to blown_white 0.97%.
+    //
+    // Two changes. The material's uv went 1.15 -> 3.60 (28 cm macro period, see
+    // SURF), and the box became a real metro ceiling: a flat 1.20 m centre
+    // panel, two coved side panels sprung down to the wall lining, transverse
+    // ribs on 1.60 m centres and four extract grilles. About 3,400 triangles,
+    // and it converts the largest surface in the framing from a texture error
+    // into architecture with its own shading gradient.
     B.paint = 'clad';
     B.dark = 0.12;
-    B.box('panel_plastic', CAR_HL * 2 - 0.3, 0.08, CAR_HW * 2 - 0.20, 0, 3.26, 0);
+    var CEIL_L = CAR_HL * 2 - 0.3;
+    // flat centre panel
+    B.box('panel_plastic', CEIL_L, 0.055, 1.20, 0, 3.278, 0);
+    // Coved shoulders: four short facets a side stepping down to the wall
+    // lining. Each facet takes a different N.L off the saloon runs below it, so
+    // the ceiling reads as a gradient from crown to cove rather than as one
+    // constant value - which is the whole reason it is built rather than tiled.
+    // [half-width z, y, tilt] - the tilt is multiplied by the side sign so the
+    // OUTER edge of every facet drops, on both sides.
+    var COVE = [[0.62, 3.272, 0.16], [0.80, 3.245, 0.30],
+                [0.94, 3.188, 0.44], [1.055, 3.100, 0.60]];
+    for (s = -1; s <= 1; s += 2) {
+      for (k = 0; k < COVE.length; k++) {
+        B.boxR('panel_plastic', CEIL_L, 0.050, 0.215,
+          0, COVE[k][1], s * COVE[k][0], s * COVE[k][2], 0, 0);
+      }
+    }
+    B.dark = 0.22;
+    // the joint strips between the panel courses, on the car's 1.60 m module
+    for (i = 0; i < 13; i++) {
+      var cjx = -CEIL_L * 0.5 + 0.35 + i * 1.60;
+      if (cjx > CEIL_L * 0.5 - 0.2) break;
+      B.box('panel_plastic', 0.045, 0.062, 2.34, cjx, 3.246, 0);
+      for (s = -1; s <= 1; s += 2) {
+        B.boxR('panel_plastic', 0.045, 0.055, 0.24, cjx, COVE[2][1] - 0.030,
+          s * COVE[2][0], s * COVE[2][2], 0, 0);
+      }
+    }
     B.dark = 0;
+    B.paint = 'metal';
+    // extract grilles, proud of the panel so each one casts its own shadow line
+    for (i = 0; i < 4; i++) {
+      var vgx = -6.6 + i * 4.4;
+      B.box('rust_metal', 0.72, 0.040, 0.56, vgx, 3.228, 0);
+      B.box('grate', 0.60, 0.026, 0.44, vgx, 3.250, 0);
+    }
     B.paint = 'metal';
     for (i = 0; i < 8; i++) {
       var gx = -7.5 + i * 2.15;
       for (s = -1; s <= 1; s += 2) {
         if (rng.bool(0.18)) continue;
-        B.cyl('car_paint', 0.028, 0.028, 2.30, gx, 2.07, s * 0.86, 0, 0, 0, 8);
+        // 20 segments: these stand 1.5-2 m from the `interior` lens and a
+        // faceted 5.6 cm pole is visible at that range.
+        B.cyl('car_paint', 0.028, 0.028, 2.30, gx, 2.07, s * 0.86, 0, 0, 0, 20);
       }
     }
     B.box('car_paint', CAR_HL * 2 - 1.0, 0.05, 0.05, 0, 3.14, -0.86);
@@ -2440,7 +3079,12 @@
       cab: true, gutted: true, lit: false, body: 0x6a7a70, band: 0x7e3028, bodyVal: 0.42 },
     { name: 'second', x: 24.50, y: 0.200, z: -6.60, rx: 0.0, ry: 0.0, rz: 0.0,
       cab: false, gutted: false, lit: true, body: 0x76867a, band: 0x8e3630, bodyVal: 0.56 },
-    { name: 'third', x: 43.20, y: 0.200, z: -6.60, rx: 0.0, ry: 0.012, rz: 0.0,
+    // MOVED EAST 0.9 m. At 43.20 the two cars' end plates were butted with a
+    // 2 cm overlap, so there was physically nowhere for a gangway to be - which
+    // is part of why the `interior` pose terminated on a solid panel. 44.10
+    // opens a 0.88 m coupling gap: enough for both concertinas, the coupler and
+    // the hoses, and it is what the far end of that framing now looks into.
+    { name: 'third', x: 44.10, y: 0.200, z: -6.60, rx: 0.0, ry: 0.012, rz: 0.0,
       cab: false, gutted: true, lit: false, body: 0x6f7f74, band: 0x8e3630, bodyVal: 0.46 }
   ];
 
@@ -2487,7 +3131,7 @@
     for (bogQ = -1; bogQ <= 1; bogQ += 2) {
       var axX = bogQ * 0.98;
       // axle and its two wheels, with a real tyre / web / boss section
-      B.cyl('rust_metal', 0.075, 0.075, 1.55, axX, -0.02, 0, 0, 0, Math.PI * 0.5, 8);
+      B.cyl('rust_metal', 0.075, 0.075, 1.55, axX, -0.02, 0, 0, 0, Math.PI * 0.5, 16);
       for (bogS = -1; bogS <= 1; bogS += 2) {
         var wz = bogS * 0.7175;
         B.cyl('rust_metal', 0.425, 0.425, 0.055, axX, -0.02, wz, 0, 0, Math.PI * 0.5, 16);
@@ -2501,7 +3145,7 @@
         // spring in silhouette where a smooth cylinder does not
         for (var cq = 0; cq < 5; cq++) {
           B.cyl('rust_metal', 0.085, 0.085, 0.022, axX, 0.29 + cq * 0.042, bogS * 0.94,
-            0, 0, 0, 8);
+            0, 0, 0, 14);
         }
         // brake block hung on its hanger, just clear of the tyre
         B.boxR('rust_metal', 0.10, 0.30, 0.16, axX + bogQ * 0.52, 0.02, wz, 0, 0, bogQ * 0.18);
@@ -2572,11 +3216,99 @@
         tint(0xe8ecd8, 0.3));
       card(B, CELL.POSTER, 36.6, PLAT_Y + 1.70, s * (ESC_HZ - 0.03), 1.8, 1.8, 'z', -s, null);
     }
-    // vault over the lower landing
-    var lp = vaultProfile(-ESC_HZ, ESC_HZ, PLAT_Y + 3.30, PLAT_Y + 3.30, 1.85, 16);
+    // ========================================================================
+    // THE BARREL VAULT OVER THE LOWER LANDING.
+    //
+    // This surface is roughly 35% of hero3 and it was 16 x 14 = 448 TRIANGLES
+    // for a 20 x 12 m span - one tiling material stretched over a smooth
+    // extrusion, which is why the frame's top third photographed as a black
+    // cracked texture with 17.8% of it below 0.04. A Soviet escalator hall's
+    // vault is the one piece of architecture in a station of this period that
+    // is actually designed: transverse ribs on a structural module, a coffered
+    // field between them, and a continuous cove at the springing that lights the
+    // whole thing indirectly. All three are silhouette and shading, which is
+    // what no amount of texture on 448 triangles can buy.
+    //
+    // 40 x 60 = 4,800 for the shell, about 34k for the ribs and coffers, 6k for
+    // the cove. Roughly 45k against four million of headroom, on the single
+    // image in the roster brief that would sell this level.
+    // ========================================================================
+    var escJit = function (x, z) {
+      return (N.fbm2(x * 0.16 + 21.3, z * 0.16 - 8.7, 2) * 0.5 + 0.5) * 0.055 - 0.027;
+    };
+    var VX0 = HALL_X1, VX1 = ESC_INC_X0 + 0.6;
+    var lp = vaultProfile(-ESC_HZ, ESC_HZ, PLAT_Y + 3.30, PLAT_Y + 3.30, 1.85, 40);
     B.paint = 'vault';
-    B.add('vault_plaster', sweepX(lp, HALL_X1, ESC_INC_X0 + 0.6, 14, null, null));
+    B.add('vault_plaster', sweepX(lp, VX0, VX1, 60, null, escJit));
+    // ---- transverse ribs, on the hall's 2.5 m structural module -------------
+    var ribP = vaultProfile(-ESC_HZ + 0.05, ESC_HZ - 0.05, PLAT_Y + 3.32,
+      PLAT_Y + 3.32, 1.79, 26);
+    var ribX = [];
+    for (i = 0; i < 6; i++) {
+      var rbx = VX0 + 1.05 + i * 2.50;
+      if (rbx > VX1 - 0.5) break;
+      ribX.push(rbx);
+      for (k = 0; k + 1 < ribP.length; k++) {
+        B.strut('vault_plaster', rbx, ribP[k][1] - 0.12, ribP[k][0],
+          rbx, ribP[k + 1][1] - 0.12, ribP[k + 1][0], 0.32, 0.24);
+      }
+      // the corbel each rib lands on at the springing
+      for (s = -1; s <= 1; s += 2) {
+        B.box('vault_plaster', 0.44, 0.30, 0.46, rbx, PLAT_Y + 3.14, s * (ESC_HZ - 0.22));
+      }
+    }
+    // ---- the coffered field -------------------------------------------------
+    // Eight longitudinal ribs crossing the transverse ones. The recess between
+    // them IS the coffer - it is 9 cm deep, which at the 8-14 m this vault is
+    // seen from is a real shadow line - and each cell gets an inner moulding so
+    // the coffer has a profile rather than being a flat rectangle in a grid.
+    var ARC_N = 9, LSTN = [];
+    for (k = 1; k < ARC_N; k++) {
+      var tt = k / ARC_N;
+      var ss = Math.pow(Math.sin(Math.PI * tt), 0.80);
+      LSTN.push([-ESC_HZ + 2 * ESC_HZ * tt, PLAT_Y + 3.30 + 1.85 * ss]);
+    }
+    for (k = 0; k < LSTN.length; k++) {
+      B.strut('vault_plaster', VX0 + 0.1, LSTN[k][1] - 0.11, LSTN[k][0],
+        VX1 - 0.1, LSTN[k][1] - 0.11, LSTN[k][0], 0.26, 0.20);
+    }
+    // inner mouldings, one frame per coffer
+    for (i = 0; i + 1 < ribX.length; i++) {
+      var ca = ribX[i] + 0.34, cb = ribX[i + 1] - 0.34;
+      if (cb - ca < 0.3) continue;
+      for (k = 0; k + 1 < LSTN.length; k++) {
+        var za = LSTN[k][0] + 0.20, zb = LSTN[k + 1][0] - 0.20;
+        var ya = LSTN[k][1] - 0.055, yb = LSTN[k + 1][1] - 0.055;
+        if (zb - za < 0.15) continue;
+        B.strut('vault_plaster', ca, ya, za, cb, ya, za, 0.055, 0.055);
+        B.strut('vault_plaster', ca, yb, zb, cb, yb, zb, 0.055, 0.055);
+        B.strut('vault_plaster', ca, ya, za, ca, yb, zb, 0.055, 0.055);
+        B.strut('vault_plaster', cb, ya, za, cb, yb, zb, 0.055, 0.055);
+      }
+    }
     B.paint = 'metal';
+    // ---- the continuous cove at the springing -------------------------------
+    // A real architectural cove: a plaster shelf standing off the wall with the
+    // fitting hidden behind its lip, throwing UP the curve of the vault. This is
+    // what puts value on the soffit within a metre of every tube, which measured
+    // 0.109-0.187 against a frame mean of 0.198 - the ceiling around a lit
+    // fluorescent was darker than the frame average.
+    for (s = -1; s <= 1; s += 2) {
+      B.paint = 'vault';
+      B.box('vault_plaster', VX1 - VX0, 0.16, 0.42,
+        (VX0 + VX1) * 0.5, PLAT_Y + 3.02, s * (ESC_HZ - 0.30));
+      B.boxR('vault_plaster', VX1 - VX0, 0.30, 0.10,
+        (VX0 + VX1) * 0.5, PLAT_Y + 3.16, s * (ESC_HZ - 0.50), s * 0.26, 0, 0);
+      B.paint = 'metal';
+      for (i = 0; i < 5; i++) {
+        var cvx = VX0 + 1.0 + i * ((VX1 - VX0 - 2.0) / 4);
+        // 0.62, measured: at 0.95 these cove tubes were the only thing clipping
+        // in hero3 - 27% of a 240 x 80 px patch over 0.95 - and a cove is meant
+        // to be the source you DO NOT see, only the vault it washes.
+        emitBox(L, cvx, PLAT_Y + 3.10, s * (ESC_HZ - 0.36), 1.90, 0.030, 0.070, 0,
+          0xbfe8ac, (i === 3) ? 0.0 : 0.62, (i === 3) ? 'dying' : 'fluoro');
+      }
+    }
     L.addCollider((HALL_X1 + ESC_INC_X0) * 0.5, PLAT_Y + 5.6, 0,
       (ESC_INC_X0 - HALL_X1) * 0.5 + 0.4, 0.4, ESC_HZ, 'concrete');
 
@@ -2627,14 +3359,41 @@
       B.paint = 'clad';
       B.strut('car_paint', lx0, y0 - 0.55, lz, lx1, y1 - 0.55, lz, 1.06, 0.62);
       B.paint = 'metal';
-      // treads
+      // ---- TREADS, AS DISCRETE STEPS ---------------------------------------
+      // The old loop laid one plate every 40 cm at the ramp height with a single
+      // 5 cm rib, which at hero3's angle is a CORRUGATED SHEET, not a flight of
+      // steps: the chevron pattern was uniform the whole run, no riser faces, no
+      // shadow line between one step and the next. An escalator reads as an
+      // escalator because each step is a horizontal tread over a vertical riser
+      // standing 8 mm proud of the tread behind it, so every one of them casts
+      // its own line. Forty steps a lane, three lanes, and it is the only
+      // silhouette this framing has.
       var nT = Math.round((lx1 - lx0) / 0.40);
+      var stepW = (lx1 - lx0) / nT;
       for (i = 0; i < nT; i++) {
-        var tx = lx0 + (i + 0.5) * ((lx1 - lx0) / nT);
-        var ty = escTreadY(tx);
-        B.box('deck_steel', 0.38, 0.05, 0.98, tx, ty - 0.02, lz);
-        if (tx > ESC_INC_X0 && tx < ESC_INC_X1) {
-          B.box('deck_steel', 0.05, 0.22, 0.98, tx + 0.19, ty - 0.13, lz);
+        var xa = lx0 + i * stepW, xb = xa + stepW;
+        var yTop = escTreadY(xb) - 0.02, yBot = escTreadY(xa) - 0.02;
+        // the tread plate
+        B.box('deck_steel', stepW - 0.012, 0.05, 0.98, (xa + xb) * 0.5, yTop, lz);
+        // the riser face, proud, at the low end of the tread
+        if (yTop - yBot > 0.012) {
+          B.box('deck_steel', 0.042, yTop - yBot + 0.03, 0.98,
+            xa + 0.021, (yTop + yBot) * 0.5 - 0.012, lz);
+        }
+        // cleats. Only on the incline, where they are actually seen, and four a
+        // tread rather than a texture - they are what makes the step read as a
+        // casting instead of a plate.
+        if (xa > ESC_INC_X0 - 0.5 && xb < ESC_INC_X1 + 0.5) {
+          for (k = 0; k < 4; k++) {
+            B.box('deck_steel', stepW - 0.09, 0.018, 0.055,
+              (xa + xb) * 0.5, yTop + 0.032, lz - 0.36 + k * 0.24);
+          }
+          // the demarcation nosing along the front lip of every fifth tread
+          if (i % 5 === 2) {
+            B.paint = 'clad';
+            B.box('paint_line', 0.045, 0.014, 0.96, xa + 0.024, yTop + 0.028, lz);
+            B.paint = 'metal';
+          }
         }
       }
       // balustrades and the rubber handrail, which is the strongest line in
@@ -2644,7 +3403,36 @@
         B.paint = 'clad';
         B.strut('car_paint', lx0, y0 + 0.46, bz, lx1, y1 + 0.46, bz, 0.075, 0.90);
         B.paint = 'metal';
-        B.strut('cable_rubber', lx0 - 0.2, y0 + 0.96, bz, lx1 + 0.2, y1 + 0.96, bz, 0.10, 0.14);
+        // ---- THE HANDRAIL, WITH ITS NEWEL RETURNS -------------------------
+        // A straight rubber bar is a rail; what makes an escalator read is that
+        // the rail is a LOOP - it turns through 180 degrees round a newel at
+        // each landing and runs back underneath. The section is the standard
+        // 75 x 35 rounded profile, and the return is eight segments of a
+        // semicircle in the vertical plane, which is exactly what a comb-plate
+        // end looks like from the foot of a flight.
+        B.strut('cable_rubber', lx0 - 0.02, y0 + 0.96, bz, lx1 + 0.02, y1 + 0.96, bz, 0.075, 0.035);
+        // the balustrade capping the rail runs on, and the illuminated skirt lip
+        B.paint = 'clad';
+        B.strut('car_paint', lx0, y0 + 0.90, bz + s * 0.012, lx1, y1 + 0.90, bz + s * 0.012,
+          0.055, 0.055);
+        B.paint = 'metal';
+        for (var nw = 0; nw < 2; nw++) {
+          var nex = nw ? lx1 + 0.02 : lx0 - 0.02;
+          var ney = (nw ? y1 : y0) + 0.96;
+          var ndir = nw ? 1 : -1;
+          var prevN = null;
+          for (var na = 0; na <= 8; na++) {
+            var nt = na / 8 * Math.PI;
+            var nx4 = nex + ndir * Math.sin(nt) * 0.26;
+            var ny4 = ney - (1 - Math.cos(nt)) * 0.26;
+            if (prevN) B.strut('cable_rubber', prevN[0], prevN[1], bz, nx4, ny4, bz, 0.075, 0.035);
+            prevN = [nx4, ny4];
+          }
+          // the newel casing the loop turns round
+          B.paint = 'clad';
+          B.box('car_paint', 0.30, 0.40, 0.14, nex + ndir * 0.10, ney - 0.28, bz);
+          B.paint = 'metal';
+        }
         // balustrade lamps at the newel, every few metres
         for (i = 0; i < 5; i++) {
           var nx3 = lx0 + 1.5 + i * ((lx1 - lx0 - 3.0) / 4);
@@ -2889,6 +3677,87 @@
   // Four sheets: the two station trenches, the four tunnel runs, the escalator
   // landing and a handful of platform ponds placed at genuine minima of the
   // deck's own dip field. Nothing here is a decal on flat ground.
+  // ---------------------------------------------------------------------------
+  // WHAT A WATERLINE IMPLIES, AND WHICH WAS ENTIRELY ABSENT.
+  //
+  // A sheet of water lying against a tiled pier for a decade does three things
+  // to that pier, and none of them are the sheet: it leaves a 10-14 cm tide band
+  // of dark algal staining right at the surface, a pale efflorescence crust
+  // where the band dries out above it, and a raft of floating rubbish jammed
+  // into every internal corner. Without those the sheet reads as a pane of glass
+  // resting on the floor rather than as standing water - which is exactly how
+  // the platform flood photographed, and why nobody believed it.
+  //
+  // Everything here is gated on floodDepth(), the same authority the sheet, the
+  // deck geometry, the navgrid and the pond placer read, so the band cannot
+  // land above or below its own waterline.
+  // ---------------------------------------------------------------------------
+  function waterlineBand(L, B, rng, N) {
+    var i, s, k;
+    var BAND = 0.125;
+    // ---- the piers ---------------------------------------------------------
+    for (s = -1; s <= 1; s += 2) {
+      for (i = 0; i < PIERS_X.length; i++) {
+        var px = PIERS_X[i];
+        if (s < 0 && isBroken(px)) continue;
+        var zf = s * (ARC_BACK - 0.02);
+        if (floodDepth(px, s * (ARC_BACK - 0.35), N) < 0.004) continue;
+        B.paint = 'water';
+        // the tide band on the inner face
+        B.box('flood_water', PIER_HW * 2 + 0.02, BAND, 0.05,
+          px, PLAT_FLOOD_Y - BAND * 0.42, zf);
+        B.paint = 'metal';
+        // the efflorescence crust that dries out just above it
+        B.paint = 'clad';
+        B.box('paint_line', PIER_HW * 2 - 0.10, 0.030, 0.045,
+          px, PLAT_FLOOD_Y + 0.030, zf + s * 0.006);
+        B.paint = 'metal';
+        // and round the two returns into the opening, so the band turns the
+        // corner the way a real waterline does
+        for (k = -1; k <= 1; k += 2) {
+          B.paint = 'water';
+          B.box('flood_water', 0.05, BAND, PLAT_EDGE - ARC_BACK,
+            px + k * (PIER_HW - 0.01), PLAT_FLOOD_Y - BAND * 0.42,
+            s * (ARC_BACK + PLAT_EDGE) * 0.5);
+          B.paint = 'metal';
+        }
+      }
+      // ---- the dado, between the piers ------------------------------------
+      // Run in 1.2 m lengths so it can break wherever the slab stands proud.
+      for (i = 0; i < 58; i++) {
+        var dx = HALL_X0 + 0.8 + i * 1.22;
+        if (dx > HALL_X1 - 0.8) break;
+        if (floodDepth(dx, s * (ARC_BACK - 0.30), N) < 0.004) continue;
+        B.paint = 'water';
+        B.box('flood_water', 1.18, BAND, 0.05, dx, PLAT_FLOOD_Y - BAND * 0.42,
+          s * (ARC_BACK - 0.02));
+        B.paint = 'metal';
+      }
+    }
+    // ---- rubbish caught against the piers ----------------------------------
+    // Floating litter strands; it does not scatter. Every raft here is jammed
+    // into the internal corner where a pier meets the deck, which is where a
+    // decade of paper actually ends up.
+    var paper = tint(0xd6d0bc, 0.42);
+    for (s = -1; s <= 1; s += 2) {
+      for (i = 0; i < PIERS_X.length; i++) {
+        var rpx = PIERS_X[i];
+        var rz = s * (ARC_BACK - 0.32);
+        if (floodDepth(rpx, rz, N) < 0.006) continue;
+        for (k = 0; k < 5; k++) {
+          var jx = rpx + rng.range(-PIER_HW - 0.3, PIER_HW + 0.3);
+          var jz = rz - s * rng.range(0.0, 0.44);
+          if (floodDepth(jx, jz, N) < 0.004) continue;
+          card(B, (k & 1) ? CELL.POSTER : CELL.PEEL, jx,
+            PLAT_FLOOD_Y + 0.005 + k * 0.0015, jz,
+            rng.range(0.22, 0.52), rng.range(0.18, 0.44), 'y', 1,
+            paper, rng.range(0, 6.28));
+        }
+      }
+    }
+    B.paint = 'metal';
+  }
+
   function buildWater(L, B, rng, N) {
     var wf = function (x, z) {
       return WATER_Y + (N.fbm2(x * 0.5 + 2.2, z * 0.5 - 1.4, 2)) * 0.006;
@@ -2917,9 +3786,13 @@
     // contour where the settled slab crosses 1.045 m. It comes in over the
     // western third, floods the collapse bay solid, and breaks up into
     // disconnected sheets through the middle of the hall where the slab is
-    // still high. 0.55 m cells: fine enough that the rim follows the fbm.
+    // still high. 0.22 m cells, not 0.55: the shoreline is the one edge in this
+    // level a camera stands right on top of, and at 55 cm it resolved as a
+    // staircase of half-metre steps instead of following the fbm at pixel scale.
+    // 70 x 10 m at 0.22 is about 29k triangles a sheet, on a level with four
+    // million spare.
     B.add('flood_water', deck(HALL_X0 + 0.25, HALL_X1 - 0.25,
-      -PLAT_EDGE + 0.12, PLAT_EDGE - 0.12, 0.55, function (x, z) {
+      -PLAT_EDGE + 0.12, PLAT_EDGE - 0.12, 0.22, function (x, z) {
         var d = floodDepth(x, z, N);
         if (d < 0.005) return -999;
         return PLAT_FLOOD_Y + (N.fbm2(x * 0.9 + 4.1, z * 0.9 - 2.7, 2)) * 0.0035;
@@ -2927,11 +3800,12 @@
     // the meniscus: a 6 cm skirt of darker, rougher wet slab just outside the
     // waterline, so the sheet does not terminate on a hard geometric edge
     B.add('flood_water', deck(HALL_X0 + 0.25, HALL_X1 - 0.25,
-      -PLAT_EDGE + 0.12, PLAT_EDGE - 0.12, 0.55, function (x, z) {
+      -PLAT_EDGE + 0.12, PLAT_EDGE - 0.12, 0.22, function (x, z) {
         var d = floodDepth(x, z, N);
         if (d >= 0.005 || d < -0.045) return -999;
         return platY(x, z, N) + 0.004;
       }));
+    waterlineBand(L, B, rng, N);
 
     // ---- platform ponds ----------------------------------------------------
     // Searched, not placed: sample the deck, keep the local minima that are
@@ -3038,7 +3912,10 @@
       B.paint = 'metal';
       return -1;
     }
-    return emitBox(L, x, y - 0.075, z, len - 0.14, 0.062, 0.155, ry,
+    // 0.085 deep, not 0.155: the reflector cheeks above sit at +/-0.118, so a
+    // 0.155 emitter stood PROUD of them and never took their occlusion at the
+    // grazing angles every framing in this level sees these fittings from.
+    return emitBox(L, x, y - 0.075, z, len - 0.14, 0.062, 0.085, ry,
       state === 'dying' ? 0xb6e0a6 : 0xc4ecb4,
       state === 'dying' ? 1.7 : 2.4, state === 'dying' ? 'dying' : 'fluoro');
   }
@@ -3358,15 +4235,25 @@
           // 0.077 - the frame tripped blown_white AND dead_cell at once, off the
           // same fitting. The value the wall lost is given back by aiming
           // metro_car_int/int2 up into the roof instead of down at the floor.
-          emitBox(L, lx, car.y + 3.020, car.z + sg * 0.62, 4.25, 0.046, 0.155, 0,
-            0xcdeec0, states[q] === 'dying' ? 0.09 : 0.14,
+          // 0.070 deep against cheeks at +/-0.100, so the cheeks genuinely
+          // shadow the diffuser at the grazing angles the `interior` lens sees
+          // these runs from. At 0.155 the emitter stood proud of its own
+          // housing and printed as four hard pale wedges crossing the frame.
+          // The gains went UP when the diffuser texture went in, and that is not
+          // a reversal of the 1.5-stop cut: the texture's own mean is about 0.5,
+          // so an untextured bar at 0.14 and a textured one at 0.30 put the same
+          // light on the retina - but only the second one has tube lobes, an end
+          // cap and a fly in it. The measured failure was the bar being a flat
+          // single colour, not the bar being bright.
+          emitBox(L, lx, car.y + 3.020, car.z + sg * 0.62, 4.25, 0.046, 0.070, 0,
+            0xcdeec0, states[q] === 'dying' ? 0.20 : 0.30,
             states[q] === 'dying' ? 'dying' : 'fluoro');
           // A cove at the wall/ceiling junction as well. The two centre runs
           // leave the top CORNERS of the frame black - a 78 degree lens inside
           // a 2.5 m saloon sees more of the car than the runs cross - and those
           // corners were the last dead cells in the framing.
           emitBox(L, lx, car.y + 2.86, car.z + sg * (CAR_HW - 0.16), 4.25, 0.030, 0.075, 0,
-            0xbfe4b2, states[q] === 'dead' ? 0.0 : 0.10,
+            0xbfe4b2, states[q] === 'dead' ? 0.0 : 0.22,
             states[q] === 'dead' ? 'dying' : 'fluoro');
         }
       }
@@ -3382,13 +4269,38 @@
           B.paint = 'metal';
           B.box('rust_metal', 2.80, 0.06, 0.07, kx, car.y + 1.08, car.z + sg * (CAR_HW - 0.44));
           emitBox(L, kx, car.y + 1.045, car.z + sg * (CAR_HW - 0.46), 2.70, 0.022, 0.045, 0,
-            0xbfe4b2, (q === 2) ? 0.0 : 0.19, (q === 2) ? 'dying' : 'fluoro');
+            0xbfe4b2, (q === 2) ? 0.0 : 0.30, (q === 2) ? 'dying' : 'fluoro');
         }
       }
     }
     saloonKick(CARS[1]);
     saloonLines(CARS[1], ['dying', 'lit', 'lit', 'dying']);
-    saloonLines(CARS[2], ['dead', 'dying', 'dead', 'dead']);
+    // The nearest run in the third car is 'dying' rather than 'dead': it is what
+    // the `interior` pose now sees THROUGH the gangway aperture, 10 m past the
+    // crosshair, and a terminator that is a hole with a faint unstable glow in
+    // it is a destination where a hole with nothing in it is a rendering error.
+    saloonLines(CARS[2], ['dying', 'dead', 'dying', 'dead']);
+    // ---- THE GANGWAY, LIT ---------------------------------------------------
+    // The `interior` composition now terminates on the gangway aperture instead
+    // of on a blown bulkhead, and an aperture with nothing in it is just a
+    // darker hole. Two fittings, both emissive geometry so neither costs one of
+    // the 24 light slots: a vestibule tube over the doorway inside the second
+    // car, which rims the opening from behind, and a single failing lamp in the
+    // coupling gap itself - the thing the eye actually walks to at the end of
+    // the frame, ten metres past the crosshair.
+    (function () {
+      var gx0 = CARS[1].x + CAR_HL + 0.06;
+      var gy0 = CARS[1].y, gz0 = CARS[1].z;
+      var mid = (gx0 + 0.10 + (CARS[2].x - CAR_HL - 0.16)) * 0.5;
+      B.paint = 'metal';
+      B.box('rust_metal', 0.30, 0.09, 1.10, gx0 - 0.58, gy0 + 3.10, gz0);
+      emitBox(L, gx0 - 0.58, gy0 + 3.042, gz0, 0.24, 0.035, 0.95, 0,
+        0xc8ecb8, 0.60, 'fluoro');
+      B.box('rust_metal', 0.14, 0.11, 0.14, mid, gy0 + 2.93, gz0 + 0.42);
+      emitBox(L, mid, gy0 + 2.86, gz0 + 0.42, 0.09, 0.055, 0.09, 0,
+        0xff5a30, 0.95, 'dying');
+      B.paint = 'metal';
+    })();
 
     // =========================== the SpotLights ==============================
     // The level's own colour. lighting.js's 'fluoro' kind lerps an unresolved
@@ -3396,7 +4308,7 @@
     // harbour flood and wrong here - the brief's word is SICKLY, and a cold
     // blue tube against a red strip is a police light, not a dying station.
     // Resolving the colour in the level skips that lerp entirely.
-    var FL = new THREE.Color(0.80, 1.00, 0.83);
+    var FL = new THREE.Color(0.74, 1.00, 0.78);
     var RD = new THREE.Color(1.0, 0.19, 0.11);
     var WK = new THREE.Color(1.0, 0.86, 0.66);
 
@@ -3412,10 +4324,33 @@
     // band or door recesses in it. 62 lands it just under the platform's own
     // value, so the wreck reads as the brightest thing in frame without
     // clipping - which is what makes a subject, rather than a hole.
+    // ---- AND WHY 58 WAS THE OPPOSITE MISTAKE -------------------------------
+    // Round 1 reported the cab photographing as a blank white board and this
+    // lamp was cut 240 -> 58 with the cone opened to 0.66. Measured after that:
+    // the nose sat at 0.30-0.50 against a left tiled wall at 0.321 and a vault
+    // at 0.216 - no value separation, no hue separation, no silhouette. A
+    // signature frame whose subject you cannot FIND is worse than one whose
+    // subject is blown. 115 through a 0.44 cone (a rigged worklight has a
+    // reflector; 0.66 was a bare lamp) puts the nose face 1.5-2 stops over the
+    // wall behind it, and the tight penumbra keeps the spill off that wall so
+    // the separation survives.
     lamp({ name: 'metro_wreck_work', kind: 'led', pos: [-6.30, 2.42, 1.95],
-      color: WK, kelvin: 3400, intensity: 58, distance: 18, cone: 0.66, penumbra: 0.46,
+      color: WK, kelvin: 3400, intensity: 130, distance: 18, cone: 0.44, penumbra: 0.30,
       dayBase: 1, aimPos: [-4.10, 1.72, -4.05], fixed: true, halo: 0.55, haloGain: 0.18,
       bulbR: 0.07, bulbFlat: 0.3, bulbGain: 0.10, beam: 0.34 });
+    // ---- THE RIM ------------------------------------------------------------
+    // A key alone puts value on the nose; it does not SEPARATE it. The cant of
+    // the roof line and the top edge of the body were dying into a vault at
+    // 0.216 with the same hue, so the wreck read as a silhouette-less mass. This
+    // is a 5200 K head clamped in the arcade opening at x -12.5, out of frame
+    // behind the hero1 eye and raking east-north-east across the body: cool
+    // against the 3400 K key, so the top of the car separates from the vault by
+    // temperature as well as by value.
+    lamp({ name: 'metro_wreck_rim', kind: 'led', pos: [-12.50, 3.10, 4.60],
+      color: new THREE.Color(0.78, 0.88, 1.0), kelvin: 5200, intensity: 42,
+      distance: 16, cone: 0.55, penumbra: 0.42, dayBase: 1,
+      aimPos: [-3.0, 2.60, -2.0], fixed: true, halo: 0.40, haloGain: 0.14,
+      bulbR: 0.05, bulbFlat: 0.35, bulbGain: 0.08, beam: 0.24 });
     lamp({ name: 'metro_plat_b', kind: 'fluoro', pos: [-21, battenY - 0.12, 0],
       color: FL.clone(), kelvin: 4300, intensity: 175, distance: 21, cone: 1.02, penumbra: 0.42,
       dayBase: 1, aimPos: [-21, PLAT_Y, 0], fixed: true, halo: 1.5, haloGain: 0.24,
@@ -3452,20 +4387,14 @@
         bulbGain: 0.10, beam: 0.35 });
     }
 
-    // 12-14: the emergency wash. Weak, red, and aimed at the FLOOR, which is
-    // where it matters: the standing water is the only thing in the level that
-    // can return a strip as a highlight, and it can only do that if a source is
-    // actually pointed at it.
-    var EM = [['metro_emg_n1', -15, -1]];
-    for (i = 0; i < EM.length; i++) {
-      lamp({ name: EM[i][0], kind: 'led', pos: [EM[i][1], 1.74, EM[i][2] * (ARC_BACK + 0.06)],
-        color: RD.clone(), kelvin: 1900, intensity: 22, distance: 10, cone: 1.25,
-        penumbra: 0.58, dayBase: 1, aimPos: [EM[i][1] + 1.2, PLAT_Y, EM[i][2] * 1.4],
-        fixed: true, halo: 0.42, haloGain: 0.26, bulbR: 0.045, bulbFlat: 0.5,
-        bulbGain: 0.18, beam: 0.22 });
-    }
+    // THE 22 cd RED WASH AT x -15 IS GONE, and it paid for a slot the escalator
+    // hall needed far more. lighting.js caps a declarative level at 24
+    // practicals and truncates the tail, so every addition has to be bought.
+    // What that lamp did - red on the platform floor - is now done by the flood
+    // sheet, which reaches x -15 since PLAT_FLOOD_Y was raised, and by the
+    // glint cards under the strips, neither of which costs a light slot.
 
-    // 14-16: the escalator hall.
+    // 12-15: the escalator hall.
     lamp({ name: 'metro_esc_foot', kind: 'led', pos: [34.5, 2.55, -3.2],
       color: WK.clone(), kelvin: 3300, intensity: 68, distance: 18, cone: 0.80,
       penumbra: 0.46, dayBase: 1, aimPos: [39.5, PLAT_Y, 0.5], fixed: true,
@@ -3474,6 +4403,24 @@
       color: FL.clone(), kelvin: 4400, intensity: 150, distance: 17, cone: 0.95, penumbra: 0.42,
       dayBase: 1, aimPos: [40.6, escTreadY(40.6), 0], fixed: true, halo: 1.2,
       haloGain: 0.24, bulbR: 0.08, bulbFlat: 0.4, bulbGain: 0.16, beam: 0.60 });
+    // ---- THE VAULT UPLIGHTS OVER THE LOWER LANDING -------------------------
+    // Measured in hero3: three ceiling tubes at 0.644, 0.429 and 0.763, with the
+    // ceiling within 60 px of each at 0.136, 0.109 and 0.187 - i.e. the soffit
+    // immediately around a lit fluorescent was DARKER than the frame mean of
+    // 0.198. The escalator hall's fittings were emitBox instances and glowCards
+    // and nothing else; four of the level's SpotLights were anywhere in this
+    // hall and not one was aimed at a mounting surface, so the frame's top third
+    // came back 17.8% below 0.04. These mirror the metro_vault_* pattern that
+    // already works on the platform: hard against the springing, raking the
+    // soffit so the vault's own curvature reads instead of going flat.
+    for (i = -1; i <= 1; i += 2) {
+      lamp({ name: 'metro_esc_vault_' + (i < 0 ? 'n' : 's'), kind: 'fluoro',
+        pos: [38.0, PLAT_Y + 3.05, i * (ESC_HZ - 0.30)],
+        color: FL.clone(), kelvin: 4600, intensity: 70, distance: 14, cone: 0.95,
+        penumbra: 0.50, dayBase: 1, aimPos: [39.5, PLAT_Y + 4.90, i * -1.2],
+        fixed: true, halo: 0.85, haloGain: 0.20, bulbR: 0.06, bulbFlat: 0.4,
+        bulbGain: 0.10, beam: 0.32 });
+    }
     lamp({ name: 'metro_tun_w0', kind: 'led', pos: [-63.5, 2.10, -TRK_CZ - 1.95],
       color: FL.clone(), kelvin: 4200, intensity: 235, distance: 26, cone: 0.98,
       penumbra: 0.48, dayBase: 1, aimPos: [-57.0, 0.4, -TRK_CZ + 0.4], fixed: true,
@@ -3519,9 +4466,36 @@
     // between two surfaces at the same distance, which is the textbook
     // signature of a practical with no bounce. Turned into the ceiling they
     // are the bounce, the roof carries value, and the whole saloon lifts.
-    lamp({ name: 'metro_car_int', kind: 'fluoro', pos: [CARS[1].x - 3.4, CARS[1].y + 2.10, CARS[1].z - 0.55],
-      color: FL.clone(), kelvin: 4300, intensity: 46, distance: 14, cone: 1.30, penumbra: 0.70,
-      dayBase: 1, aimPos: [CARS[1].x - 0.4, CARS[1].y + 3.30, CARS[1].z + 0.30], fixed: true, halo: 0.42,
+    // ---- AND NOW AIMED BACK DOWN, WHICH IS NOT A REVERSAL ------------------
+    // Turning these up into the roof solved a real defect (a 10:1 step between
+    // two surfaces at the same distance) and created two more: the roof became
+    // the brightest large mass in the frame at 0.778 mean / 1.0 max, and
+    // int2 - which points at the +X end of the saloon - drove the end bulkhead
+    // to 0.849 mean with 53.3% of it over 0.95, dead under the crosshair.
+    // With the ceiling now built as real coved panels rather than one box, and
+    // panel_plastic re-scaled, the roof carries its own shape off the fill and
+    // the saloon runs; these go back to lighting the BENCH AND FLOOR JUNCTION,
+    // which is where the frame's dead cells actually were - 40.2% of it under
+    // 0.04. Both aim back down the car, away from either end wall, on tighter
+    // cones so nothing they do lands on a bulkhead.
+    // ONE UP, ONE DOWN. Measured with both aimed down: the far bulkhead came
+    // back to 0.263 (from 0.849) and the frame's near-black fell 45.7% -> 32.3%,
+    // but the ceiling went 0.354 -> 0.071, i.e. the ceiling swapped places with
+    // the bulkhead. A saloon has light at both levels, so this one is a cove
+    // uplight raking the coved shoulders from bench height - which is also
+    // where the camera sees most of the ceiling - and int2 below stays the
+    // downlight on the bench and floor.
+    // 29 cd, not 34, and pulled 40 cm forward. At 34 the cone washed the ceiling
+    // 1.5 m over the `interior` lens to 0.893 mean with 8.4% of the top strip
+    // over 0.95 - the cloud defect relocated to the frame edge. Aiming it AWAY
+    // from the camera instead was worse in a more instructive way: with the near
+    // ceiling unlit, the two saloon runs went back to reading as hard bright
+    // wedges radiating out of the corners, because a bar only reads as a fitting
+    // when the surface around it carries value. The fix is less light in the
+    // same place, not the same light somewhere else.
+    lamp({ name: 'metro_car_int', kind: 'fluoro', pos: [CARS[1].x - 3.0, CARS[1].y + 1.74, CARS[1].z - 0.82],
+      color: FL.clone(), kelvin: 4300, intensity: 29, distance: 13, cone: 1.04, penumbra: 0.66,
+      dayBase: 1, aimPos: [CARS[1].x - 5.8, CARS[1].y + 3.14, CARS[1].z + 0.96], fixed: true, halo: 0.42,
       haloGain: 0.16, bulbR: 0.04, bulbFlat: 0.4, bulbGain: 0.08, beam: 0.22 });
     lamp({ name: 'metro_esc_cold', kind: 'led',
       pos: [ESC_INC_X1 + 2.6, ESC_HEAD_Y + 2.05, -2.35],
@@ -3529,13 +4503,9 @@
       distance: 19, cone: 0.98, penumbra: 0.50, dayBase: 1,
       aimPos: [ESC_INC_X1 - 1.0, ESC_HEAD_Y + 0.2, 0.6], fixed: true,
       halo: 0.60, haloGain: 0.20, bulbR: 0.07, bulbFlat: 0.35, bulbGain: 0.12, beam: 0.32 });
-    lamp({ name: 'metro_esc_head', kind: 'fluoro', pos: [51.0, escTreadY(51.0) + ESC_AXIS_Y + ESC_BORE_R - 0.75, 0],
-      color: FL.clone(), kelvin: 4400, intensity: 165, distance: 19, cone: 1.05, penumbra: 0.46,
-      dayBase: 1, aimPos: [49.0, escTreadY(49.0), 0], fixed: true, halo: 1.2,
-      haloGain: 0.24, bulbR: 0.08, bulbFlat: 0.4, bulbGain: 0.16, beam: 0.55 });
-    lamp({ name: 'metro_car_int2', kind: 'fluoro', pos: [CARS[1].x + 3.2, CARS[1].y + 2.10, CARS[1].z + 0.55],
-      color: FL.clone(), kelvin: 4300, intensity: 44, distance: 14, cone: 1.30, penumbra: 0.70,
-      dayBase: 1, aimPos: [CARS[1].x + 6.6, CARS[1].y + 3.30, CARS[1].z - 0.25], fixed: true, halo: 0.42,
+    lamp({ name: 'metro_car_int2', kind: 'fluoro', pos: [CARS[1].x + 3.2, CARS[1].y + 2.62, CARS[1].z + 0.55],
+      color: FL.clone(), kelvin: 4300, intensity: 36, distance: 13, cone: 0.98, penumbra: 0.62,
+      dayBase: 1, aimPos: [CARS[1].x + 0.9, CARS[1].y + 1.02, CARS[1].z - 0.98], fixed: true, halo: 0.42,
       haloGain: 0.16, bulbR: 0.04, bulbFlat: 0.4, bulbGain: 0.08, beam: 0.22 });
 
     // ---- the glint cards ----------------------------------------------------
@@ -3596,6 +4566,32 @@
     // and the wreck's marker lamp, doubled in the collapse-bay pool
     if (floodDepth(-2.2, -3.3, N) > 0.004) {
       glint(B, -2.2, -3.3, 3.4, 0.70, new THREE.Color(0.42, 0.13, 0.06), PLAT_FLOOD_Y + 0.007);
+    }
+    // ---- THE TWO CONTINUOUS EMITTERS, DOUBLED -----------------------------
+    // The platform edge line and the pier-mounted red strips are the only two
+    // sources in this level that run the whole 70 m, and neither was reflected
+    // in anything: hero1's floor returned zero coherent reflection of either.
+    // With the flood now reaching the near field there is a surface to put them
+    // on, and a mirrored line is worth more than a mirrored point - it is a
+    // second leading line, on the axis every framing here looks down.
+    var EDGEC = new THREE.Color(0.24, 0.38, 0.26);
+    var STRIPC = new THREE.Color(0.44, 0.09, 0.055);
+    for (s = -1; s <= 1; s += 2) {
+      // under the edge line, 45 cm in from the coping
+      for (i = 0; i < 22; i++) {
+        var egx = HALL_X0 + 2.4 + i * 3.15;
+        if (egx > HALL_X1 - 2.0) break;
+        if (floodDepth(egx, s * (PLAT_EDGE - 0.95), N) < 0.004) continue;
+        glint(B, egx, s * (PLAT_EDGE - 0.95), 3.6, 0.62, EDGEC, PLAT_FLOOD_Y + 0.005);
+      }
+      // and under the red strips on the pier faces
+      for (i = 0; i < 8; i++) {
+        var rgx = HALL_X0 + 5.0 + i * 8.4;
+        if (rgx > HALL_X1 - 2) break;
+        if (s < 0 && rgx > -6 && rgx < 6) continue;
+        if (floodDepth(rgx, s * (ARC_BACK - 0.55), N) < 0.004) continue;
+        glint(B, rgx, s * (ARC_BACK - 0.55), 4.4, 0.70, STRIPC, PLAT_FLOOD_Y + 0.0055);
+      }
     }
 
     glint(B, -21, -TRK_CZ + 1.2, 11.0, 1.10, GC, WATER_Y + 0.010);
@@ -3820,6 +4816,27 @@
       if (surf.detail !== undefined) opts.detail = surf.detail;
       if (surf.detailCm !== undefined) opts.detailCm = surf.detailCm;
       if (surf.meso !== undefined) opts.meso = surf.meso;
+      // ---- PARALLAX AND MACRO, WHICH WERE THE ACTUAL CRUSHED GLASS --------
+      // The library authors `stone` with pom 0.024 and macro 0.20, which is
+      // right for a lit courtyard seen from head height. The platform deck is
+      // seen at 4-14 m at an 8 degree grazing angle in three of five framings,
+      // and at that incidence a 2.4 cm parallax offset resolves as a dense
+      // field of pale 5-10 cm blobs that swim as the camera moves - which is
+      // the "crushed glass" the last two rounds both reported and neither
+      // detail strength nor normal scale could touch, because it is a
+      // DISPLACEMENT artefact and not a normal one. Off, and the macro
+      // variation halved with it.
+      if (surf.pom !== undefined) opts.parallax = surf.pom;
+      if (surf.macro !== undefined) opts.macro = surf.macro;
+      // `rep` is TILES PER WORLD METRE for a triplanar library entry, and it
+      // goes in as triScale rather than repeat - `repeat` is the uv-space
+      // tiling and a triplanar material never reads the uv attribute at all,
+      // which is why every texel density this file thought it had set on the
+      // flood sheet, the deck and the lining was inert. Measured: tinting the
+      // two floor surfaces different colours showed the whole of hero1's floor
+      // was the flood sheet, at the library's own 0.5 tiles/m, i.e. one
+      // aggregate blob every 4.3 cm across 70 m.
+      if (surf.rep !== undefined) opts.triScale = surf.rep;
       // PALETTE. The library anchors plaster to a warm tan (0xd9c3a0) and
       // concrete_wall to a warm grey, which is right for a sunlit exterior and
       // is the reason this level measured 50% orange+yellow in its signature
@@ -4081,14 +5098,17 @@
           var dip = platDip(x, z, noise);
           var pud = M.saturate((dip - 0.028) / 0.032);
           var damp = M.smoothstep(0.004, 0.030, dip) * (1 - pud);
-          // CAPPED AT 0.70, and the cap is measured. The flood basin added to
-          // platDip pushes `dip` past the puddle threshold over most of the
-          // western third, so this channel used to saturate and take the deck
-          // to roughness 0.09 - and granite carries a dense aggregate normal,
-          // so at 0.09 every grain became its own specular glint and 70 m of
-          // platform photographed as crushed glass. 0.70 lands roughness around
-          // 0.24, where the deck is a dark wet sheet with coherent smears in it.
-          var wet = Math.min(0.70, M.saturate(0.22 + pud * 0.66 + damp * 0.34));
+          // CAPPED AT 0.45 OUTSIDE THE PONDS, and the cap is measured twice.
+          // 0.70 lands roughness near 0.24, which is still glossy enough that
+          // every aggregate grain in the granite normal becomes its own
+          // specular pop: the deck measured 0.0419 of vertical HF energy
+          // against the market street floor's 0.0202. The ponds and the flood
+          // sheet carry their own flood_water surface with its own roughness,
+          // so the DRY deck does not need to be a mirror to sell the flood -
+          // it needs to be a damp matte slab that the sheet contrasts against.
+          // `pud` is still allowed to push past the cap, because inside a pond
+          // rim the geometry really is under water.
+          var wet = M.saturate(Math.min(0.45, 0.20 + damp * 0.32) + pud * 0.30);
           // ---- GRIME -------------------------------------------------------
           var gm = M.saturate(0.14 + 0.26 * (noise.fbm2(x * 0.16 + 5, z * 0.16 - 3, 3) * 0.5 + 0.5) +
             M.smoothstep(2.6, 4.9, Math.abs(z)) * 0.20 + pud * 0.14);
@@ -4263,8 +5283,11 @@
     var n = this.emitters.length;
     if (!n || !THREE.InstancedMesh) return;
     var geo = new THREE.BoxGeometry(1, 1, 1);
+    var dtex = null;
+    try { dtex = diffuserTexture(this.rng.fork ? this.rng.fork(0x44494646) : this.rng); }
+    catch (e) { GAME.logError('metro.diffuser', e); dtex = null; }
     var mat = new THREE.MeshBasicMaterial({
-      color: 0xffffff, toneMapped: false, fog: true
+      map: dtex, color: 0xffffff, toneMapped: false, fog: true
     });
     var mesh = new THREE.InstancedMesh(geo, mat, n);
     mesh.name = 'metro_emitters';
@@ -4305,7 +5328,11 @@
   // The probe is raised in update() rather than here, because lighting.js
   // rewrites scene.environmentIntensity every frame and the level updates AFTER
   // it. Without that the metals fixed in SURF would have nothing to return.
-  var FILL_SKY = new THREE.Color(0.30, 0.40, 0.31);   // green-grey, from the vault
+  // The AMBIENT itself has to be green, not green-grey. At (0.30,0.40,0.31) the
+  // fill's own green lead was 33% over red but only 29% over blue, so it read as
+  // a neutral desaturated wash on every surface it reached - and it reaches
+  // every surface, which is why the level measured mean saturation 0.173.
+  var FILL_SKY = new THREE.Color(0.26, 0.42, 0.28);   // green, from the vault
   var FILL_GND = new THREE.Color(0.34, 0.30, 0.24);   // warm grey, off the silt
   LevelMetro.prototype._buildFill = function () {
     if (!THREE.HemisphereLight) return;

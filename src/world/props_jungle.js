@@ -1787,7 +1787,13 @@
     // sealed level - but a mirror-finish drum in a rain forest is its own kind
     // of wrong, and a high roughness plus a capped metalness is what makes a
     // steel can read as steel that has been outdoors for a year.
-    if (typeof mat.metalness === 'number' && mat.metalness > 0.55) mat.metalness = 0.55;
+    // 0.30, not 0.55, and the reason is physics rather than taste: rust is iron
+    // OXIDE and an oxide is a dielectric, so a drum that has stood ten monsoons
+    // has almost no conductive surface left. At 0.55 the six oil drums in the
+    // establishing shot threw away half their diffuse response and photographed
+    // as near-black cylinders (0.026 luminance) on mud at 0.112 - the "props
+    // read as black stickers on a bright field" finding, in its purest form.
+    if (typeof mat.metalness === 'number' && mat.metalness > 0.30) mat.metalness = 0.30;
     mat.name = 'jp_' + name;
     return mat;
   };
@@ -1815,7 +1821,14 @@
     m.wood = this._material('wood_plank', W);
     m.bamboo = this._material('wood_plank',
       { vertexColors: true, albedoTarget: 0x9c9564, hue: 0.85 });
-    m.rust = this._material('rusted_metal', W);
+    // albedoTarget, and it matches level_jungle's SURF.rust exactly - a drum
+    // and the culvert twelve metres from it have to be the same steel.
+    // genRustedMetal's own mean measures 0.067 linear luminance, which is the
+    // albedo of wet coal: against a forest floor at 0.11 every drum, jerrycan
+    // and length of pipe in the level rendered as a black cut-out, which is the
+    // "props read as black stickers pasted onto a bright field" finding.
+    m.rust = this._material('rusted_metal',
+      { vertexColors: true, albedoTarget: 0x7d5a42 });
     m.steel = this._material('painted_metal', W);
     m.olive = this._material('paint_green',
       { vertexColors: true, albedoTarget: 0x3f4a33, hue: 0.9 });

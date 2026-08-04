@@ -857,9 +857,13 @@
     o = origin(CELL.diesel);
     g.save(); g.translate(o[0], o[1]);
     var dg = g.createRadialGradient(S * 0.5, S * 0.5, S * 0.02, S * 0.5, S * 0.5, S * 0.5);
-    dg.addColorStop(0, 'rgba(17,19,24,0.80)');
-    dg.addColorStop(0.30, 'rgba(33,37,46,0.56)');
-    dg.addColorStop(0.68, 'rgba(64,71,84,0.26)');
+    // Half the old opacity. At 0.80 in the centre this photographed on lying
+    // snow as a hard-edged black ELLIPSE - an oil slick with a perfectly round
+    // outline, which is two items on the instant-fail list in one card. A
+    // diesel drip in a snow-covered village is a stain you notice, not a pool.
+    dg.addColorStop(0, 'rgba(19,21,27,0.40)');
+    dg.addColorStop(0.30, 'rgba(35,39,49,0.27)');
+    dg.addColorStop(0.68, 'rgba(64,71,84,0.13)');
     dg.addColorStop(1, 'rgba(80,88,102,0.0)');
     g.fillStyle = dg; g.fillRect(0, 0, S, S);
     // the rainbow film at the edge of a fuel spill, faint - it is a wet mark on
@@ -1928,6 +1932,7 @@
     // adds a foreground mass where a published framing has nothing in its near
     // third, which is the difference between a shot and a survey photograph.
     await this._phase('poses', this._dressPoses);
+    await this._phase('nearmarks', this._dressNearMarks);
     await this._phase('commit', this._commit);
     return this;
   };
@@ -2560,7 +2565,13 @@
   // A ground mark from the prop atlas.
   PropsSnowbound.prototype._mark = function (cell, x, z, w, d, yaw, y, tintC) {
     if (this._markCount === undefined) this._markCount = 0;
-    if (this._markCount > 420) return;
+    // 1100, not 420. The whole ground-mark system across both files came to
+    // 734 triangles - roughly 360 quads for every footprint, tyre rut, shovel
+    // scrape, wood chip, ash spill and diesel stain in a nine-house village -
+    // and the brief names those marks as the specific mechanism by which snow
+    // reads as depth rather than as white paint. 1100 quads is 2,200 triangles,
+    // 0.07% of the frame.
+    if (this._markCount > 1100) return;
     if (!this._inBounds(x, z, 0.4)) return;
     var uv = atlasUV(cell);
     var g = flatCard(w, d === undefined ? w : d, uv[0], uv[1], uv[2], uv[3]);
@@ -4414,6 +4425,84 @@
       if (R.next() < 0.5) {
         this._drop(this.B.plank, bx + R.gaussian(0, 1.2), bz + R.gaussian(0, 1.2),
           { r: 0.2, settleR: 0.55, onRoad: true, onPath: true, tilt: 0.35, cap: false });
+      }
+    }
+  };
+
+  // ==========================================================================
+  // NEAR-FIELD MARKS
+  //
+  // The level owns the footprints and the tyre ruts (it owns the boot/tread
+  // atlas); this file owns everything a YARD leaves on snow - chips where wood
+  // was split, ash tipped out of a stove, spilt straw, diesel and dropped-load
+  // scars.  Round 2 measured the whole system at 734 triangles for the entire
+  // village and the brief names ground marks as the specific mechanism by which
+  // snow reads as depth, so this pass spends the raised budget where fog cannot
+  // wash it out: the first fifteen metres of the published standpoints, and the
+  // ground around the convoy where a stalled column has been worked on.
+  //
+  // It runs LAST of the dressing passes on purpose - marks never block a site,
+  // so it can safely take whatever budget the earlier passes left.
+  // ==========================================================================
+  PropsSnowbound.prototype._dressNearMarks = function () {
+    var L = this.L, R = this.rng, A = this.A, i, j;
+    if (!L) return;
+    var poses = L.cameraPoses || {};
+    var keys = ['hero1', 'hero2', 'hero3', 'overview'];
+    var w = this.windDir;
+
+    for (i = 0; i < keys.length; i++) {
+      var p = poses[keys[i]];
+      if (!p || !p.position) continue;
+      var refY = this._ground(p.position.x, p.position.z);
+      var fx = -Math.sin(p.yaw || 0), fz = -Math.cos(p.yaw || 0);
+      var rx = Math.cos(p.yaw || 0), rz = -Math.sin(p.yaw || 0);
+      for (j = 0; j < 16; j++) {
+        var d = R.range(3.5, 15.0);
+        var lat = R.range(-11.0, 11.0);
+        var mx = p.position.x + fx * d + rx * lat;
+        var mz = p.position.z + fz * d + rz * lat;
+        if (!this._inBounds(mx, mz, 1.0)) continue;
+        if (this._onRoad(mx, mz)) continue;
+        if (this._inChurch(mx, mz, 0)) continue;
+        var my = this._ground(mx, mz);
+        // never on a different shelf from the standpoint - on the ledge that
+        // is the difference between a mark on the ground and a mark on a roof
+        if (Math.abs(my - refY) > 2.2) continue;
+        // chips and straw only. Ash and diesel are near black and near
+        // circular, and on unbroken snow at 8 m they photograph as an oil slick
+        // rather than as anything a village leaves - they stay at the convoy
+        // and the chopping block, where there is a reason for them.
+        var cell = R.next() < 0.62 ? CELL.chips : CELL.straw;
+        this._mark(cell, mx, mz, R.range(0.7, 1.9), R.range(0.6, 1.7),
+          R.range(0, M.TAU), my, null);
+      }
+    }
+
+    // the convoy: dropped loads, spilt fuel and the scuff of boots working
+    // round a stalled column
+    if (A && A.convoy) {
+      for (i = 0; i < A.convoy.length; i++) {
+        var t = A.convoy[i];
+        if (!t || !t.centre) continue;
+        for (j = 0; j < 8; j++) {
+          var a = R.range(0, M.TAU), rr = R.range(2.4, 6.5);
+          var cx = t.centre.x + Math.sin(a) * rr;
+          var cz = t.centre.z + Math.cos(a) * rr;
+          if (!this._inBounds(cx, cz, 1.0)) continue;
+          var cy = this._ground(cx, cz);
+          this._mark(CELL.straw, cx, cz,
+            R.range(0.9, 2.4), R.range(0.8, 2.0), R.range(0, M.TAU), cy, null);
+        }
+        // a dragged crate: a scar running downwind off the tailgate
+        var tx = t.centre.x - Math.sin(t.yaw || 0) * 4.2;
+        var tz = t.centre.z - Math.cos(t.yaw || 0) * 4.2;
+        for (j = 0; j < 5; j++) {
+          var dx2 = tx + w.x * j * 0.85, dz2 = tz + w.y * j * 0.85;
+          if (!this._inBounds(dx2, dz2, 1.0)) continue;
+          this._mark(CELL.straw, dx2, dz2, R.range(0.5, 0.9), 1.0,
+            Math.atan2(w.x, w.y), this._ground(dx2, dz2), null);
+        }
       }
     }
   };

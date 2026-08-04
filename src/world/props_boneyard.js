@@ -4630,7 +4630,14 @@
         tr = traffic(jx, z);
         // a growth field: seed lands where water sits and where the wind drops
         gf = N.fbm2(jx * 0.06 + 4.4, z * 0.06 - 2.2, 3) * 0.5 + 0.5;
-        if (R.next() > (1 - tr) * gf * 0.75) continue;
+        // ---- AND WHERE THE SHADE IS -------------------------------------
+        // _inShade was defined and never called anywhere in this file, which
+        // meant the header's claim that placements consult the level's shade
+        // record was only true of one call. It is true here, and it is true of
+        // the plant: a joint weed in the Sonoran desert lives or dies on
+        // evaporation, so the line of green under a parked wing is denser than
+        // the line of green forty metres out in the open, every time.
+        if (R.next() > (1 - tr) * gf * 0.75 * (self._inShade(jx, z) ? 1.55 : 1.0)) continue;
         cand.push(jx + R.gaussian(0, 0.06), z + R.gaussian(0, 0.30));
       }
     }
@@ -4640,7 +4647,7 @@
       for (x = y.x0 + 2; x < y.x1 - 2; x += R.range(1.2, 4.5)) {
         tr = traffic(x, jz);
         gf = N.fbm2(x * 0.06 - 8.1, jz * 0.06 + 5.5, 3) * 0.5 + 0.5;
-        if (R.next() > (1 - tr) * gf * 0.40) continue;
+        if (R.next() > (1 - tr) * gf * 0.40 * (self._inShade(x, jz) ? 1.55 : 1.0)) continue;
         cand.push(x + R.gaussian(0, 0.30), jz + R.gaussian(0, 0.06));
       }
     }
@@ -4657,7 +4664,6 @@
         scale: R.range(0.55, 1.7), tilt: 0.15, sink: 0.02
       });
     }
-    void self;
   };
 
   // ==========================================================================

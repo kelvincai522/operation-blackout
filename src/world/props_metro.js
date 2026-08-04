@@ -316,8 +316,13 @@
     return g;
   }
   var _cylCache = new Map();
+  // The default was 10 and the scaffold standards, the ladder stiles and the
+  // hose runs all passed 6 or 7 explicitly - visibly faceted on a 26 mm tube
+  // standing four metres from the hero1 lens. 14 on a level running at an
+  // eighth of its triangle budget, and the cache is keyed on segment count so
+  // the cost is bounded.
   function cy(rTop, rBot, len, seg, open) {
-    seg = seg || 10;
+    seg = seg || 14;
     var k = rTop.toFixed(4) + ',' + rBot.toFixed(4) + ',' + len.toFixed(3) + ',' + seg + (open ? 'o' : '');
     var g = _cylCache.get(k);
     if (!g) { g = new THREE.CylinderGeometry(rTop, rBot, len, seg, 1, !!open); _cylCache.set(k, g); }
@@ -1709,17 +1714,17 @@
     var s, k, i;
     for (s = -1; s <= 1; s += 2) {
       for (k = -1; k <= 1; k += 2) {
-        it.cyl('rust', 0.026, 0.026, h, s * HW, h * 0.5, k * HD, 0, 0, 0, 7);
+        it.cyl('rust', 0.026, 0.026, h, s * HW, h * 0.5, k * HD, 0, 0, 0, 16);
         it.box('rust', 0.14, 0.020, 0.14, s * HW, 0.010, k * HD);
       }
     }
     for (i = 1; i <= 3; i++) {
       var ly = i * (h / 3.4);
       for (s = -1; s <= 1; s += 2) {
-        it.cyl('rust', 0.022, 0.022, HD * 2, s * HW, ly, 0, Math.PI * 0.5, 0, 0, 7);
+        it.cyl('rust', 0.022, 0.022, HD * 2, s * HW, ly, 0, Math.PI * 0.5, 0, 0, 14);
       }
       for (k = -1; k <= 1; k += 2) {
-        it.cyl('rust', 0.022, 0.022, HW * 2, 0, ly, k * HD, 0, 0, Math.PI * 0.5, 7);
+        it.cyl('rust', 0.022, 0.022, HW * 2, 0, ly, k * HD, 0, 0, Math.PI * 0.5, 14);
       }
     }
     it.strut('rust', -HW, 0.05, -HD, HW, h * 0.62, -HD, 0.024, 0.024);
@@ -1727,6 +1732,55 @@
     for (i = 0; i < 3; i++) {
       it.boxR('wood', HW * 2 - 0.06, 0.032, 0.30, 0, h * 0.885, -0.32 + i * 0.32,
         0, 0, 0.004);
+    }
+    // ------------------------------------------------------------------------
+    // WHAT IS ON THE DECK, and why it is not optional.
+    //
+    // This tower stands in the vent shaft's beam - the one column of light in
+    // the level - so its boards are lit from directly above and measured 0.635
+    // mean, 2.6x the hero1 frame mean and brighter than every lit fitting in
+    // the frame except the emitters themselves. A broad pale horizontal plane in
+    // the beam is the OPPOSITE of the silhouette the placement comment promises.
+    //
+    // The fix is not to dim the boards - a scaffold board really is pale timber
+    // and the beam really does land on it - it is to put something ON them. A
+    // sheet of polythene weighted at the corners covers two thirds of the deck,
+    // a coil of hose hangs over the edge and a stack of boards stands on end
+    // against the guard rail. All three break the plane, all three are what a
+    // working gang actually leaves, and together they turn the brightest
+    // horizontal in the frame into a legible cluster of objects.
+    // ------------------------------------------------------------------------
+    var dy = h * 0.885 + 0.020;
+    for (i = 0; i < 5; i++) {
+      var sw = HW * 2 - 0.10;
+      // the sheet sags between the boards and lifts at the free corner
+      var sag = Math.sin((i + 0.5) / 5 * Math.PI) * 0.035;
+      it.boxR('fabric', sw, 0.012, 0.20, 0.03, dy + 0.014 - sag,
+        -0.42 + i * 0.20, 0, 0, (i - 2) * 0.010);
+    }
+    // the free corner lifted and folded back on itself
+    it.boxR('fabric', HW * 1.1, 0.011, 0.34, -0.18, dy + 0.10, 0.50, 0.34, 0.22, -0.16);
+    it.boxR('fabric', HW * 0.7, 0.011, 0.26, 0.42, dy + 0.05, 0.44, -0.20, -0.30, 0.10);
+    // a coil of hose hung over the deck edge and hanging down the outside
+    for (i = 0; i < 7; i++) {
+      var ha = i / 7 * TAU;
+      it.tube('cable', 0.030,
+        HW - 0.06 + Math.cos(ha) * 0.16, dy + 0.06 + Math.sin(ha) * 0.14, -0.30,
+        HW - 0.06 + Math.cos(ha + 0.95) * 0.16, dy + 0.06 + Math.sin(ha + 0.95) * 0.14, -0.30, 6);
+    }
+    it.sag('cable', HW - 0.06, dy + 0.02, -0.30, HW + 0.10, dy - 0.85, -0.42, 0.30, 0.030, 6);
+    it.sag('cable', HW + 0.10, dy - 0.85, -0.42, HW - 0.22, 0.06, -0.60, 0.24, 0.030, 6);
+    // boards stood on end against the guard rail - a vertical against a
+    // horizontal, which is the whole point
+    for (i = 0; i < 4; i++) {
+      it.boxR('wood', 0.036, 1.35, 0.19, -HW + 0.14 + i * 0.055, dy + 0.70, -HD + 0.16,
+        0.05 + i * 0.012, 0.03, -0.10 - i * 0.02);
+    }
+    // and the guard rail they lean on
+    it.cyl('rust', 0.022, 0.022, HW * 2, 0, dy + 0.98, -HD, 0, 0, Math.PI * 0.5, 14);
+    it.cyl('rust', 0.022, 0.022, HW * 2, 0, dy + 0.52, -HD, 0, 0, Math.PI * 0.5, 14);
+    for (k = -1; k <= 1; k += 2) {
+      it.cyl('rust', 0.024, 0.024, 1.06, k * HW, dy + 0.53, -HD, 0, 0, 0, 14);
     }
     return it;
   };
@@ -2862,7 +2916,18 @@
     // is coming in.  It stands IN the vent shaft's beam, which is the one
     // vertical column of light in the level - a silhouette against it is worth
     // more than any amount of clutter on the floor.
-    var tx = this.vent.x - 0.20, tz = this.vent.z - 0.30;
+    // ---- WHERE IT STANDS, MEASURED RATHER THAN ASSUMED --------------------
+    // Round 2 asked for this tower to be moved to vent.x + 1.9, vent.z - 1.9 on
+    // the grounds that it sits "3.7 m in front of hero1's stand and directly on
+    // the sightline to the wreck nose". Projected against the published pose -
+    // eye (-14.90, 2.55, 0.90), forward (0.921, -0.389), 75 deg vertical FOV -
+    // the tower at (-9.20, 2.90) lands at screen x 1066 of 1280 and the nose
+    // lands at 618. It is in the right sixth of the frame and always was; the
+    // suggested coordinate projects to 867, i.e. it would have moved the tower
+    // TOWARD the subject, which is the opposite of the intent. Moved a further
+    // 0.65 m south instead (screen x 1158): still inside the vent beam, further
+    // clear of the sightline, and reading as a right-hand framing element.
+    var tx = this.vent.x - 0.20, tz = this.vent.z + 0.35;
     var ty = this._ground(tx, tz);
     this._place(K.scaffold(2.85), tx, ty, tz, 0.06);
     this._collider(tx, ty, tz, [0.80, 1.45, 0.62], 0.06, 'metal');

@@ -664,16 +664,63 @@
     return g.canvas;
   }
 
-  // ---- marks atlas: 2 x 2 ---------------------------------------------------
-  // 0 soot ring   1 chalked inventory number   2 bird lime   3 damp ring
+  // ---- marks atlas: 3 x 3 ---------------------------------------------------
+  // 0 soot ring        1 chalked inventory number   2 bird lime
+  // 3 damp ring        4 WATER-STAIN DRIP           5 MINERAL / SILT RUN
+  // 6 ALGAE WEEP       7 -                          8 -
+  //
+  // Cells 4-6 are new and they are the single most characteristic weathering
+  // on Khmer sandstone: the dark vertical streak that runs down from every
+  // projecting cornice, lintel and string course where nine hundred monsoons
+  // have shed off the moulding above and washed the same line of wall. The
+  // level authored a stain mark in its own atlas and never placed one below a
+  // projection - photographed, the centre prasat carries four separate
+  // projecting mouldings and there was not one streak under any of them.
+  var MN = 3;
   function markUV(i, pad) {
-    pad = pad === undefined ? 0.005 : pad;
-    var c = i % 2, r = (i / 2) | 0;
-    return [c * 0.5 + pad, 1 - (r + 1) * 0.5 + pad, (c + 1) * 0.5 - pad, 1 - r * 0.5 - pad];
+    pad = pad === undefined ? 0.004 : pad;
+    var c = i % MN, r = (i / MN) | 0, s = 1 / MN;
+    return [c * s + pad, 1 - (r + 1) * s + pad, (c + 1) * s - pad, 1 - r * s - pad];
+  }
+
+  // A single run of water off a drip edge: widest and darkest at the top where
+  // it leaves the moulding, forking and fading as it spreads down the face.
+  function drip(g, rng, x, y0, len, w, top, mid, tail, fork) {
+    var grd = g.createLinearGradient(0, y0, 0, y0 + len);
+    grd.addColorStop(0, top);
+    grd.addColorStop(0.30, mid);
+    grd.addColorStop(0.72, tail);
+    grd.addColorStop(1, tail.replace(/[\d.]+\)$/, '0)'));
+    g.fillStyle = grd;
+    // the run wanders: eight quads down the face rather than one rectangle,
+    // each one offset and narrowed, so the streak has an edge that is not a
+    // ruled line
+    var cx = x, cw = w;
+    for (var s = 0; s < 8; s++) {
+      var t = s / 8;
+      g.fillRect(cx - cw * 0.5, y0 + len * t, cw, len / 8 + 1);
+      cx += rng.range(-w * 0.30, w * 0.30);
+      cw *= rng.range(0.86, 1.06);
+    }
+    if (fork && len > 40) {
+      var fx = x + rng.range(-w * 1.4, w * 1.4);
+      var fy = y0 + len * rng.range(0.18, 0.45);
+      var fl = (y0 + len) - fy;
+      var fw2 = w * rng.range(0.35, 0.62);
+      var g2 = g.createLinearGradient(0, fy, 0, fy + fl);
+      g2.addColorStop(0, mid);
+      g2.addColorStop(1, tail.replace(/[\d.]+\)$/, '0)'));
+      g.fillStyle = g2;
+      for (var s2 = 0; s2 < 6; s2++) {
+        g.fillRect(fx - fw2 * 0.5, fy + fl * (s2 / 6), fw2, fl / 6 + 1);
+        fx += rng.range(-fw2 * 0.4, fw2 * 0.4);
+        fw2 *= rng.range(0.88, 1.04);
+      }
+    }
   }
 
   function buildMarks(rng) {
-    var S = 512, C = S / 2;
+    var S = 768, C = S / MN;
     var g = ctx2d(S, S);
     if (!g) return null;
     g.clearRect(0, 0, S, S);
@@ -723,7 +770,7 @@
     g.restore();
 
     // ---- 2: bird lime -------------------------------------------------------
-    g.save(); g.translate(0, C);
+    g.save(); g.translate(2 * C, 0);
     for (i = 0; i < 26; i++) {
       var lx = rng.range(C * 0.06, C * 0.92), ly = rng.range(0, C * 0.32);
       var ll = rng.range(C * 0.10, C * 0.52);
@@ -739,7 +786,7 @@
     g.restore();
 
     // ---- 3: damp ring under a jar ------------------------------------------
-    g.save(); g.translate(C, C);
+    g.save(); g.translate(0, C);
     var grd3 = g.createRadialGradient(C * 0.5, C * 0.5, C * 0.16, C * 0.5, C * 0.5, C * 0.46);
     grd3.addColorStop(0, 'rgba(30,32,28,0.0)');
     grd3.addColorStop(0.42, 'rgba(32,34,30,0.46)');
@@ -755,6 +802,121 @@
       g.fill();
     }
     g.globalAlpha = 1; g.restore();
+
+    // ---- 4: WATER-STAIN DRIP -----------------------------------------------
+    // Dark, cool and organic-loaded: run-off off a cornice carries a decade of
+    // wind-blown dust and it grows a black biofilm where it stays damp longest.
+    // Six or seven runs of unequal length, because rain does not leave a
+    // fringe - it finds the LOW POINTS of the drip edge and comes off those.
+    g.save(); g.translate(C, C);
+    g.globalAlpha = 1;
+    for (i = 0; i < 7; i++) {
+      var dx4 = C * (0.10 + i * 0.132) + rng.range(-C * 0.035, C * 0.035);
+      var dl4 = C * rng.range(0.44, 0.98);
+      var dw4 = C * rng.range(0.030, 0.088);
+      var dv4 = rng.range(0.44, 0.86);
+      drip(g, rng, dx4, C * rng.range(0.0, 0.06), dl4, dw4,
+        'rgba(26,25,21,' + dv4.toFixed(3) + ')',
+        'rgba(38,38,32,' + (dv4 * 0.74).toFixed(3) + ')',
+        'rgba(54,54,46,' + (dv4 * 0.30).toFixed(3) + ')', rng.bool(0.55));
+    }
+    // the dark bead along the drip edge itself, which is where the run starts
+    var grd4 = g.createLinearGradient(0, 0, 0, C * 0.13);
+    grd4.addColorStop(0, 'rgba(22,22,19,0.72)');
+    grd4.addColorStop(1, 'rgba(40,40,34,0)');
+    g.fillStyle = grd4;
+    g.fillRect(0, 0, C, C * 0.13);
+    // black algae speckle inside the wettest runs
+    for (i = 0; i < 90; i++) {
+      g.globalAlpha = rng.range(0.10, 0.34);
+      g.fillStyle = rng.bool(0.6) ? 'rgb(18,34,20)' : 'rgb(24,24,20)';
+      g.beginPath();
+      g.arc(rng.range(0, C), rng.range(0, C * 0.86), C * rng.range(0.004, 0.017), 0, 6.283);
+      g.fill();
+    }
+    g.globalAlpha = 1; g.restore();
+
+    // ---- 5: MINERAL / SILT RUN ----------------------------------------------
+    // The other half of the same story and the one that stops every streak in
+    // the level being a dark one: lime leached out of the bedding mortar
+    // deposits a PALE run under a projection that sheds fast, and the silt
+    // washed off a cornice top dries to a warm tan fan. On a shadow elevation
+    // a pale streak is the only weathering that is visible at all.
+    g.save(); g.translate(2 * C, C);
+    for (i = 0; i < 6; i++) {
+      var sx5 = C * (0.12 + i * 0.155) + rng.range(-C * 0.04, C * 0.04);
+      var sl5 = C * rng.range(0.36, 0.90);
+      var sw5 = C * rng.range(0.038, 0.105);
+      var sv5 = rng.range(0.24, 0.52);
+      drip(g, rng, sx5, C * rng.range(0.0, 0.08), sl5, sw5,
+        'rgba(196,186,164,' + sv5.toFixed(3) + ')',
+        'rgba(174,163,140,' + (sv5 * 0.66).toFixed(3) + ')',
+        'rgba(152,142,122,' + (sv5 * 0.26).toFixed(3) + ')', rng.bool(0.4));
+    }
+    for (i = 0; i < 60; i++) {
+      g.globalAlpha = rng.range(0.06, 0.22);
+      g.fillStyle = rng.bool(0.5) ? 'rgb(150,134,100)' : 'rgb(112,100,76)';
+      g.beginPath();
+      g.arc(rng.range(0, C), rng.range(0, C), C * rng.range(0.008, 0.030), 0, 6.283);
+      g.fill();
+    }
+    g.globalAlpha = 1; g.restore();
+
+    // ---- 6: ALGAE WEEP ------------------------------------------------------
+    // Where a moulding holds water rather than shedding it - a broken cornice,
+    // a blocked drip - the run is green-black and it stays wet. This is the
+    // one streak that carries chroma, and in a level measuring 74% of its
+    // chroma inside a single red bin that is worth having.
+    g.save(); g.translate(0, 2 * C);
+    for (i = 0; i < 5; i++) {
+      var ax6 = C * (0.14 + i * 0.185) + rng.range(-C * 0.05, C * 0.05);
+      var al6 = C * rng.range(0.30, 0.82);
+      var aw6 = C * rng.range(0.050, 0.130);
+      var av6 = rng.range(0.38, 0.80);
+      drip(g, rng, ax6, C * rng.range(0.0, 0.05), al6, aw6,
+        'rgba(22,52,24,' + av6.toFixed(3) + ')',
+        'rgba(34,74,32,' + (av6 * 0.72).toFixed(3) + ')',
+        'rgba(44,86,40,' + (av6 * 0.28).toFixed(3) + ')', rng.bool(0.5));
+    }
+    for (i = 0; i < 120; i++) {
+      g.globalAlpha = rng.range(0.14, 0.48);
+      g.fillStyle = rng.bool(0.5) ? 'rgb(26,66,26)' : 'rgb(46,102,38)';
+      g.beginPath();
+      g.arc(rng.range(0, C), rng.range(0, C * 0.9), C * rng.range(0.005, 0.022), 0, 6.283);
+      g.fill();
+    }
+    g.globalAlpha = 1; g.restore();
+
+    // ---- FEATHER THE SIDES OF EVERY STREAK CELL -----------------------------
+    // A decal is a quad, and a streak whose alpha is still high at the quad's
+    // left or right edge shows the quad. The TOP edge is left hard on purpose:
+    // that edge is registered against the drip line of a real moulding and it
+    // is supposed to start abruptly there.
+    (function () {
+      var fp = C * 0.10;
+      for (var fk = 4; fk <= 6; fk++) {
+        var oc = (fk % MN) * C, orow = ((fk / MN) | 0) * C;
+        g.save();
+        g.globalCompositeOperation = 'destination-out';
+        g.globalAlpha = 1;
+        var sides = [
+          [oc, orow, fp, C, oc, 0, oc + fp, 0],
+          [oc + C - fp, orow, fp, C, oc + C, 0, oc + C - fp, 0],
+          [oc, orow + C - fp, C, fp, 0, orow + C, 0, orow + C - fp]
+        ];
+        for (var sq = 0; sq < sides.length; sq++) {
+          var sv = sides[sq];
+          var gr = g.createLinearGradient(sv[4], sv[5], sv[6], sv[7]);
+          gr.addColorStop(0, 'rgba(0,0,0,1)');
+          gr.addColorStop(0.6, 'rgba(0,0,0,0.4)');
+          gr.addColorStop(1, 'rgba(0,0,0,0)');
+          g.fillStyle = gr;
+          g.fillRect(sv[0], sv[1], sv[2], sv[3]);
+        }
+        g.restore();
+      }
+    })();
+    g.globalAlpha = 1;
     return g.canvas;
   }
 
@@ -928,6 +1090,7 @@
     await this._phase('causeway', this._dressCauseway);
     await this._phase('water', this._dressWater);
     await this._phase('growth', this._dressGrowth);
+    await this._phase('stains', this._dressStains);
     await this._phase('debris', this._dressDebris);
     await this._phase('commit', this._commit);
     return this;
@@ -3331,7 +3494,10 @@
       var moat = p.name && p.name.indexOf('moat') === 0;
       // the moat is 32 m long and mostly seen at a distance; the courtyard
       // pools are seen from two metres, so they get the detail
-      var want = Math.round(area * (moat ? 0.055 : 0.115));
+      // A `shallow` sheet is a rain film lying on flagstones, not a pond: a
+      // lily needs 20 cm of standing water and a root in mud, so it gets pads
+      // and lotus at zero and keeps only the bank growth.
+      var want = p.shallow ? 0 : Math.round(area * (moat ? 0.055 : 0.115));
       for (k = 0; k < want; k++) {
         // bias hard toward the edge: sample a point, then push it outward
         var ex = rng.next(), ez = rng.next();
@@ -3423,6 +3589,19 @@
       }
     }
     return out;
+  };
+
+  // Is this point on the bare crown of the overview knoll? The mound is a
+  // collapsed boundary shrine under a metre of soil: the rain runs off it, the
+  // soil is thin, and nothing with mass grows there. Every pass that is not
+  // the knoll's own pass has to know that, because the establishing standpoint
+  // stands on it.
+  PropsRuins.prototype._onCrest = function (x, z) {
+    var K = this.A && this.A.knoll;
+    if (!K || !K.centre) return false;
+    var dx = x - K.centre.x, dz = z - K.centre.z;
+    var r = (K.radius || 17) * 0.62;
+    return (dx * dx + dz * dz) < r * r;
   };
 
   PropsRuins.prototype._dressGrowth = function () {
@@ -3577,6 +3756,7 @@
         z = tr.centre.z + Math.sin(ta) * trr;
         if (this._blocked(x, z, 0.12, 0.9)) continue;
         if (this._pathDist(x, z) < 2.2) continue;
+        if (this._onCrest(x, z)) continue;
         var big = rng.bool(0.40);
         var bs = rng.range(0.6, 1.35);
         this.plant(big ? 'bigleaf' : (rng.bool(0.5) ? 'fernA' : 'flower'),
@@ -3629,8 +3809,23 @@
         var flank = M.smoothstep(K.radius * 0.30, K.radius * 0.80, kr);
         if (!rng.bool(0.25 + flank * 0.70)) continue;
         var ks = rng.range(0.55, 0.85) + flank * rng.range(0.15, 0.75);
-        var kk = rng.next() * (0.35 + flank * 0.85);
-        this.plant(kk < 0.30 ? 'bigleaf' : (kk < 0.62 ? 'fernA' : (kk < 0.90 ? 'flower' : 'sapling')),
+        // THE SPECIES SELECTOR WAS INVERTED. `rng.next() * (0.35 + flank*0.85)`
+        // produces its SMALLEST values on the crest, where flank is 0 - and the
+        // smallest bucket is 'bigleaf'. So the rule that the comment above
+        // spells out ("mass grows with distance DOWN from the crest, nothing
+        // big stands on a scoured summit") was doing precisely the opposite,
+        // and the establishing shot's foreground was a bank of three-metre
+        // elephant-ear leaves and white flowers two metres from the lens.
+        // Selecting ON flank rather than on a value scaled BY it: the crest
+        // gets grass and low fern, the flank and the gullies get the mass.
+        var kr2 = rng.next();
+        var kind2;
+        if (kr2 < 0.34 * flank * flank) kind2 = 'bigleaf';
+        else if (kr2 < 0.30 + 0.30 * flank) kind2 = 'fernA';
+        else if (kr2 < 0.62 + 0.12 * flank) kind2 = 'grassA';
+        else if (kr2 < 0.84) kind2 = 'fernB';
+        else kind2 = flank > 0.55 ? 'sapling' : 'grassB';
+        this.plant(kind2,
           x, z, rng.range(0, 6.283), ks, ks * rng.range(0.8, 1.25), ks, 0.45, 0.05,
           this.leafTint(rng, rng.range(0, 0.45)));
       }
@@ -3646,6 +3841,13 @@
         var inPrecinct = (Math.abs(x) < 33 && z > -46 && z < 27);
         var onRoad = (Math.abs(x) < 27 && z > 22 && z < 60);
         if (inPrecinct || onRoad) continue;
+        // THE KNOLL HAS ITS OWN PASS AND ITS OWN RULE. This one does not know
+        // about the mound, and 40% of what it plants is a three-metre
+        // elephant-ear leaf - so it was seeding the establishing shot's own
+        // standpoint, and what the published overview carried in its
+        // bottom-right corner was a bank of clip-art foliage a metre and a
+        // half from the lens. A scoured hill crest grows grass.
+        if (this._onCrest(x, z)) continue;
         if (this._blocked(x, z, 0.15, 1.2)) continue;
         var dj = M.saturate(this.noise.fbm2(x * 0.055 + 2.0, z * 0.055 - 6.0, 3) * 1.5 + 0.5);
         if (!rng.bool(dj * 0.55)) continue;
@@ -3655,6 +3857,171 @@
           x, z, rng.range(0, 6.283), js, js * rng.range(0.8, 1.3), js, 0.5, 0.05,
           this.leafTint(rng, rng.range(0, 0.4)));
       }
+    }
+  };
+
+  // ==========================================================================
+  // WATER STAINING - the drip pass
+  //
+  // The finding, and it is the first of the four weathering behaviours the
+  // brief names: "no masonry anywhere in the seven frames carries water
+  // staining". Confirmed at 3x zoom on the centre prasat, which carries four
+  // separate projecting horizontal mouldings with not one streak below any of
+  // them; and on the 580 px enclosure wall that fills half the outer court.
+  //
+  // The finding proposed extending the wall-foot distribution loop. That loop
+  // is the wrong place and it would have been guesswork: it walks the ANCHOR
+  // BOXES, which know a wall's plan rectangle and nothing about where its
+  // cornices are - and the towers taper, so a fixed half-width hangs the mark
+  // in mid-air beside the silhouette (which is exactly how the first attempt
+  // at gate-tower marks failed in level_ruins.js's own pass). So level_ruins.js
+  // now RECORDS every projecting horizontal as it builds it - wall cornice
+  // stations with their exact settlement, and prasat cornice rings with the
+  // half-width of the storey underneath - and publishes the list as
+  // anchors.cornices. This pass hangs the runs off it.
+  //
+  // Density follows SHADE, off the same term the growth pass uses: the sun
+  // bears 31.6 degrees west of north, so a face turned away from that bearing
+  // never dries and carries the heaviest, blackest staining, while a face that
+  // takes the morning sun gets a paler mineral run instead. Nothing here is
+  // scattered - every mark starts on a real drip edge and runs down.
+  // ==========================================================================
+  PropsRuins.prototype._shadeOf = function (nx, nz) {
+    var l = Math.sqrt(nx * nx + nz * nz) || 1;
+    var lit = (nx / l) * this._sun.x + (nz / l) * this._sun.z;
+    return M.saturate(0.5 - lit * 0.52);
+  };
+
+  // One run of staining on a vertical face. `dy` is the drip edge, `len` how
+  // far it runs, `yaw` the face's outward bearing.
+  PropsRuins.prototype._streak = function (rng, x, dy, z, yaw, len, wide, shade) {
+    // 4 dark water stain, 5 pale mineral/silt, 6 green algae weep. A shaded
+    // face that never dries goes dark and eventually green; a face that sheds
+    // fast leaves lime behind instead. Below about 0.35 of shade the dark run
+    // simply is not what happens.
+    var r = rng.next();
+    var cell = (r < 0.58 + shade * 0.24) ? 4
+      : (r < 0.86 + shade * 0.08 ? 5 : 6);
+    // Value carried by the mark: the 'marks' bucket is not on the wear path
+    // (see _paintFlat), so this is a plain multiplier on the texture. Pulled
+    // down from 0.72, because the pale mineral runs were reading on the lit
+    // elevations and the dark ones were not - and it is the dark drip that the
+    // brief names first.
+    var v = 0.58 + shade * 0.30 + rng.range(-0.09, 0.09);
+    this.markWall(cell, x, dy - len * 0.5, z, wide, len, yaw,
+      { grime: M.clamp(v, 0.35, 1.25), wet: 1, edge: 1 });
+  };
+
+  PropsRuins.prototype._dressStains = function () {
+    if (!this._ok) return;
+    var A = this.A;
+    var rng = this.rng.fork ? this.rng.fork(0x5747) : this.rng;
+    var i, k;
+
+    // ---- 1. every cornice the level recorded as it built it -----------------
+    var corn = A.cornices || [];
+    for (i = 0; i < corn.length; i++) {
+      var C0 = corn[i];
+      if (C0.run) {
+        // a wall-cornice station: two faces, at b +/- t/2
+        var horiz = (C0.axis === 'x');
+        var b0 = horiz ? C0.z : C0.x;
+        for (var sgn = -1; sgn <= 1; sgn += 2) {
+          var nx = horiz ? 0 : sgn, nz = horiz ? sgn : 0;
+          var shade = this._shadeOf(nx, nz);
+          // Two or three runs a station, at 0.62-0.96 of probability. The
+          // first pass ran one at 0.36 and put about two streaks on a seven
+          // metre wall, which photographed as no streaks at all. Real runoff
+          // off a cornice finds every low point along the drip edge; the
+          // moulding is continuous and the staining under it is nearly so.
+          var nRun = 2 + (rng.bool(0.34 + shade * 0.44) ? 1 : 0);
+          for (k = 0; k < nRun; k++) {
+            if (!rng.bool(0.62 + shade * 0.34)) continue;
+            // jittered along the moulding: run-off leaves a drip edge at its
+            // LOW POINTS, not on a fringe, so the stations must not line up
+            var al = rng.range(-C0.half * 0.86, C0.half * 0.86);
+            var fx = horiz ? C0.x + al : b0 + sgn * (C0.t * 0.5 + 0.045);
+            var fz = horiz ? b0 + sgn * (C0.t * 0.5 + 0.045) : C0.z + al;
+            var yaw = horiz ? (sgn > 0 ? 0 : Math.PI) : (sgn > 0 ? 1.5708 : -1.5708);
+            this._streak(rng, fx, C0.y - 0.05, fz, yaw,
+              rng.range(1.5, 3.0), rng.range(0.95, 2.05), shade);
+          }
+        }
+      } else if (C0.ring && !C0.face) {
+        // a prasat cornice ring. The FACE storeys are skipped: a Bayon head
+        // fills 87% of its storey's width and stands a metre proud of it, so a
+        // streak laid at the storey's own half-width would be buried in the
+        // carving or hanging in front of it.
+        for (k = 0; k < 4; k++) {
+          var ya = k * 1.5708;
+          var sn = Math.sin(ya), cs = Math.cos(ya);
+          var sh2 = this._shadeOf(sn, cs);
+          var nq = 2 + (rng.bool(0.55 + sh2 * 0.40) ? 1 : 0);
+          for (var q = 0; q < nq; q++) {
+            if (!rng.bool(0.66 + sh2 * 0.30)) continue;
+            var off = rng.range(-C0.hw * 0.62, C0.hw * 0.62);
+            var rlen = Math.min(C0.drop * 0.88, rng.range(1.4, 2.8));
+            if (rlen < 0.5) continue;
+            this._streak(rng,
+              C0.x + sn * (C0.hw + 0.05) + cs * off, C0.y - 0.04,
+              C0.z + cs * (C0.hw + 0.05) - sn * off, ya,
+              rlen, rng.range(0.85, 1.75), sh2);
+          }
+        }
+      }
+    }
+
+    // ---- 2. the gallery eaves ------------------------------------------------
+    // The gallery's outer wall carries no cornice - the corbelled vault sits
+    // straight on it - so the drip edge is the vault's own overhang at roofY,
+    // and it sheds along sixty metres of the longest wall in the level.
+    var G = A.gallery;
+    if (G && G.roofY) {
+      var eaves = [
+        { ax: 'x', a0: G.x0, a1: G.x1, b: G.z1, out: 1 },
+        { ax: 'x', a0: G.x0, a1: G.x1, b: G.z0, out: -1 },
+        { ax: 'z', a0: G.z0, a1: G.z1, b: G.x0, out: -1 },
+        { ax: 'z', a0: G.z0, a1: G.z1, b: G.x1, out: 1 }
+      ];
+      for (i = 0; i < eaves.length; i++) {
+        var E = eaves[i];
+        var hz = (E.ax === 'x');
+        var esh = this._shadeOf(hz ? 0 : E.out, hz ? E.out : 0);
+        var en = Math.round(Math.abs(E.a1 - E.a0) / 2.3);
+        for (k = 0; k < en; k++) {
+          var ea = E.a0 + (k + 0.5) * (E.a1 - E.a0) / en + rng.range(-0.8, 0.8);
+          // the west run is down over the breach - nothing to stain there
+          if (E.ax === 'z' && E.out < 0 && ea > -22.5 && ea < -10.5) continue;
+          var dens = M.saturate(this.noise.fbm2(ea * 0.14 + i * 6.1, E.b * 0.09, 3) * 1.5 + 0.36);
+          if (!rng.bool(dens * (0.55 + esh * 0.45))) continue;
+          var ex = hz ? ea : E.b + E.out * 0.055;
+          var ez = hz ? E.b + E.out * 0.055 : ea;
+          this._streak(rng, ex, G.roofY - 0.12, ez,
+            hz ? (E.out > 0 ? 0 : Math.PI) : (E.out > 0 ? 1.5708 : -1.5708),
+            rng.range(1.8, 3.4), rng.range(1.0, 2.2), esh);
+        }
+      }
+    }
+
+    // ---- 3. the library eaves ------------------------------------------------
+    var libs = A.libraries || [];
+    for (i = 0; i < libs.length; i++) {
+      var L2 = libs[i];
+      if (!L2.centre) continue;
+      var lc = Math.cos(L2.yaw || 0), ls = Math.sin(L2.yaw || 0);
+      for (k = 0; k < 10; k++) {
+        var lq = (k % 4) * 1.5708 + (L2.yaw || 0);
+        var lhw = ((k % 2) === 0 ? L2.w : L2.d) * 0.5 + 0.34;
+        var lsn = Math.sin(lq), lcs = Math.cos(lq);
+        var lsh = this._shadeOf(lsn, lcs);
+        if (!rng.bool(0.34 + lsh * 0.46)) continue;
+        var loff = rng.range(-lhw * 0.72, lhw * 0.72);
+        this._streak(rng,
+          L2.centre.x + lsn * lhw + lcs * loff, (L2.eave || 3.4) - 0.15,
+          L2.centre.z + lcs * lhw - lsn * loff, lq,
+          rng.range(1.3, 2.4), rng.range(0.8, 1.6), lsh);
+      }
+      void lc; void ls;
     }
   };
 
@@ -4039,7 +4406,12 @@
         var mp = this.mats.smoke.map;
         mp.offset.y = -this.time * 0.055;
         mp.offset.x = Math.sin(this.time * 0.19) * 0.03;
-        this.mats.smoke.opacity = 0.26 + 0.06 * Math.sin(this.time * 0.6);
+        // 0.11, not 0.26. The constructor was lowered to 0.11 with a note
+        // explaining that a white plume at 0.30 read as a four-metre pale
+        // column standing in mid-air over the looters' camp in hero1 - and
+        // then this line put it straight back to 0.26 on the first frame of
+        // every capture, so the fix never reached a photograph.
+        this.mats.smoke.opacity = 0.105 + 0.025 * Math.sin(this.time * 0.6);
       }
     } catch (e) { GAME.logError('propsR.update', e); }
   };
