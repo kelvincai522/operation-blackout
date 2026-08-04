@@ -150,10 +150,17 @@ server rather than `file://`, because `file://` gives scripts an opaque origin
 and collapses every JS error to `"Script error."` with no line number.
 
 `analyze.py` reports exposure, black crush, highlight clipping, edge density,
-untextured-area fraction, and the shadow/highlight tint split. Its `repetition`
-metric is **advisory only** — it collapses each image row to a mean, so on a 3D
-perspective scene it largely measures profile smoothness rather than texture
-tiling. Don't tune against it.
+untextured-area fraction, and the shadow/highlight tint split. Two of its metrics
+carry warnings, both earned the hard way:
+
+- `repetition` is **advisory only** — it collapses each image row to a mean, so
+  on a 3D perspective scene it largely measures profile smoothness rather than
+  texture tiling. Don't tune against it.
+- `coverage.dead_cell_pct` is **saturated** and retained only so older recorded
+  numbers stay readable. Judged on a cell's 95th percentile, it returned 0.00%
+  on every frame it was ever run against — including both frozen references —
+  so it could neither pass nor fail anything. Gate on
+  `coverage.dead_cell_med_pct` instead. See DEVELOPMENT.md for the measurements.
 
 ## Known limitations
 

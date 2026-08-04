@@ -69,24 +69,59 @@ def dead_regions(gray, grid=8, thresh=0.045):
 
     Mean luminance hides this completely: a frame whose bottom half is an empty
     void and whose top half is bright fog averages out to a perfectly healthy
-    number. This splits the image into a grid and asks, per cell, whether even
-    its 95th percentile is below a visibility floor -- i.e. whether there is
-    anything in that cell a player could actually see.
+    number. This splits the image into a grid and asks, per cell, whether that
+    cell holds anything a player could actually see.
 
-    Also reports the vertical split, because "the ground is missing" is the
-    specific failure this exists to catch.
+    *** dead_cell_pct (95th percentile) IS SATURATED. GATE ON dead_cell_med_pct. ***
+
+    The p95 variant was the original statistic and it is worthless in practice.
+    Because a cell here is 160x90 = 14,400 px, the 95th percentile lets 720
+    bright pixels redeem an otherwise pitch-black cell -- so one lit troffer, one
+    lamp glow, one strip light anywhere in the cell passes it. Measured across
+    eight frames spanning the best and worst content in the build, it returned
+    0.00% on ALL EIGHT, including both frozen references. A metric that reports
+    the same value for street.png and for a bunker interior with 43% of its
+    pixels under L=0.05 has no discriminating power at all, and it was being
+    quoted as evidence of health.
+
+    The per-cell MEDIAN discriminates cleanly, and it ranks frames the way three
+    independent critics ranked them by eye:
+
+        street.png (frozen ref)      p95 0.00%   median  1.56%
+        quay.png   (frozen ref)      p95 0.00%   median  4.69%
+        lv_hero1_refinery            p95 0.00%   median  3.12%
+        lv_hero1_metro               p95 0.00%   median 17.19%
+        lv_hero3_bunker              p95 0.00%   median 25.00%
+        lv_hero2_bunker              p95 0.00%   median 31.25%
+        lv_interior_bunker           p95 0.00%   median 42.19%
+
+    dead_cell_pct is kept only so the many numbers already recorded in commit
+    messages and source comments remain readable. Do not gate on it.
+
+    Note on darkness generally: near_black_pct (< 8/255) is reported but
+    deliberately NOT gated. It reads 26.9% on the bunker interior and 2.6% on the
+    market street, and that difference is mostly the levels being different --
+    a buried facility SHOULD be dark. Legibility, not darkness, is the defect.
     """
     h, w = gray.shape
     ch, cw = h // grid, w // grid
     dead = 0
+    dead_med = 0
     for r in range(grid):
         for c in range(grid):
             cell = gray[r * ch:(r + 1) * ch, c * cw:(c + 1) * cw]
-            if cell.size and np.percentile(cell, 95) < thresh:
+            if not cell.size:
+                continue
+            if np.percentile(cell, 95) < thresh:
                 dead += 1
+            if np.median(cell) < thresh:
+                dead_med += 1
     top = gray[: h // 2]
     bottom = gray[h // 2:]
     return {
+        # the real gate: half the cell is below the visibility floor
+        "dead_cell_med_pct": round(100.0 * dead_med / (grid * grid), 2),
+        # ADVISORY / HISTORICAL ONLY - saturated at 0.00, see the docstring
         "dead_cell_pct": round(100.0 * dead / (grid * grid), 2),
         "top_half_mean": round(float(top.mean()), 4),
         "bottom_half_mean": round(float(bottom.mean()), 4),
@@ -223,7 +258,15 @@ VERDICTS = [
     ("detail.flat_area_pct", ">", 45.0, "huge untextured areas - missing detail/normal/roughness variation"),
     ("detail.edge_energy", "<", 0.020, "very little edge detail - geometry and textures are too simple"),
     ("colour.grade_split", "<", 0.004, "no meaningful colour grade (shadows/highlights share a tint)"),
-    ("coverage.dead_cell_pct", ">", 18.0, "large areas of the frame contain nothing visible (unlit or missing geometry)"),
+    # Gate on the median, not the p95 sibling below. Calibrated against the two
+    # frozen references (street 1.56%, quay 4.69%) and the best-scoring level
+    # (refinery hero1 3.12%); the frames critics independently called illegible
+    # land at 17-42%.
+    ("coverage.dead_cell_med_pct", ">", 12.0, "large areas of the frame contain nothing visible (unlit or missing geometry)"),
+    # dead_cell_pct is SATURATED - it measured 0.00% on all eight frames it was
+    # tested against, including both frozen references, so it can neither pass
+    # nor fail anything. Retained for reading historical numbers only; see the
+    # dead_regions docstring. Never restore this as a gate.
     ("coverage.vertical_imbalance", ">", 3.0, "lower half far darker than upper - ground plane likely unlit or absent"),
     ("colour.mean_saturation", "<", 0.04, "nearly monochrome"),
     ("colour.mean_saturation", ">", 0.55, "oversaturated - breaks the photographic look"),

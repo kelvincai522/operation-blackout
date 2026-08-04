@@ -150,7 +150,8 @@ player dying within 10 seconds of spawn.
 | `dynamic_range` | Below ~0.45 reads as flat and washed |
 | `flat_area_pct` | Untextured surface area — missing normal/roughness detail |
 | `grade_split` | Positive = warm highlights over cool shadows (the target look). Near zero or negative means the grade is not landing. |
-| `coverage.dead_cell_pct` | % of an 8×8 grid whose *95th percentile* is below a visibility floor — i.e. cells containing nothing a player could see. Target under 12. |
+| `coverage.dead_cell_med_pct` | % of an 8×8 grid whose *median* is below a visibility floor — cells that are more than half illegible. **This is the gate.** Target under 12. |
+| `coverage.dead_cell_pct` | **Saturated — do not gate on it.** The same grid judged on the *95th percentile*. See below. |
 | `coverage.vertical_imbalance` | top-half mean ÷ bottom-half mean. Above ~2.5 on a ground-level camera means the floor is unlit or missing. Target under 2.5. |
 | `repetition` | **Advisory only.** It collapses each row to a mean, so on a 3D perspective scene it measures profile smoothness, not texture tiling. It reported the same "peak" for two frame halves showing different walls. Do not tune against it. |
 
@@ -164,6 +165,33 @@ averaged against a dead floor produces a perfectly normal-looking number.
 coverage check at 0.0% dead cells while a large untextured mound occupied half
 the frame: `coverage` detects missing *light*, not missing *material*. Always
 read the PNG.
+
+**And a metric can be worse than useless — it can be saturated.** `dead_cell_pct`
+originally judged each cell on its 95th percentile. A cell is 160×90 = 14,400
+pixels, so the 95th percentile lets 720 bright pixels redeem an otherwise pitch
+black cell: one lit troffer, one lamp glow, one strip light anywhere in the cell
+passes it. Measured across eight frames spanning the best and worst content in
+the build, it returned **0.00% on all eight, including both frozen references**.
+It could neither pass nor fail anything, and it was being quoted as evidence of
+health — a round-3 verification reported "39 of 40 frames inside every gate" on
+its strength. The per-cell median, on the same grid and the same floor, ranks
+frames the way three independent critics had ranked them by eye:
+
+| frame | p95 | median |
+|---|---|---|
+| `street.png` (frozen reference) | 0.00% | 1.56% |
+| `quay.png` (frozen reference) | 0.00% | 4.69% |
+| `lv_hero1_refinery` (best level) | 0.00% | 3.12% |
+| `lv_hero1_metro` | 0.00% | 17.19% |
+| `lv_hero2_bunker` | 0.00% | 31.25% |
+| `lv_interior_bunker` | 0.00% | 42.19% |
+
+Re-gating the round-3 set on the median moved the failure count from 1 of 40 to
+**12 of 40**. The lesson is not "medians are better than percentiles" — it is
+that a metric which returns the same value for your best and worst frames is
+telling you nothing, and **that is checkable**: run any new gate against the two
+frozen references *and* against a frame you already believe is broken. If it
+cannot separate them, it is not a gate.
 
 ### Capture scenarios
 
