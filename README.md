@@ -81,7 +81,7 @@ module's imports re-injected from the core's export object.
 **The renderer is hand-written.** `examples/jsm` isn't available, so there's no
 `EffectComposer`, no `*Pass`, no CSM helper. The post-processing chain (GTAO,
 TAA with YCoCg neighbourhood clipping, a Jimenez bloom pyramid, volumetric
-raymarching, motion blur, AgX tonemapping, grade), the 4-cascade PCSS shadow
+raymarching, motion blur, AgX tonemapping, grade), the PCSS cascaded shadow
 rig with texel snapping, and the decal system are all written from scratch.
 
 ## Layout
