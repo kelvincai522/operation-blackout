@@ -13,7 +13,7 @@ from colliding.
 | **No Node.js, no npm, no bundler** | Ship plain `<script>` tags. No `import`/`export`. No JSX/TS. |
 | **Runs from `file://`** | `fetch`, `XHR`, and ES modules are BLOCKED. Never call them. |
 | **Zero external assets** | No `.png`, `.jpg`, `.hdr`, `.glb`, `.mp3`, no CDN, no fonts. |
-| **All content is procedural** | Textures via canvas/shader, geometry via code, audio via WebAudio synthesis. |
+| **All content is procedural** | Textures as CPU float fields uploaded via `THREE.DataTexture` (see below), geometry via code, audio via WebAudio synthesis. |
 | **three.js is a global** | `window.THREE`, revision 180. Loaded before all game code. |
 | **No `examples/jsm` addons** | `EffectComposer`, `OrbitControls`, `GTAOPass` etc. DO NOT EXIST. Write your own. |
 
@@ -135,10 +135,28 @@ Implement these exactly. Other agents are coding against these signatures.
 
 ### `textures` — `GAME.TextureLibrary`
 ```js
-get(name, opts)   // -> {map, normalMap, roughnessMap, aoMap, displacementMap}
+get(name, opts)   // -> {map, normalMap, roughnessMap, metalnessMap, aoMap,
+                  //     ormMap, displacementMap, size, name,
+                  //     and conditionally alphaTest, repeat}
                   // cached. opts: {repeat:[u,v], scale, seed}
 noiseTexture(size, type)  // -> THREE.DataTexture ('blue','white','perlin')
+                          // NOTE: no consumer anywhere in src/. build() makes a
+                          // 64^2 blue set and a 256^2 perlin pack every boot and
+                          // nothing samples them.
 ```
+
+**There is no canvas in this module.** `textures.js` contains no `createElement`,
+no `getContext` and no shader: every map is built as a CPU `Float32Array` field,
+packed into a `Uint8ClampedArray` and uploaded as a `THREE.DataTexture`. Canvas 2D
+*is* used for texture work elsewhere — `level.js`, `level_bunker.js`,
+`level_boneyard.js`, `level_refinery.js`, `level_ruins.js`, `props_refinery.js`,
+`props_ruins.js`, `props_snowbound.js`, `ai.js`, `weather.js` and `scenarios.js` —
+for lettering, signage, marks and faces, i.e. the things that need a rasteriser
+rather than a noise field. Don't reach for a canvas in the library.
+
+`opts.repeat` note: `{repeat: 1}` returns the shared base set rather than a clone
+(`textures.js:5346`), so `repeat: 1` and passing no opts at all are
+indistinguishable downstream.
 Required material names: `concrete`, `concrete_wall`, `rusted_metal`,
 `painted_metal`, `wood_plank`, `sand`, `gravel`, `asphalt`, `plaster`,
 `tile`, `fabric`, `rubber`, `glass`, `foliage`, `brick`, `corrugated_metal`.
