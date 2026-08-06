@@ -313,6 +313,9 @@
     // console, cabinet and door in the level - speckled terrazzo, not patina.
     hull_paint:  { uv: 4.40, cast: true,  recv: true,  wear: true,
                    base: 'painted_metal', col: 0x7f8c8a, rough: 0.55, metal: 0.06,
+                   // grain 0.70 - one octave, not two. The blast door leaf and
+                   // the console fascias are read at 2-4 m in two framings and
+                   // want their film; the 16 m ceiling duct seen edge-on does not.
                    libOpts: { albedoTarget: 0x74766e, hue: 0.72,
                               macro: 0.07, macroScale: 0.16, chroma: 0.40,
                               wearColor: 0x8e8776, grimeColor: 0x413a30 } },
@@ -371,6 +374,20 @@
                    // level was self-shadowing its own pitting. Rust is carried by
                    // albedo and by the weep bands in _paint 'metal'; the normal
                    // map is not what says "corroded".
+                   // ROUND 4 TRIED materials.js's new opts.grain HERE AND IT IS
+                   // NOT THE CAUSE - recorded because the next reader will have
+                   // the same idea. Once the ceiling void and the corridor soffit
+                   // are LIT (they were black before, which is a hiding place and
+                   // not a fix) every tray, duct flange and conduit in the level
+                   // is a long thin member seen edge-on and prints as white and
+                   // black worms: Laplacian 107-109 per mille over lv_interior's
+                   // ceiling void against 29 on a flat wall in the same frame.
+                   // Measured, one variable at a time: grain 0.55 (two whole
+                   // octaves off the base map set) plus normalScale 0.38 -> 0.22
+                   // moved that number by 1.1%. It is not the map. It is the
+                   // GEOMETRY - cableTray() lays a 28 x 14 mm rung every 0.30 m,
+                   // so a 16 m tray is fifty-three sub-pixel boxes seen edge-on,
+                   // and that is what a tray IS. Both opts reverted.
                    libOpts: { normalScale: 0.38, detail: 0.28 } },
     // Open grating: decks, the operating platform, stair treads. side 2 and
     // alpha tested in the library, so you see the flooded pit through the deck
@@ -3556,10 +3573,80 @@
     // board marks on the three hall walls a framing can see. The west wall is
     // the one that closes hero1 and the overview 25 m away, and the two long
     // walls are the only thing telling you how big an 11 m room is.
-    boardMarks(B, 'x', RG_X0, 1, -RG_HZ, -1.30, 0.20, 8.20, rng);
-    boardMarks(B, 'x', RG_X0, 1, 1.30, RG_HZ, 0.20, 8.20, rng);
-    boardMarks(B, 'z', RG_HZ, -1, RG_X0, RG_X1, 0.20, 6.40, rng);
-    boardMarks(B, 'z', -RG_HZ, 1, RG_X0, RG_X1, 0.20, 6.40, rng);
+    //
+    // 9.60, NOT 6.40, AND THAT WAS A MECHANICAL BUG WITH A MEASURED SIGNATURE.
+    // RG_CEIL is 11.00 and these two runs stopped at 6.40, so 42% of the wall
+    // height carried no form-board seam and no tie cone - and it is precisely the
+    // band hero1 looks at, because the eye stands at 1.68 m and the pose pitches
+    // UP 8 degrees. The flat patches the critic found high on the wall measured
+    // L 0.66/0.68 with a p05-p95 span of 0.05-0.19 and Laplacian 16.8-17.9 per
+    // mille against 47-82 on the same wall below 6 m: a bright evenly-lit
+    // rectangle, i.e. the same failure as a black one and the largest single
+    // surface in the level's signature framing. The seams are 12 mm steps and the
+    // cones are 30 mm dishes; at 19-25 m they are exactly the frequency that
+    // says "this is a poured wall" rather than "this is a plate".
+    boardMarks(B, 'x', RG_X0, 1, -RG_HZ, -1.30, 0.20, 9.60, rng);
+    boardMarks(B, 'x', RG_X0, 1, 1.30, RG_HZ, 0.20, 9.60, rng);
+    boardMarks(B, 'z', RG_HZ, -1, RG_X0, RG_X1, 0.20, 9.60, rng);
+    boardMarks(B, 'z', -RG_HZ, 1, RG_X0, RG_X1, 0.20, 9.60, rng);
+    // ---- AND THE PILASTERS UNDER THE CRANE CORBELS -------------------------
+    // Seams and cones are a 12-30 mm band. They fix the micro-detail number and
+    // they cannot fix the OTHER half of the same measurement, which is that the
+    // wall had no structure at all between 6.4 m and the 8.75 m corbel: one
+    // 28 x 4.6 m plane, washed by one 148 cd flood, with a p05-p95 span of 0.05.
+    // A crane runway corbel is carried by something. These are the piers that
+    // carry it - 0.62 m wide, 0.20 m proud, on the corbels' own 3.6 m grid from
+    // the dado up to the haunch - so the band the camera reads is a rhythm of
+    // lit faces and shaded returns instead of a rectangle. ~1.4k triangles.
+    for (i = 0; i < 8; i++) {
+      var plx = RG_X0 + 1.6 + i * 3.6;
+      if (plx > RG_X1 - 0.8) break;
+      B.paint = 'wall';
+      for (s = -1; s <= 1; s += 2) {
+        B.box('wall_conc', 0.62, 8.60, 0.20, plx, 4.42, s * (RG_HZ - 0.10));
+        // the splayed head where the pier meets the crane corbel
+        B.box('wall_conc', 0.80, 0.24, 0.30, plx, 8.84, s * (RG_HZ - 0.15));
+      }
+      B.paint = 'metal';
+    }
+    // ---- THE DADO, WHICH THE HALL DID NOT HAVE -----------------------------
+    // The header says the red oxide primer runs to 1.15 m THROUGH THE FACILITY,
+    // and the reactor gallery - the largest room in the level and the one two
+    // published framings point at - had none of it. Measured consequence: hero1
+    // came back at saturation p50 0.095 against hero2's 0.214 in a corridor whose
+    // ONLY difference is that its walls carry this band. It is the level's whole
+    // palette, it is what stops a grey hall being monochrome, and it costs four
+    // boxes.
+    B.paint = 'paint';
+    B.tint = tint(0x8a4034, 1.0);
+    for (s = -1; s <= 1; s += 2) {
+      B.box('dado_paint', RG_X1 - RG_X0, 1.15, 0.05,
+        (RG_X0 + RG_X1) * 0.5, 0.575, s * (RG_HZ - 0.03));
+      B.box('dado_paint', RG_X1 - RG_X0, 0.055, 0.075,
+        (RG_X0 + RG_X1) * 0.5, 1.175, s * (RG_HZ - 0.04));
+    }
+    // the west wall is broken by the spine portal, so it takes two runs rather
+    // than one band painted straight across a doorway
+    for (s = -1; s <= 1; s += 2) {
+      B.box('dado_paint', 0.05, 1.15, RG_HZ - 1.10, RG_X0 + 0.03, 0.575,
+        s * (RG_HZ + 1.10) * 0.5);
+      B.box('dado_paint', 0.075, 0.055, RG_HZ - 1.10, RG_X0 + 0.04, 1.175,
+        s * (RG_HZ + 1.10) * 0.5);
+    }
+    B.box('dado_paint', 0.05, 1.15, RG_HZ * 2, RG_X1 - 0.03, 0.575, 0);
+    B.box('dado_paint', 0.075, 0.055, RG_HZ * 2, RG_X1 - 0.04, 1.175, 0);
+    // and the piers carry it too - a painter with a roller does not cut round
+    // eight columns, and an interrupted band reads as a modelling accident
+    for (i = 0; i < 8; i++) {
+      var pdx = RG_X0 + 1.6 + i * 3.6;
+      if (pdx > RG_X1 - 0.8) break;
+      for (s = -1; s <= 1; s += 2) {
+        B.box('dado_paint', 0.60, 1.15, 0.05, pdx, 0.575, s * (RG_HZ - 0.215));
+        B.box('dado_paint', 0.64, 0.055, 0.075, pdx, 1.175, s * (RG_HZ - 0.225));
+      }
+    }
+    B.tint = null;
+    B.paint = 'metal';
 
     // =======================================================================
     // WALL HARDWARE. THE HALL WAS UNDER-SPENT AND THIS IS WHERE IT SHOWED.
@@ -3775,6 +3862,22 @@
     ];
     B.paint = 'wall';
     B.add('wall_conc', revolveY(bioProf, REAC_CX, REAC_CZ, 44, 0, Math.PI * 2, false));
+    B.paint = 'metal';
+    // THE CONTROLLED-AREA BAND ROUND THE SHIELD, and it is the level's palette
+    // standing dead centre of the signature framing at 12 m. hero1 measured
+    // saturation p50 0.095 - a monochrome grey hall - while hero2, the one frame
+    // in six that delivers the brief, measured 0.214 on the strength of a red
+    // oxide band at exactly this height on a wall 2.4 m away. The bioshield is
+    // the largest single object in hero1's middle third and it was bare concrete.
+    // A painted boundary round a shield drum is what a reactor hall physically
+    // has, and it is 44 quads.
+    B.paint = 'paint';
+    B.tint = tint(0x8a4034, 1.0);
+    B.add('dado_paint', revolveY([[BIO_R + 0.030, 0.30], [BIO_R + 0.030, 0.86]],
+      REAC_CX, REAC_CZ, 44, 0, Math.PI * 2, false));
+    B.add('dado_paint', revolveY([[BIO_R + 0.055, 0.845], [BIO_R + 0.055, 0.895]],
+      REAC_CX, REAC_CZ, 44, 0, Math.PI * 2, false));
+    B.tint = null;
     B.paint = 'metal';
     // the vessel: welded courses with proud girth seams, a nozzle belt, and the
     // torispherical head
@@ -4744,26 +4847,68 @@
   // route in the facility. This is the single cheapest coverage fix there is:
   // five ceiling pools 8 m apart leave four fifths of a 42 m corridor floor
   // black, and a line does what a row of points physically cannot.
+  // IT IS AN EXTRUDED CHANNEL, NOT A BARE BAR - and that was measured, not
+  // guessed. The old marker hung its emitter 45 mm off the wall inside a housing
+  // whose own face stood at 27 mm, i.e. the LENS PROJECTED 33 mm PAST THE
+  // FITTING: from every angle a 1.66 m eye has on a 0.34 m skirting light there
+  // was nothing round it but air. Foreshortened down 42 m of corridor that
+  // resolves to a one-pixel line at full emission, which is the metro's laser
+  // defect wearing a warmer colour, and it is half of why blown_white rose on
+  // three framings this round while the field around the fittings stayed black.
+  // A real escape marker is a lens recessed in an aluminium extrusion whose lips
+  // stand proud of it on BOTH long edges: bright square-on, shrouded along its
+  // own length. Once it is shrouded it can carry its authored gain without
+  // clipping, and the housing gives it a silhouette when it is not lit at all.
   function marker(L, B, x, y, z, len, ry, out) {
     out = (out === undefined) ? 0.045 : out;
-    var ox = out * Math.sin(ry), oz = out * Math.cos(ry);
+    // the lens plane sits INSIDE the lips, so `out` still means "how far the
+    // fitting stands off the wall" and every call site keeps its number.
+    var lo = out * 0.62;
+    var ox = lo * Math.sin(ry), oz = lo * Math.cos(ry);
+    var cs = Math.cos(ry) * len * 0.5, sn = Math.sin(ry) * len * 0.5;
     B.paint = 'metal';
-    B.boxR('steel', len, 0.10, 0.055, x, y, z, 0, ry, 0);
-    B.boxR('steel', len + 0.06, 0.022, 0.075, x, y + 0.055, z, 0, ry, 0);
-    return emitBox(L, x + ox, y - 0.012, z + oz, len - 0.05, 0.038, 0.030, ry,
+    // the back box, flat against the wall
+    B.boxR('steel', len, 0.10, 0.040, x, y, z, 0, ry, 0);
+    // the two lips - 22 mm proud of the lens on the top and bottom edges
+    B.boxR('steel', len + 0.05, 0.020, 0.074, x + ox, y + 0.042, z + oz, 0, ry, 0);
+    B.boxR('steel', len + 0.05, 0.018, 0.070, x + ox, y - 0.040, z + oz, 0, ry, 0);
+    // and the end caps, which is what shuts the lens off when you look along it
+    B.boxR('steel', 0.036, 0.104, 0.074, x - cs + ox, y, z + sn + oz, 0, ry, 0);
+    B.boxR('steel', 0.036, 0.104, 0.074, x + cs + ox, y, z - sn + oz, 0, ry, 0);
+    return emitBox(L, x + ox, y - 0.002, z + oz, len - 0.07, 0.042, 0.030, ry,
       0xffd7a4, 0.80, 'emerg');
   }
 
   // A red emergency strip in an aluminium channel. Everywhere the escape route
   // goes, and everywhere the water is - it is what puts the level's red into the
   // reflections without adding a light slot.
+  // Same extrusion, same measured reason as marker(). This one was worse: the
+  // housing was 70 mm deep (face at 35 mm) with the lens hung at 48 mm and 40 mm
+  // deep, so 33 mm of a full-gain 1.42 emitter stood in clear air on every one of
+  // the ~180 strips in the facility. hero2 measured blown_white 0.76% with the
+  // strips printing WHITE-CORED - which is not a red clip, it is the tone curve's
+  // highlight desaturation acting on a channel that has run off the top - and the
+  // upper band of the same frame measured 0.031. Shrouding the lens takes the
+  // peak down without taking the level's red away, because what a strip is FOR is
+  // the line it draws, not the pixel value at its centre.
   function emergStrip(L, B, x, y, z, len, ry, out) {
     out = (out === undefined) ? 0.048 : out;
-    var ox = out * Math.sin(ry), oz = out * Math.cos(ry);
+    var lo = out * 0.88;
+    var ox = lo * Math.sin(ry), oz = lo * Math.cos(ry);
+    var cs = Math.cos(ry) * len * 0.5, sn = Math.sin(ry) * len * 0.5;
     B.paint = 'metal';
-    B.boxR('rust_metal', len, 0.085, 0.070, x, y, z, 0, ry, 0);
-    return emitBox(L, x + ox, y - 0.030, z + oz, len - 0.06, 0.040, 0.040, ry,
-      0xff2814, 1.42, 'emerg');
+    B.boxR('rust_metal', len, 0.085, 0.048, x, y, z, 0, ry, 0);
+    B.boxR('rust_metal', len + 0.03, 0.024, 0.098, x + ox, y + 0.050, z + oz, 0, ry, 0);
+    B.boxR('rust_metal', len + 0.03, 0.024, 0.098, x + ox, y - 0.050, z + oz, 0, ry, 0);
+    B.boxR('steel', 0.038, 0.126, 0.098, x - cs + ox, y, z + sn + oz, 0, ry, 0);
+    B.boxR('steel', 0.038, 0.126, 0.098, x + cs + ox, y, z - sn + oz, 0, ry, 0);
+    // 1.16, not 1.42. Measured on the corridor: at 1.42 the R channel leaves the
+    // print at 1.0 and the curve hands the core back as pink-white; at 1.16 the
+    // lens stays inside the saturated part of the curve and the strip reads as
+    // RED at the same distance. The light it puts on the level is unchanged -
+    // these are emissive geometry, not lights; the practicals do that.
+    return emitBox(L, x + ox, y, z + oz, len - 0.08, 0.046, 0.044, ry,
+      0xff2814, 1.16, 'emerg');
   }
 
   // ---------------------------------------------------------------------------
@@ -4908,6 +5053,54 @@
       0.26, 0.21, 0.05, yaw, colHex || 0xdce8f6, gain || 2.0, 'work');
   }
 
+  // ---------------------------------------------------------------------------
+  // A FLOOR-STANDING UPLIGHTER, and it exists because of a geometric fact this
+  // level could not argue its way round.
+  //
+  // The corridor is 3.9 m wide with a 2.86 m soffit and the control room is a
+  // 3.70 m slab over a 2.95 m suspended grid. NOTHING mounted on a wall or in a
+  // ceiling can put light on either ceiling at an angle worth having: the best
+  // available run is about 0.30 m of rise over 3 m of throw, i.e. 6 degrees, and
+  // 6 degrees on a formed soffit is the same self-shadowing regime that produced
+  // every popcorn surface this file has had to fix. Measured: hero2's whole top
+  // band (rows 0-2 of the gate's own grid, 21 of 24 cells) came back at median
+  // 0.027-0.044 against a 0.045 floor, and lv_interior's ceiling void the same.
+  //
+  // A lamp STANDING ON THE FLOOR pointing up solves it by arithmetic - 2.5 m of
+  // rise over 3 m of throw is 40 degrees - and it is also the only fixture in the
+  // fiction that would be there: somebody was working on the cable trays and
+  // rigged a can on a stand under them. It uses wallFlood's yoke (which takes a
+  // real pitch) on a short tripod, plus the lead back to the wall.
+  // ---------------------------------------------------------------------------
+  function upLight(L, B, x, y, z, tx, ty, tz, colHex, gain, baseY) {
+    var k, a;
+    baseY = (baseY === undefined) ? 0.0 : baseY;
+    B.paint = 'metal';
+    // the stand: three splayed legs, a column and a foot plate
+    for (k = 0; k < 3; k++) {
+      a = k / 3 * 6.2832 + 0.9;
+      B.strut('steel', x, y - 0.30, z, x + Math.cos(a) * 0.30, baseY + 0.035,
+        z + Math.sin(a) * 0.30, 0.030, 0.030);
+      B.box('steel', 0.10, 0.030, 0.10, x + Math.cos(a) * 0.30, baseY + 0.026,
+        z + Math.sin(a) * 0.30);
+    }
+    B.box('steel', 0.075, Math.max(0.05, y - 0.28 - baseY), 0.075, x,
+      (y - 0.28 + baseY) * 0.5, z);
+    // the trailing lead, run along the floor rather than coiled under the stand
+    B.paint = 'cable';
+    var prev = null;
+    for (k = 0; k <= 7; k++) {
+      var t = k / 7;
+      var cxp = x + Math.sin(t * 3.4) * 0.42;
+      var cyp = baseY + (y - 0.32 - baseY) * Math.max(0, 1 - t * 2.2) + 0.032;
+      var czp = z - t * 1.7;
+      if (prev) B.pipe('cable_rub', prev[0], prev[1], prev[2], cxp, cyp, czp, 0.024, 5);
+      prev = [cxp, cyp, czp];
+    }
+    B.paint = 'metal';
+    return wallFlood(L, B, x, y, z, tx, ty, tz, colHex, gain);
+  }
+
   // A reflector high bay on a drop rod - the reactor hall's own fitting.
   function highBay(L, B, x, y, z, gain, state) {
     B.paint = 'metal';
@@ -4948,14 +5141,17 @@
   // Roughly 8-11 lux for a working area and 4-6 for a wash, which is also what
   // keeps the lit-to-unlit ratio inside the ~50:1 any tone curve holds.
   //
-  // Ordered by importance, and that ordering is load bearing: lighting.js caps a
-  // declarative level at MAX_PRACTICALS_RIG = 24 and truncates the TAIL.
-  // EXACTLY TWENTY-FOUR are published below, so there is no headroom and adding
-  // one silently deletes the last entry. (An earlier version of this header
-  // claimed twenty-two with two slots held back for the beacon spots. The
-  // arithmetic was wrong - it was already twenty-four - and the beacon spots are
-  // level-owned THREE.SpotLights that never went through practicalLights in the
-  // first place, so they were never inside that budget to begin with.)
+  // Ordered by importance, and that ordering is STILL load bearing: lighting.js
+  // truncates the TAIL at whatever `practicals` resolves to. That number used to
+  // be the hard shared constant MAX_PRACTICALS_RIG = 24 and this table published
+  // exactly 24, so there was no headroom and adding one silently deleted the last
+  // entry - which is why every round-3 lighting fix in this level had to be a
+  // re-site. It is now a per-level scalar: LevelBunker's constructor publishes
+  // `level.lightRig = {practicals: 34, active: 34}` and TWENTY-NINE are declared
+  // below, so there are five spare slots and the tail is safe. Keep it that way;
+  // if this table ever reaches 34, raise the scalar in the same commit.
+  // (The beacon spots are level-owned THREE.SpotLights that never went through
+  // practicalLights, so they have never been inside this budget.)
   //
   // Same trap on the OTHER published list: lighting.js takes the first
   // MAX_WINDOWS_RIG = 20 entries of litWindows. This file authors more than
@@ -5048,6 +5244,15 @@
     for (i = 0; i < 6; i++) {
       emergStrip(L, B, -21.05 + i * 3.80, 1.28, SPN_HZ - 0.10, 2.4, 0, -0.048);
     }
+    // THE RIGGED UPLIGHTER UNDER THE TRAYS. See upLight() for the arithmetic:
+    // this is the only fixture in the corridor that can put light on a 2.86 m
+    // soffit at more than six degrees, and hero2's entire top band - 21 of the
+    // gate's 24 upper cells - was below the visibility floor without it. It is
+    // also the frame's one WARM source against a corridor of cool battens and red
+    // strips, and the one thing in it the eye can point at and say what is doing
+    // the lighting.
+    upLight(L, B, -8.60, 1.10, -1.30, -11.00, 2.84, 0.80, 0xffd2a0, 1.45);
+    L.addCollider(-8.60, 0.55, -1.30, 0.34, 0.62, 0.34, 'metal');
 
     // ======================================================= the beacons =====
     // Ten of them; three are `key` and carry a rotating SpotLight solved against
@@ -5072,7 +5277,7 @@
     // pointed at the wall the camera is actually looking at, the same fitting
     // lays a bar at 63 degrees of incidence: a bar, on a surface.
     beacon(L, B, -6.20, 2.30, -SPN_HZ + 0.52, 7.6, 2.2, true,
-      { spotI: 44, spotCone: 0.19, sweepY: 0.30, aimAt: [-4.20, SPN_HZ - 0.10] });
+      { spotI: 78, spotCone: 0.19, sweepY: 0.30, aimAt: [-4.20, SPN_HZ - 0.10] });
     // the bracket arm that holds it off the wall, so it is standing on something
     B.paint = 'metal';
     B.box('steel', 0.14, 0.20, 0.62, -6.20, 2.30, -SPN_HZ + 0.21);
@@ -5083,14 +5288,22 @@
     beacon(L, B, -30.4, 2.22, SPN_HZ - 0.30, 5.8, 1.7, false);
     // THE HALL PAIR. len 19 so the wedge crosses the vessel AND reaches the far
     // wall instead of dying two metres short of its own subject.
+    // 218 cd, not 104. THE SIGNATURE STILL DID NOT LAND AND THE ARITHMETIC SAYS
+    // WHY. At 104 cd with decay 2 the irradiance on the vessel flank 11.5 m away
+    // is 104/132 = 0.79, against 4.6 for bnk_reac_key on the same surface: a
+    // sixth of the key, which is a tint, not a bar. A rotating beacon crossing a
+    // 6 m drum has to be COMPARABLE to the room light for the two or three
+    // frames it is on the object or it reads exactly as the critic read it -
+    // "a flat red ambient wash". These are level-owned SpotLights and cost no
+    // practical slot, so the only budget they spend is fragment time.
     beacon(L, B, 12.60, 5.40, -8.60, 19.0, 2.6, true,
-      { spotI: 104, spotCone: 0.44, sweepY: 0.20, aimAt: [REAC_CX - 3.0, REAC_CZ - 2.0] });
+      { spotI: 218, spotCone: 0.40, sweepY: 0.20, aimAt: [REAC_CX - 3.0, REAC_CZ - 2.0] });
     // and one bracketed under the gantry ring, INSIDE the hero1 frustum at
     // -36 degrees azimuth and +22 degrees elevation, so the audience sees the
     // source as well as the bar. Its phase is solved so the bar is crossing the
     // vessel flank at capture time.
     beacon(L, B, 16.57, 5.05, -3.47, 11.5, 2.4, true,
-      { spotI: 118, spotCone: 0.36, sweepY: 0.16, aimAt: [REAC_CX, REAC_CZ] });
+      { spotI: 260, spotCone: 0.32, sweepY: 0.16, aimAt: [REAC_CX, REAC_CZ] });
     beacon(L, B, RG_X1 - 1.05, 5.40, 8.60, 13.0, 2.2, false);
     beacon(L, B, VEST_X1 - 1.10, 3.90, -VEST_HZ + 0.30, 8.0, 2.2, false);
     beacon(L, B, CTL_X1 - 0.35, 3.05, 12.20, 8.0, 2.0, false);
@@ -5207,6 +5420,15 @@
       marker(L, B, CTL_X1 - 0.06, CTL_FLOOR + 0.34, CTL_Z1 - 1.6 - i * 2.1, 1.55,
         Math.PI * 0.5, -0.045);
     }
+    // THE UPLIGHTER INTO THE CEILING VOID. lv_interior's top two rows measured
+    // 0.027-0.045 across sixteen cells: the 3.70 m slab over the torn suspended
+    // grid, which nothing in the room could reach because every troffer is IN the
+    // grid 0.75 m under it. A lamp on the floor firing up through the tear lands
+    // at 28 degrees, which is a surface; the same lamp is why the void reads as a
+    // void with a slab and services in it rather than as a hole cut in the frame.
+    upLight(L, B, -19.40, CTL_FLOOR + 1.05, 6.20, -23.00, 3.64, 8.60,
+      0xffd2a0, 1.35, CTL_FLOOR);
+    L.addCollider(-19.40, CTL_FLOOR + 0.55, 6.20, 0.34, 0.62, 0.34, 'metal');
     // and a batten in the link corridor, so the doorway spills into the spine
     batten(L, B, (LINK_X0 + LINK_X1) * 0.5, 2.30, LINK_Z1 - 0.9, 1.40, Math.PI * 0.5, 'dying', 0.10);
     glowCard((LINK_X0 + LINK_X1) * 0.5, 2.20, LINK_Z1 - 0.9, 1.3, 0.18, 4300, 0.45,
@@ -5263,6 +5485,25 @@
       new THREE.Color(0.86, 0.93, 1.0), 7);
     // and one lamp down the approach tunnel, so the collapse is not a black hole
     workLight(L, B, VEST_X0 - 4.2, 2.35, 1.40, APPR_X0 + 6.4, 1.2, 0.0, 0xffe0b0, 2.4, 1.60);
+    // ---- THE TWO FITTINGS THAT CARRY hero3's LEFT QUARTER -------------------
+    // WHAT IS ACTUALLY THERE, established by ray-casting the pose rather than by
+    // reading the plan: the left eighth of the landmark framing is NOT the north
+    // wall, it is the raised guard cabin (deck 2.95, x -43.4..-38.6, z 3.6..6.45)
+    // and the undercroft under it. That mattered, because the first attempt at
+    // this hung a 92 cd flood 1.4 m off the cabin's south face and printed a cell
+    // at median 0.997 - a hole burnt in the frame - while its neighbours stayed
+    // at 0.042. A lamp that close to its own subject cannot light a bay.
+    // 1. the cabin's front, washed from a soffit drop rod 7.5 m away at near
+    //    normal incidence, which is what makes a glazed box read as a glazed box
+    B.paint = 'metal';
+    B.pipe('steel', -39.40, VEST_CEIL - 0.10, -2.60, -39.40, 4.40, -2.60, 0.028, 6);
+    B.box('steel', 0.22, 0.08, 0.22, -39.40, 4.42, -2.60);
+    wallFlood(L, B, -39.40, 4.20, -2.60, -41.20, 3.55, 4.60, 0xdce8f6, 1.15);
+    // 2. a bracket flood clamped under the cabin deck, for the undercroft the
+    //    cabin shades - the bottom-left three cells of the same frame
+    B.paint = 'metal';
+    B.box('steel', 0.10, 0.14, 0.30, -40.60, 2.86, 4.20);
+    wallFlood(L, B, -40.60, 2.62, 4.20, -43.30, 0.12, 3.10, 0xffdcae, 0.95);
 
     // ======================================================== the plant ======
     batten(L, B, PLT_X0 + 3.0, PLT_CEIL - 0.34, PLT_Z0 + 2.6, 1.60, 0, 'lit', 0.24);
@@ -5677,10 +5918,18 @@
     // fifth of the vestibule flood's output turns it from a wall into space
     // that continues, with a far wall in it. Deliberately weak: the brief asks
     // for long dark stretches, and the target is p50 30-40, not a lit room.
-    lamp({ name: 'bnk_vest_north', kind: 'fluoro', pos: [VEST_X0 + 2.30, 3.30, VEST_HZ - 1.10],
-      color: FL.clone(), kelvin: 4400, intensity: 58, distance: 17, cone: 1.32, penumbra: 0.76,
-      dayBase: 1, aimPos: [VEST_X0 + 1.10, 1.10, VEST_HZ - 1.60], fixed: true,
-      halo: 0.9, haloGain: 0.20, bulbR: 0.07, bulbFlat: 0.4, bulbGain: 0.11, beam: 0.20 });
+    // RE-SITED OFF THE WALL, WHICH IS THE FOURTH TIME THIS LEVEL HAS PAID THE
+    // SAME BILL. It hung 1.1 m off the north wall and fired WEST along it: 1.2 m
+    // of Z over 1.2 m of X at 58 cd, so it lit a strip of its own wall at a
+    // grazing angle and nothing else, and hero3's left quarter measured 0.033 to
+    // 0.048 median over SIXTEEN of the gate's cells - a quarter of the level's
+    // landmark frame with no legible content in it at all. On a drop rod 4.4 m
+    // out in the bay (a real fitting, see the vestibule build) it lands on that
+    // wall near normal at 3-5 m up and its spill carries the bay floor.
+    lamp({ name: 'bnk_vest_north', kind: 'fluoro', pos: [-39.40, 4.20, -2.60],
+      color: FL.clone(), kelvin: 4400, intensity: 224, distance: 22, cone: 0.60, penumbra: 0.52,
+      dayBase: 1, aimPos: [-41.20, 3.55, 4.60], fixed: true,
+      halo: 0.55, haloGain: 0.10, bulbR: 0.055, bulbFlat: 0.4, bulbGain: 0.07, beam: 0.16 });
 
     // 21-23 : the control room. bnk_ctl_wall is FIRST of the three now, because
     // the three backlit status bays are the interior framing's subject and have
@@ -5730,6 +5979,52 @@
       color: FL.clone(), kelvin: 4300, intensity: 32, distance: 15, cone: 1.22, penumbra: 0.58,
       dayBase: 1, aimPos: [PLT_X0 + 3.4, 1.60, PLT_Z0 + 1.40], fixed: true, halo: 1.1,
       haloGain: 0.22, bulbR: 0.08, bulbFlat: 0.5, bulbGain: 0.14, beam: 0.42 });
+
+    // ========================================================================
+    // 25-28 : THE FOUR THE 24-CAP USED TO FORBID.
+    //
+    // Round 3 had to solve every lighting problem in this level by RE-SITING,
+    // because lighting.js capped a declarative level at 24 practicals and this
+    // file published exactly 24 - so adding one silently deleted the last entry.
+    // That cap is now a per-level scalar (`practicals`/`active`, published in
+    // level.lightRig below), and these four are the additions the cap forbade.
+    // Each one goes where the coverage gate actually measured a hole, and each
+    // one is bolted to a fitting that exists in the geometry above.
+    // ========================================================================
+    // 25. the corridor uplighter's own light. Its whole job is the 2.86 m soffit
+    //     at 29 degrees - the only angle in a 3.9 m corridor that is not grazing.
+    lamp({ name: 'bnk_spine_up', kind: 'led', pos: [-8.60, 1.10, -1.30],
+      color: WK.clone(), kelvin: 3100, intensity: 54, distance: 11, cone: 0.86, penumbra: 0.52,
+      dayBase: 1, aimPos: [-11.00, 2.84, 0.80], fixed: true, halo: 0.50, haloGain: 0.16,
+      bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.14, beam: 0.30 });
+    // 26. the band between the top cable tray and the soffit on the north wall -
+    //     the whole top-right corner of hero2, and the one part of that frame
+    //     the ground-bounce term cannot reach because it is a VERTICAL surface
+    //     with a tray shading it. Fired from the south cove at x = -14.10 (a
+    //     fitting that already exists, see the south cove loop) at 53 degrees.
+    lamp({ name: 'bnk_spine_wash2', kind: 'fluoro', pos: [-14.10, 2.50, -SPN_HZ + 0.16],
+      color: FL.clone(), kelvin: 4300, intensity: 44, distance: 14, cone: 0.76, penumbra: 0.80,
+      dayBase: 1, aimPos: [-11.40, 2.68, SPN_HZ - 0.12], fixed: true, halo: 0.60,
+      haloGain: 0.16, bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.10, beam: 0.16 });
+    // 27. the control room's ceiling void, through the tear in the grid.
+    lamp({ name: 'bnk_ctl_void', kind: 'led', pos: [-19.40, CTL_FLOOR + 1.05, 6.20],
+      color: WK.clone(), kelvin: 3200, intensity: 52, distance: 15, cone: 0.98, penumbra: 0.60,
+      dayBase: 1, aimPos: [-22.60, 3.64, 9.00], fixed: true, halo: 0.50, haloGain: 0.14,
+      bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.13, beam: 0.28 });
+    // 28. the access floor between the near console row and the lens, off the lit
+    //     troffer at (-16.40, 2.90, 7.20). lv_interior's bottom two rows measured
+    //     0.030-0.041 across eight cells: the floor the player is standing on.
+    lamp({ name: 'bnk_ctl_near', kind: 'fluoro', pos: [-16.40, 2.86, 7.20],
+      color: FL.clone(), kelvin: 4300, intensity: 50, distance: 14, cone: 1.14, penumbra: 0.56,
+      dayBase: 1, aimPos: [-21.20, 0.50, 8.40], fixed: true, halo: 0.85, haloGain: 0.16,
+      bulbR: 0.07, bulbFlat: 0.5, bulbGain: 0.12, beam: 0.20 });
+    // 29. the undercroft under the guard cabin. Weak, warm and short-range: it is
+    //     the shaded floor of a bay, not a room, and the target is a median just
+    //     clear of the visibility floor rather than a lit surface.
+    lamp({ name: 'bnk_vest_under', kind: 'led', pos: [-40.60, 2.62, 4.20],
+      color: WK.clone(), kelvin: 3000, intensity: 46, distance: 9, cone: 1.02, penumbra: 0.62,
+      dayBase: 1, aimPos: [-43.30, 0.12, 3.10], fixed: true, halo: 0.45, haloGain: 0.14,
+      bulbR: 0.05, bulbFlat: 0.4, bulbGain: 0.09, beam: 0.14 });
 
     // ---- the shafts ---------------------------------------------------------
     // Four real fixtures, one per framing that needs one. lighting.js builds a
@@ -5841,6 +6136,51 @@
     this.bounds = new THREE.Box3(
       new THREE.Vector3(APPR_X0 - 4, PIT_Y - 3.0, -RG_HZ - 4),
       new THREE.Vector3(RG_X1 + 4, RG_CEIL + 3.0, RG_HZ + 4));
+    // =======================================================================
+    // THE RIG THE LEVEL ASKS FOR.  lighting.js reads this on its first update
+    // (_adoptLevelRig) and merges it over the `practicals` preset main.js
+    // selects, so nothing in a shared file has to know this level exists.
+    //
+    // `practicals` / `active` - 24 was the cap that forced every round-3 fix in
+    // this level to be a RE-SITE rather than an addition: the table published
+    // exactly MAX_PRACTICALS_RIG entries, so one more silently deleted the last.
+    // 30 built and 30 active means no per-frame selection runs at all (the
+    // budget resolver returns early when everything fits), so the set cannot
+    // chatter and there is exactly one program permutation, which is the whole
+    // reason that machinery is careful.
+    //
+    // `groundBounce` - the single largest legibility term in this level. The
+    // weight in the shader is ( 0.5 - 0.5 * n.y ), i.e. 1 on a soffit, 0.5 on a
+    // wall and 0 on a floor, which is exactly the distribution of the surfaces
+    // this level could not light: every lamp in the rig is a ceiling or bracket
+    // fitting pointing down, so the ceilings got nothing. Measured on the
+    // corrected gate with NOTHING else changed, dead_cell_med_pct went hero2
+    // 31.25 -> 10.94, hero3 25.00 -> 10.94, lv_interior 42.19 -> 23.44.
+    //
+    // AND THE FIRST NUMBER I TRIED WAS WRONG IN A WAY THAT ONLY THE PICTURE
+    // SHOWS. At amount 0.55 / lamps 1.5 every framing passed the gate outright
+    // (0-6%), and hero2's mean luminance went 0.184 -> 0.327 while its SATURATION
+    // fell 0.266 -> 0.198 and lv_interior's fell 0.175 -> 0.090: a neutral fill
+    // strong enough to make a buried facility legible is also strong enough to
+    // turn it into a lit office, and it dilutes the one thing this level's brief
+    // is about. Both halves are fixed here. The magnitude comes down to about
+    // 40% of that, and the COLOUR is the oxide the light is actually bouncing
+    // off - a deck under a red dado, red kerb strips and red beacons is not a
+    // neutral reflector, and a bounce that carries the palette raises saturation
+    // where a grey one destroys it. `ao` 0.45 keeps it corner-darkened.
+    // =======================================================================
+    // svNormal is deliberately NOT published. The shared note suggests raising it
+    // toward half the level's own cell size, and this level's cells are 2.45 m in
+    // X but 0.61 m in Z (the fixed 44x26x76 grid over a 108 x 26 x 47 m box) -
+    // and every wall that matters here has its normal along Z. 0.60 is already
+    // one Z cell; 1.05 would sample nearly two cells away, i.e. through the wall.
+    this.lightRig = {
+      practicals: 34, active: 34,
+      groundBounce: {
+        amount: 0.34, ao: 0.45, max: 0.85, lamps: 1.20, color: 0xb27c5e
+      }
+    };
+    this.groundBounce = this.lightRig.groundBounce;
     // THE PLACEMENT CONTRACT. Available before build().
     this.anchors = buildAnchors(this.noise);
   }
