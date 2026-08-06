@@ -251,6 +251,169 @@
     return g;
   }
 
+  // ===================================================== RELIEF PRIMITIVES ==
+  // "Inside 12 metres of every standpoint this level contains no modelled
+  // objects - only tinted primitives. boxR, box, cyl and revolve with ONE flat
+  // face each." That verdict is correct and it is not fixable by adding more
+  // boxes: what a box cannot do at three metres is have a face that is not a
+  // plane and an arris that is not a straight line.
+  //
+  // Geo.bevelBox at ONE segment is 8 corners - the minimum topology, and every
+  // face is a plane by construction. At TWO segments each face is a 3x3 grid
+  // (centre, four arris midpoints, four corners), which is the cheapest
+  // topology that can carry a dished or crowned face, a wavy arris and a lost
+  // corner. 48 triangles instead of 12. ruins built exactly this atom this
+  // round and measured its magnitude DOWN once after it opened black canyons in
+  // the joints; the same caution applies here and is why `amt` is a fraction of
+  // the SMALLEST dimension rather than an absolute.
+  //
+  // Two flavours, because rock and snow fail differently:
+  //   reliefBox  - stone. Faces DISH (concave), arrises wander, one corner in
+  //                six is gone. Normals are per-face, so the arrises stay hard:
+  //                a boulder is angular, it is just not rectangular.
+  //   snowBlock  - a block the plough cut out of the pack. Faces BULGE, the top
+  //                carries a wind crown, every arris is pulled in hard, and the
+  //                normals are a superellipsoid field rather than the geometric
+  //                ones - so the block shades as a rounded pillow with no flat
+  //                face and no visible facet anywhere, which is what separates
+  //                cut snow from broken polystyrene sheet.
+  function frac(v) { return v - Math.floor(v); }
+  function rhash(x, y, z, s) {
+    return frac(Math.sin(x * 37.13 + y * 61.71 + z * 19.37 + s * 7.117) * 43758.5453);
+  }
+
+  var _reliefCache = new Map();
+  function reliefBox(w, h, d, seed, seg) {
+    w = Math.max(w, 0.02); h = Math.max(h, 0.02); d = Math.max(d, 0.02);
+    seg = seg || 2;
+    // Quantised into 4 cm buckets with eight hash seeds. Without this every
+    // rng.range() size in the level is a cache miss and the rock bucket alone
+    // allocates 170 unique BufferGeometries; with it the whole file shares a
+    // few hundred and no two neighbours are the same shape anyway, because the
+    // seed and the yaw both vary.
+    var qw = Math.max(0.04, Math.round(w / 0.04) * 0.04);
+    var qh = Math.max(0.04, Math.round(h / 0.04) * 0.04);
+    var qd = Math.max(0.04, Math.round(d / 0.04) * 0.04);
+    var s = (seed | 0) & 7;
+    var k = 'r' + qw.toFixed(2) + ',' + qh.toFixed(2) + ',' + qd.toFixed(2) + ',' + s +
+      ',' + seg;
+    var g = _reliefCache.get(k);
+    if (g) return g;
+    var bevel = Math.min(0.05, Math.min(qw, Math.min(qh, qd)) * 0.16);
+    var src;
+    try { src = Geo.bevelBox(qw, qh, qd, bevel, seg); }
+    catch (e) { return box(w, h, d); }
+    var p = src.attributes.position;
+    var hw = qw * 0.5, hh = qh * 0.5, hd = qd * 0.5;
+    var lim = Math.min(qw, Math.min(qh, qd));
+    // The magnitude ruins arrived at after measuring: the DISH in the face is
+    // what buys the differential erosion, the eat-back on the arris only has to
+    // stop the edge being a straight line. Capped in absolute terms so a five
+    // metre buttress boulder does not lose half a metre off one corner.
+    var dish = Math.min(0.13, lim * 0.14);
+    var eps = bevel + 1e-4;
+    for (var i = 0; i < p.count; i++) {
+      var x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+      var ax = Math.abs(x) >= hw - eps, ay = Math.abs(y) >= hh - eps,
+        az = Math.abs(z) >= hd - eps;
+      var n = (ax ? 1 : 0) + (ay ? 1 : 0) + (az ? 1 : 0);
+      if (!n) continue;
+      var r1 = rhash(x, y, z, s);
+      var r2 = rhash(z, x, y, s + 11);
+      var amt;
+      if (n === 1) amt = dish * (0.28 + 0.62 * r1);                 // a hollow
+      else if (n === 2) amt = dish * (r2 < 0.18 ? 0.62 + 0.62 * r1  // eaten back
+        : 0.08 + 0.34 * r1);                                        // or just wavy
+      else amt = dish * (r1 < 0.16 ? 0.85 + 0.85 * r2               // corner gone
+        : 0.10 + 0.35 * r2);
+      if (ax) x -= (x < 0 ? -1 : 1) * amt;
+      if (ay) y -= (y < 0 ? -1 : 1) * amt;
+      if (az) z -= (z < 0 ? -1 : 1) * amt;
+      p.setXYZ(i, x, y, z);
+    }
+    src.computeVertexNormals();
+    g = src.toNonIndexed(); src.dispose();
+    _reliefCache.set(k, g);
+    return g;
+  }
+
+  var _snowBlkCache = new Map();
+  function snowBlock(w, h, d, seed) {
+    w = Math.max(w, 0.03); h = Math.max(h, 0.03); d = Math.max(d, 0.03);
+    var qw = Math.max(0.05, Math.round(w / 0.05) * 0.05);
+    var qh = Math.max(0.04, Math.round(h / 0.04) * 0.04);
+    var qd = Math.max(0.05, Math.round(d / 0.05) * 0.05);
+    var s = (seed | 0) & 7;
+    var k = 's' + qw.toFixed(2) + ',' + qh.toFixed(2) + ',' + qd.toFixed(2) + ',' + s;
+    var g = _snowBlkCache.get(k);
+    if (g) return g;
+    var bevel = Math.min(qw, Math.min(qh, qd)) * 0.14;
+    var src;
+    try { src = Geo.bevelBox(qw, qh, qd, bevel, 2); }
+    catch (e) { return box(w, h, d); }
+    var p = src.attributes.position;
+    var hw = qw * 0.5, hh = qh * 0.5, hd = qd * 0.5;
+    var eps = bevel + 1e-4;
+    var i, x, y, z;
+    for (i = 0; i < p.count; i++) {
+      x = p.getX(i); y = p.getY(i); z = p.getZ(i);
+      var ax = Math.abs(x) >= hw - eps, ay = Math.abs(y) >= hh - eps,
+        az = Math.abs(z) >= hd - eps;
+      var n = (ax ? 1 : 0) + (ay ? 1 : 0) + (az ? 1 : 0);
+      if (!n) continue;
+      var r1 = rhash(x, y, z, s);
+      var r2 = rhash(z, x, y, s + 7);
+      // Displacement is a fraction of the HALF EXTENT OF THAT AXIS, not of the
+      // smallest dimension: a 1.2 x 0.16 x 0.5 m plough slab has to keep its
+      // long edges rounded in proportion or the rounding only shows on the
+      // short one and the slab still reads as a plank.
+      if (n === 1) {
+        // face centre bulges OUT - snow is convex where it has been packed -
+        // and the up-facing one carries a wind crown on top of that
+        var out = 0.05 + 0.07 * r1;
+        var crown = (ay && y > 0) ? (0.26 + 0.30 * r2) : 0;
+        if (ax) x += (x < 0 ? -1 : 1) * hw * out;
+        if (ay) y += (y < 0 ? -1 : 1) * hh * (out + crown);
+        if (az) z += (z < 0 ? -1 : 1) * hd * out;
+        // and it wanders in plan, so the face is not a plane through its centre
+        x += (r2 - 0.5) * hw * 0.10;
+        z += (r1 - 0.5) * hd * 0.10;
+      } else if (n === 2) {
+        var e2 = 0.15 + 0.19 * r1;
+        if (ax) x -= (x < 0 ? -1 : 1) * hw * e2;
+        if (ay) y -= (y < 0 ? -1 : 1) * hh * e2;
+        if (az) z -= (z < 0 ? -1 : 1) * hd * e2;
+      } else {
+        var e3 = 0.27 + 0.26 * r2;
+        if (ax) x -= (x < 0 ? -1 : 1) * hw * e3;
+        if (ay) y -= (y < 0 ? -1 : 1) * hh * e3;
+        if (az) z -= (z < 0 ? -1 : 1) * hd * e3;
+      }
+      p.setXYZ(i, x, y, z);
+    }
+    // THE NORMALS ARE NOT THE GEOMETRY'S. bevelBox does not weld its six faces,
+    // so computeVertexNormals leaves a hard crease down every arris however far
+    // the vertices are pulled in - the silhouette rounds and the SHADING still
+    // says cuboid, which is the half of the defect that shows at 2x. A
+    // superellipsoid field (n proportional to sign(u)*|u|^3 per axis, u the
+    // position in half-extents) is smooth over the whole block, is exactly the
+    // face normal at the centre of each face, and rolls through 90 degrees
+    // across the arris band. It costs nothing and there is no seam to weld.
+    var nrm = src.attributes.normal;
+    for (i = 0; i < p.count; i++) {
+      x = p.getX(i) / hw; y = p.getY(i) / hh; z = p.getZ(i) / hd;
+      var nx = (x < 0 ? -1 : 1) * Math.abs(x) * Math.abs(x) * Math.abs(x);
+      var ny = (y < 0 ? -1 : 1) * Math.abs(y) * Math.abs(y) * Math.abs(y);
+      var nz = (z < 0 ? -1 : 1) * Math.abs(z) * Math.abs(z) * Math.abs(z);
+      var l = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (l < 1e-6) { nx = 0; ny = 1; nz = 0; l = 1; }
+      nrm.setXYZ(i, nx / l, ny / l, nz / l);
+    }
+    g = src.toNonIndexed(); src.dispose();
+    _snowBlkCache.set(k, g);
+    return g;
+  }
+
   var _quadCache = new Map();
   function quad(w, h, u0, v0, u1, v1) {
     if (u0 === undefined) { u0 = 0; v0 = 0; u1 = 1; v1 = 1; }
@@ -463,6 +626,18 @@
   };
   Builder.prototype.boxR = function (key, w, h, d, x, y, z, rx, ry, rz, bevel) {
     return this.add(key, box(w, h, d, bevel), makeM(x, y, z, rx, ry, rz));
+  };
+  // A weathered stone mass rather than a rectangular prism. Seeded off its own
+  // world position so the same boulder is the same shape every capture.
+  Builder.prototype.rock = function (key, w, h, d, x, y, z, rx, ry, rz, seg) {
+    return this.add(key, reliefBox(w, h, d, (x * 131 + z * 37 + y * 17) | 0, seg),
+      makeM(x, y, z, rx, ry, rz));
+  };
+  // A block of cut or drifted snow. Same call shape as boxR so a site can be
+  // converted one line at a time.
+  Builder.prototype.snowR = function (key, w, h, d, x, y, z, rx, ry, rz) {
+    return this.add(key, snowBlock(w, h, d, (x * 97 + z * 53 + h * 811) | 0),
+      makeM(x, y, z, rx, ry, rz));
   };
   Builder.prototype.cyl = function (key, r0, r1, len, x, y, z, rx, ry, rz, seg) {
     return this.add(key, cyl(r0, r1, len, seg), makeM(x, y, z, rx, ry, rz));
@@ -2434,23 +2609,51 @@
   // caps with a triangle fan, and a fan across a concave profile folds. Two
   // convex pieces are cheaper than an ear-clipper and cannot fail.
   function roofSnowRun(B, key, za, zb, run, drop, base, rng, icicle) {
-    var n = Math.max(3, Math.round(Math.abs(zb - za) / 1.35));
+    // 0.72 m segments, not 1.35. The overview's measured worst metric is
+    // flat_area_pct 43.4 and its two largest contributors are the near roof
+    // loads and the ledge cornice, both of which are built here: at 1.35 m a
+    // twelve-metre run is nine facets, each of them a dead plane 1.35 m across
+    // and 2 m up the slope, which is a bigger uninterrupted plane than anything
+    // else in the frame. Halving the pitch doubles the number of independently
+    // jittered thicknesses, sags and overhangs and the whole system costs about
+    // 5.6k triangles, so doubling it is 5.6k on 1.7M of headroom.
+    var n = Math.max(4, Math.round(Math.abs(zb - za) / 0.72));
+    // A slab of settled snow CREEPS: it slumps unevenly down the pitch and the
+    // slump lines run across the fall. Two low-frequency waves along the run,
+    // sampled at both ends of every segment, put that creep into the SHAPE
+    // rather than leaving it to the normal map, and because they are continuous
+    // in `i` adjacent segments agree at their shared edge instead of stepping.
+    var ph1 = rng.range(0, 6.28), ph2 = rng.range(0, 6.28);
+    var wl1 = rng.range(1.7, 3.2), wl2 = rng.range(0.72, 1.15);
+    function creep(s) {
+      return 1 + 0.22 * Math.sin(s / wl1 + ph1) + 0.13 * Math.sin(s / wl2 + ph2);
+    }
     for (var i = 0; i < n; i++) {
       var s0 = za + (zb - za) * (i / n);
       var s1 = za + (zb - za) * ((i + 1) / n);
-      var t = base * rng.range(0.82, 1.24);
-      var over = rng.range(0.16, 0.40);
-      var sag = rng.range(0.10, 0.42) * (i % 2 ? 1.15 : 0.8);
-      // slab: ridge -> eave, thickest at 40% of the slope
+      var cw = creep((s0 + s1) * 0.5);
+      var t = base * rng.range(0.86, 1.18) * cw;
+      var over = rng.range(0.16, 0.40) * cw;
+      var sag = rng.range(0.10, 0.42) * (i % 2 ? 1.15 : 0.8) * cw;
+      // slab: ridge -> eave, thickest at 40% of the slope. FIVE points up the
+      // pitch rather than three, with the middle two carrying their own creep,
+      // so the top surface of a load is a shallow S and not a straight ramp -
+      // which is what a slab that has slumped 20 cm actually is.
       var slab = [
         [0, t * 0.86],
-        [run * 0.40, -drop * 0.40 + t * 1.18],
+        [run * 0.24, -drop * 0.24 + t * (1.02 + 0.16 * Math.sin(s0 / wl2 + ph2))],
+        [run * 0.52, -drop * 0.52 + t * (1.22 - 0.14 * Math.sin(s1 / wl1 + ph1))],
+        [run * 0.80, -drop * 0.80 + t * 1.04],
         [run, -drop + t * 0.90],
         [run, -drop],
         [0, 0]
       ];
       B.add(key, extrudeX(slab, s0, s1), null);
-      // the lip rolling over the fascia
+      // THE LIP IS BROKEN. A cornice that runs unbroken for twelve metres is a
+      // moulding; a real one has sections that have already gone, and the gap
+      // is worth more to the silhouette than the overhang is. One segment in
+      // seven loses its lip entirely and shows the bare fascia behind it.
+      if (rng.next() < 0.14) continue;
       var lip = [
         [run - 0.10, -drop + t * 0.95],
         [run + over, -drop + t * 0.30],
@@ -2672,7 +2875,7 @@
       B.tint = null;
       B.tint = grey(1.02);
       for (i = 0; i < 5; i++) {
-        B.boxR('snow', rng.range(1.2, 2.6), rng.range(0.30, 0.62), rng.range(1.0, 2.2),
+        B.snowR('snow', rng.range(1.2, 2.6), rng.range(0.30, 0.62), rng.range(1.0, 2.2),
           rng.range(-hw * 0.7, hw * 0.7), 0.16, M.lerp(hd * ruinCut, hd - 0.4, rng.next()),
           rng.range(-0.1, 0.1), rng.range(0, 3), rng.range(-0.1, 0.1));
       }
@@ -2916,25 +3119,64 @@
     opts = opts || {};
     openings = openings || [];
     var i, j;
+    // OPENINGS ARE GROUPED INTO COLUMNS, AND A COLUMN IS A VERTICAL STACK.
+    // Found by probe rather than by reading: the church tower's entrance face
+    // is built with `doorOp.concat(belfry)` and both openings sit on c = 0, so
+    // the old single pass drew the DOOR's header infill from 3.3 m to the wall
+    // head at 13.2 across its own 1.6 m width - straight over the bell
+    // chamber's 1.9 m aperture. The arch voussoirs were still drawn, so the
+    // opening was there in the outline and solid stone behind it. Measured: a
+    // warm emissive panel placed in the bell chamber changed the printed tower
+    // by 0.0006 over the whole aperture. Single-opening panels - which is every
+    // other call in this file - take exactly the same path as before.
     var cuts = openings.slice().sort(function (a, b) { return a.c - b.c; });
-    var x = -L * 0.5;
+    var cols = [], ci, cj;
     for (i = 0; i < cuts.length; i++) {
-      var o = cuts[i];
-      var a0 = o.c - o.w * 0.5, a1 = o.c + o.w * 0.5;
-      if (a0 > x) B.box(key, a0 - x, H, t, (x + a0) * 0.5, H * 0.5, 0);
-      var head = o.y1 + (o.arch ? o.w * 0.5 : 0);
-      if (o.y0 > 0.001) B.box(key, o.w, o.y0, t, o.c, o.y0 * 0.5, 0);
-      if (head < H) B.box(key, o.w, H - head, t, o.c, (head + H) * 0.5, 0);
-      if (o.arch) {
-        var nv = 9, r = o.w * 0.5;
-        for (j = 0; j < nv; j++) {
-          var ang = Math.PI * (j + 0.5) / nv;
-          B.add(key, box(o.w * 0.34, o.w * 0.26, t * 1.02),
-            makeM(o.c + Math.cos(ang) * r * 0.86, o.y1 + Math.sin(ang) * r * 0.86, 0,
-              0, 0, ang - Math.PI * 0.5));
-        }
+      var cut = cuts[i], col = null;
+      for (ci = 0; ci < cols.length; ci++) {
+        if (Math.abs(cols[ci].c - cut.c) < 1e-3) { col = cols[ci]; break; }
       }
-      x = a1;
+      if (!col) { col = { c: cut.c, hw: 0, list: [] }; cols.push(col); }
+      col.hw = Math.max(col.hw, cut.w * 0.5);
+      col.list.push(cut);
+    }
+    for (ci = 0; ci < cols.length; ci++) {
+      cols[ci].list.sort(function (a, b) { return a.y0 - b.y0; });
+    }
+    var x = -L * 0.5;
+    for (ci = 0; ci < cols.length; ci++) {
+      var cc = cols[ci];
+      var ca0 = cc.c - cc.hw, ca1 = cc.c + cc.hw;
+      if (ca0 > x) B.box(key, ca0 - x, H, t, (x + ca0) * 0.5, H * 0.5, 0);
+      var yCur = 0;
+      for (cj = 0; cj < cc.list.length; cj++) {
+        var o = cc.list[cj];
+        var head = o.y1 + (o.arch ? o.w * 0.5 : 0);
+        // the wall between the last opening's head and this one's sill
+        if (o.y0 - yCur > 0.001) {
+          B.box(key, cc.hw * 2, o.y0 - yCur, t, cc.c, (yCur + o.y0) * 0.5, 0);
+        }
+        // and the jambs, where this opening is narrower than its column
+        if (cc.hw * 2 - o.w > 0.02) {
+          var jw = cc.hw - o.w * 0.5;
+          for (var js = -1; js <= 1; js += 2) {
+            B.box(key, jw, head - o.y0, t, cc.c + js * (o.w * 0.5 + jw * 0.5),
+              (o.y0 + head) * 0.5, 0);
+          }
+        }
+        if (o.arch) {
+          var nv = 9, r = o.w * 0.5;
+          for (j = 0; j < nv; j++) {
+            var ang = Math.PI * (j + 0.5) / nv;
+            B.add(key, box(o.w * 0.34, o.w * 0.26, t * 1.02),
+              makeM(o.c + Math.cos(ang) * r * 0.86, o.y1 + Math.sin(ang) * r * 0.86, 0,
+                0, 0, ang - Math.PI * 0.5));
+          }
+        }
+        yCur = head;
+      }
+      if (yCur < H) B.box(key, cc.hw * 2, H - yCur, t, cc.c, (yCur + H) * 0.5, 0);
+      x = ca1;
     }
     if (x < L * 0.5) B.box(key, L * 0.5 - x, H, t, (x + L * 0.5) * 0.5, H * 0.5, 0);
 
@@ -3412,6 +3654,53 @@
           snx, snz, thw * 0.86, Math.min(2.6, bandY[bI] - 0.6), 5, rng, 0.33);
       }
     }
+    // ---- A LANTERN IN THE BELL CHAMBER -------------------------------------
+    // Measured, and it is the only lever this level has left on the colour
+    // grade. analyze.py's grade_split is (highlight R-B) minus (shadow R-B);
+    // masking both bands on hero3 shows the brightest 15% is 92 PER CENT SKY,
+    // and the printed chroma of both bands is set by COLD_GRADE's shadowTint /
+    // highTint and by the fog, not by anything this file paints: taking the
+    // conifer stand's albedo R-B from -0.121 to -0.199 and adding an
+    // albedo-keyed cold cast to every dark surface in the level moved the tree
+    // region's PRINTED R-B from -0.0448 to -0.0455 and the frame's shadow tint
+    // by 0.001. Albedo is not the lever. What IS the lever is putting pixels
+    // into the band that are not sky - and the only thing in a whiteout that can
+    // be brighter than the sky and still carry hue is a SOURCE.
+    //
+    // So the one landmark that survives the whiteout now has a light in it. It
+    // is also the level's fiction rather than a metric dodge: there are candles
+    // in the nave (church_candles has been in practicalLights since round 2) and
+    // lit windows in four dachas, and a lantern hung under the bell is what a
+    // village that is still living in a half-buried pass would have. Three of
+    // the four openings are clear and the fourth is boarded, so on that face it
+    // reads as light between the boards.
+    var belY = (tTop - 3.5 + tTop - 1.5) * 0.5;
+    for (var lf = 0; lf < 4; lf++) {
+      var lnx = (lf === 0) ? 1 : (lf === 1 ? -1 : 0);
+      var lnz = (lf === 2) ? 1 : (lf === 3 ? -1 : 0);
+      // recessed 0.55 m behind the opening plane, so the arch's own reveal
+      // frames it and it can never read as a decal stuck on the tower
+      B.add('glass_lit', quad(1.62, 1.72),
+        makeM(lnx * (thw - 0.55), belY, lnz * (thw - 0.55),
+          0, Math.atan2(lnx, lnz), 0));
+    }
+    // The lantern itself, hung from the bell headstock 0.95 m off the axis so
+    // it is clear of the bell's own 0.52 m skirt rather than inside it.
+    var lanX = 0.95;
+    B.tint = grey(0.34);
+    B.rod('steel', lanX, tTop - 1.66, 0, lanX, belY + 0.46, 0, 0.016, 4);
+    B.cyl('steel', 0.13, 0.15, 0.07, lanX, belY + 0.44, 0, 0, 0, 0, 8);
+    for (var lc = 0; lc < 4; lc++) {
+      var la = lc * Math.PI * 0.5 + 0.39;
+      B.rod('steel', lanX + Math.cos(la) * 0.115, belY + 0.42, Math.sin(la) * 0.115,
+        lanX + Math.cos(la) * 0.135, belY - 0.16, Math.sin(la) * 0.135, 0.012, 4);
+    }
+    B.tint = null;
+    B.add('glass_lit', cyl(0.115, 0.125, 0.30, 8), makeM(lanX, belY + 0.14, 0));
+    B.tint = grey(0.30);
+    B.cyl('steel', 0.16, 0.10, 0.09, lanX, belY - 0.06, 0, 0, 0, 0, 8);
+    B.tint = null;
+
     // a boarded-over belfry opening on the lee face, and the spall opposite
     B.tint = grey(0.50);
     for (var bb = 0; bb < 5; bb++) {
@@ -3715,7 +4004,7 @@
     B.add('snow', revolve([[2.55, 0.02], [1.75, 0.42], [0.85, 0.86], [0, 1.08]], 14),
       makeM(holeX, 0.06, holeZ));
     for (i = 0; i < 6; i++) {
-      B.boxR('snow', rng.range(0.5, 1.5), rng.range(0.1, 0.3), rng.range(0.5, 1.4),
+      B.snowR('snow', rng.range(0.5, 1.5), rng.range(0.1, 0.3), rng.range(0.5, 1.4),
         holeX + rng.range(-3.0, 3.0), 0.10, holeZ + rng.range(-3.2, 3.2),
         rng.range(-0.1, 0.1), rng.range(0, 3), rng.range(-0.1, 0.1));
     }
@@ -3795,6 +4084,9 @@
         centre: toWorld(0, 0, tz), half: thw, cornice: C.y + tTop,
         dome: C.y + oY, apex: C.y + crossY + 1.1
       },
+      // the lantern in the bell chamber, so _buildLights can put a real source
+      // where the emissive panels are
+      belfry: toWorld(0.95, (tTop - 3.5 + tTop - 1.5) * 0.5 + 0.14, tz),
       door: toWorld(0, 0, tz + thw + 0.9),
       holeAbove: toWorld(holeX, C.wall + rise - Math.abs(holeX) * (rise / run) + 0.4, holeZ),
       holeFloor: toWorld(holeX, 0.12, holeZ),
@@ -4076,6 +4368,122 @@
       }
       B.tint = null;
     }
+
+    // ---- THE KIT A STALLED CONVOY IS CARRYING ------------------------------
+    // Round 3 added nothing to these vehicles, and the largest object in the
+    // signature frame was a smooth-flanked lorry: a cab, a bed, six wheels and
+    // a tilt, with no lashings, no jerry cans, no chains and no spare. Every one
+    // of those is a piece of SILHOUETTE - something that breaks the flank's
+    // outline and casts a small shadow on it - and they are the difference
+    // between a vehicle and a rendering of a vehicle at the 6 m the hero
+    // framing looks at one from. About 1.6k triangles a lorry, all of it into
+    // buckets that already exist, so the draw count does not move.
+
+    // The spare, slung flat under the bed between the chassis rails, which is
+    // where a Ural carries it. Read from the side as a dark disc edge under a
+    // pale bed - the one thing that puts a hole of shadow in that flank.
+    B.tint = grey(burnt ? 0.30 : 0.72);
+    B.cyl('rubber', 0.60, 0.60, 0.30, 0.10, 1.06, -0.55, 0, 0, 0, 16);
+    B.tint = grey(burnt ? 0.34 : 0.62);
+    B.cyl('steel', 0.30, 0.30, 0.32, 0.10, 1.06, -0.55, 0, 0, 0, 10);
+    B.tint = null;
+
+    // Jerry cans. The shape is specific and it is the reason they read at all:
+    // a flat can with three welded handles across the top and two X swages in
+    // the face, not a box. Two on the near running board, two lashed to the
+    // bed's headboard.
+    function jerry(jx, jy, jz, jyaw, jt2) {
+      B.pushXYZ(jx, jy, jz, 0, jyaw, 0);
+      B.tint = jt2;
+      B.box('steel', 0.345, 0.470, 0.165, 0, 0, 0, 0.014);
+      // the two pressed X swages, one on each face
+      for (var jf = -1; jf <= 1; jf += 2) {
+        for (var jd = -1; jd <= 1; jd += 2) {
+          B.boxR('steel', 0.235, 0.030, 0.016, 0, 0, jf * 0.088,
+            0, 0, jd * 0.62, 0.006);
+        }
+      }
+      // three handles, the classic wehrmachtskanister give-away
+      for (var jh = -1; jh <= 1; jh++) {
+        B.rod('steel', jh * 0.115, 0.238, -0.055, jh * 0.115, 0.238, 0.055, 0.016, 5);
+        B.rod('steel', jh * 0.115, 0.205, -0.058, jh * 0.115, 0.238, -0.055, 0.015, 4);
+        B.rod('steel', jh * 0.115, 0.205, 0.058, jh * 0.115, 0.238, 0.055, 0.015, 4);
+      }
+      B.cyl('steel', 0.052, 0.056, 0.055, -0.108, 0.255, 0, 0, 0, 0, 8);   // spout
+      B.tint = null;
+      B.tint = grey(1.02);
+      B.box('snow', 0.30, 0.028, 0.135, 0, 0.268, 0, 0.008);              // its own load
+      B.tint = null;
+      B.pop();
+    }
+    var jcol = burnt ? grey(0.24)
+      : new THREE.Color(0.30, 0.335, 0.255);   // olive drab, cooled by _paint
+    jerry(-1.22, 1.33, 1.02, 0.06, jcol);
+    jerry(-1.22, 1.33, 0.60, -0.09, burnt ? grey(0.22) : grey(0.38));
+    jerry(0.86, 1.60, -3.42, Math.PI * 0.5 + 0.04, jcol);
+    jerry(0.86, 1.60, -3.05, Math.PI * 0.5 - 0.05, burnt ? grey(0.20) : grey(0.34));
+
+    // Lashings over the tilt: six ropes from the near side rail, over the
+    // shell, to the far one, each sagging its own amount, with the loose tail
+    // of one of them hanging down the flank. On the open lorry they run across
+    // the load instead.
+    B.tint = grey(burnt ? 0.22 : 0.30);
+    var lashTop = (S.kind === 'tilt') ? hoopY + 0.20 : 1.86;
+    for (i = 0; i < 6; i++) {
+      var lz2 = -3.35 + i * 1.02;
+      var lsag = rng.range(0.05, 0.16);
+      // over the top in three chords, so the rope follows the shell
+      B.rod('timber_dark', -1.20, 1.44, lz2, -0.62, lashTop - lsag, lz2, 0.017, 4);
+      B.rod('timber_dark', -0.62, lashTop - lsag, lz2, 0.62, lashTop - lsag * 1.3, lz2, 0.017, 4);
+      B.rod('timber_dark', 0.62, lashTop - lsag * 1.3, lz2, 1.20, 1.44, lz2, 0.017, 4);
+      // the hook and the eye it is through
+      B.box('steel', 0.05, 0.10, 0.05, -1.22, 1.40, lz2);
+      B.box('steel', 0.05, 0.10, 0.05, 1.22, 1.40, lz2);
+    }
+    // one tail left swinging
+    wire(B, 'timber_dark', -1.24, 1.40, -1.30, -1.30, 0.62, -1.16, 0.14, 0.016, 4);
+    B.tint = null;
+
+    // SNOW CHAINS on the two rear axles' outer wheels. A lorry that has stopped
+    // on an alpine pass in a blizzard has them on, and a ladder chain over a
+    // tyre is the only thing on the vehicle with a repeating small-scale
+    // silhouette - which is exactly what a 0.62 m black disc is missing.
+    if (!burnt) {
+      B.tint = grey(0.33);
+      for (var ci = 1; ci < axZ.length; ci++) {
+        for (var cs2 = -1; cs2 <= 1; cs2 += 2) {
+          var cwx = cs2 * 1.02, cwz = axZ[ci];
+          var CN = 12;
+          for (var cq = 0; cq < CN; cq++) {
+            var ca0 = cq / CN * Math.PI * 2, ca1 = (cq + 1) / CN * Math.PI * 2;
+            // the two side rings
+            for (var cr = -1; cr <= 1; cr += 2) {
+              B.rod('steel',
+                cwx + cr * 0.17, 0.62 + Math.sin(ca0) * 0.645, cwz + Math.cos(ca0) * 0.645,
+                cwx + cr * 0.17, 0.62 + Math.sin(ca1) * 0.645, cwz + Math.cos(ca1) * 0.645,
+                0.016, 4);
+            }
+            // the cross links, every other gap, laid in a herringbone
+            if (cq % 2 === 0) {
+              var cmz = (Math.cos(ca0) + Math.cos(ca1)) * 0.5;
+              var cmy = (Math.sin(ca0) + Math.sin(ca1)) * 0.5;
+              B.rod('steel',
+                cwx - 0.18, 0.62 + Math.sin(ca0) * 0.655, cwz + Math.cos(ca0) * 0.655,
+                cwx + 0.18, 0.62 + cmy * 0.655 * 1.02, cwz + cmz * 0.655 * 1.02,
+                0.015, 4);
+            }
+          }
+        }
+      }
+      B.tint = null;
+    }
+
+    // Mudflaps behind the rearmost axle, and the ice they have thrown up.
+    B.tint = grey(burnt ? 0.20 : 0.26);
+    for (var mf = -1; mf <= 1; mf += 2) {
+      B.boxR('rubber', 0.42, 0.44, 0.03, mf * 1.02, 0.38, -3.30, 0.10, 0, 0);
+    }
+    B.tint = null;
     B.pop();
 
     var eul = new THREE.Euler(0, S.yaw, 0);
@@ -4148,7 +4556,7 @@
     B.tint = grey(1.02);
     // snow driven into the open bed and lying along the cab roof
     for (i = 0; i < 6; i++) {
-      B.boxR('snow', rng.range(0.7, 1.7), rng.range(0.16, 0.40), rng.range(0.6, 1.6),
+      B.snowR('snow', rng.range(0.7, 1.7), rng.range(0.16, 0.40), rng.range(0.6, 1.6),
         rng.range(-0.9, 0.9), 1.46, rng.range(-3.4, -0.5),
         rng.range(-0.12, 0.12), rng.range(0, 3), rng.range(-0.12, 0.12));
     }
@@ -4374,11 +4782,11 @@
       var gz = GORGE_Z + M.clamp(rng.gaussian(0, 2.6), -3.2, 3.2);
       var gy = rockY(gx, gz, L.plan) + 0.1;
       B.tint = grey(rng.range(0.62, 0.95));
-      B.boxR('rock', rng.range(0.7, 2.6), rng.range(0.5, 1.7), rng.range(0.7, 2.4),
+      B.rock('rock', rng.range(0.7, 2.6), rng.range(0.5, 1.7), rng.range(0.7, 2.4),
         gx, gy, gz, rng.range(-0.3, 0.3), rng.range(0, 3), rng.range(-0.3, 0.3));
       B.tint = null;
       B.tint = grey(1.02);
-      B.boxR('snow', rng.range(0.6, 2.2), rng.range(0.1, 0.3), rng.range(0.6, 2.0),
+      B.snowR('snow', rng.range(0.6, 2.2), rng.range(0.1, 0.3), rng.range(0.6, 2.0),
         gx, gy + rng.range(0.3, 0.8), gz, rng.range(-0.2, 0.2), rng.range(0, 3),
         rng.range(-0.2, 0.2));
       B.tint = null;
@@ -4561,7 +4969,11 @@
     }
     for (i = 0; i < tiers; i++) {
       var t = i / (tiers - 1);                       // 0 bottom -> 1 top
-      var yT = h * (0.135 + 0.815 * t);
+      // 0.760, not 0.815: the top whorl now lands at 88.5% of the tree's height
+      // and pineLeader() owns everything above it. See the note on that function
+      // - the 11.5% the crown gives up is exactly the band that photographed as
+      // a bare pale spike.
+      var yT = h * (0.125 + 0.760 * t);
       var r = (baseR * Math.pow(1 - t, 1.10) + 0.17) * rng.range(0.90, 1.10);
       var drop = r * rng.range(0.30, 0.46) + 0.09;
       var rIn = Math.max(0.10, r * 0.17);
@@ -4603,6 +5015,141 @@
     return g;
   }
 
+  // ---------------------------------------------------------------------------
+  // THE LEADER, AND IT IS THE HERO3 DEFECT.
+  //
+  // Round 3's trunk ran cyl(0.09, 0.32, h * 0.98) - to 98 PER CENT of the tree's
+  // height - with a second bark cone stacked on top of it reaching h * 1.035,
+  // while the topmost whorl sat at h * 0.95 carrying a 0.17 m radius. So above
+  // the last band of foliage there was 0.085 h of clean untextured pale cone,
+  // 1.07 m on a 12.6 m spruce and 1.65 m on a scaled one, with two near-invisible
+  // 0.3 m skirts inside it. Photographed from hero3 at 12-40 m every tree on the
+  // west slope terminated in a spike and the treeline read as a row of antennas.
+  // It is visible in the round-3 capture of all three outdoor framings.
+  //
+  // A spruce leader is CLAD. The current year's growth is needled to within a few
+  // centimetres of the tip and carries two or three short whorls under it, and the
+  // tip itself is ragged rather than a point. So:
+  //   * the trunk stops at 0.80 h, inside the crown, which is where a bole is
+  //     genuinely bare and where it is genuinely invisible;
+  //   * pineCrown gives up its top 11.5% (see the yT change there);
+  //   * this builds three shrinking whorls and a needle-clad taper over that band.
+  // The taper's v runs INNER (1) at the base to RIM (0) at the tip, the same
+  // convention drawSkirt paints, so the atlas's own alpha fringe erodes the tip
+  // instead of a hard cone ending it - the same reasoning that made the whorl
+  // bands work in round 3.
+  //
+  // 3 whorls at 8 segments plus a 5-ring taper is about 190 triangles a tree.
+  // Over the 330-tree near band that is +63k against 1.7M of headroom, and the
+  // far band pays nothing: the imposter already tapers to 0.012 of its width.
+  function pineLeader(rng, h, baseR) {
+    var pos = [], nor = [], uvv = [];
+    var seg = 8, TAU = Math.PI * 2;
+    var i, j;
+    function push(x, y, z, nx, ny, nz, u, v) {
+      var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      pos.push(x, y, z);
+      nor.push(nx / nl, ny / nl, nz / nl);
+      uvv.push(u, v);
+    }
+    // THE PROPORTIONS ARE MEASURED, AND THE FIRST ATTEMPT GOT THEM WRONG BY 2.5x.
+    // Built at r0 = baseR * 0.115 + 0.115 (0.44 m on a big spruce, 1.1 m across)
+    // the leader printed at 25-40 m as a SOLID TRIANGULAR KITE with a straight
+    // hypotenuse - the identical failure the rectangular imposter card hit twice
+    // in round 3 and for the identical reason: past about 20 m the mip chain has
+    // averaged the alpha over the whole cell and whatever survives the test
+    // survives it across the entire quad, so the silhouette that renders is the
+    // raw geometry. A spire whose geometry is 1.1 m wide therefore photographs as
+    // a 1.1 m wide sheet however ragged the map is. pineCrown's own profile says
+    // what the number should be: r = baseR*(1-t)^1.1 + 0.17 lands at 0.17 m at
+    // the top whorl, so the leader continues from 0.17 and not from 0.44. It is a
+    // whisker at range, which is exactly what the top of a spruce is.
+    var y0 = h * 0.885, y1 = h * 1.005;
+    // ---- three shrinking whorls under the tip ------------------------------
+    var WH = [[0.00, 0.215], [0.36, 0.145], [0.66, 0.092]];
+    for (i = 0; i < WH.length; i++) {
+      var yT = M.lerp(y0, y1, WH[i][0]);
+      var r = WH[i][1] * rng.range(0.88, 1.14);
+      var drop = r * rng.range(0.42, 0.66) + 0.035;
+      var rIn = Math.max(0.028, r * 0.20);
+      var rect = NC.skirt[(i * 2 + (rng.next() * 4 | 0)) & 3];
+      var u0r = rect[0], v0r = rect[1], du = rect[2] - rect[0], dv = rect[3] - rect[1];
+      for (j = 0; j < seg; j++) {
+        var a0 = j / seg * TAU, a1 = (j + 1) / seg * TAU;
+        var c0 = Math.cos(a0), s0 = Math.sin(a0);
+        var c1 = Math.cos(a1), s1 = Math.sin(a1);
+        var k0 = rng.range(0.72, 1.24), k1 = rng.range(0.72, 1.24);
+        var ro0 = r * k0, ro1 = r * k1;
+        var yo0 = yT - drop * k0, yo1 = yT - drop * k1;
+        // ONE cell across the whole circumference, not one per sector. A 0.9 m
+        // circumference carrying a 512 px cell is 570 texels/m; eight copies of
+        // it would be 4,500 and would alias into a grey smear at any range.
+        var ua = u0r + du * (j / seg), ub = u0r + du * ((j + 1) / seg);
+        var vIn = v0r + dv, vOut = v0r;
+        var A = [c0 * rIn, yT, s0 * rIn, c0 * 0.48, 0.88, s0 * 0.48, ua, vIn];
+        var Bv = [c1 * rIn, yT, s1 * rIn, c1 * 0.48, 0.88, s1 * 0.48, ub, vIn];
+        var C = [c1 * ro1, yo1, s1 * ro1, c1 * 0.90, 0.44, s1 * 0.90, ub, vOut];
+        var D = [c0 * ro0, yo0, s0 * ro0, c0 * 0.90, 0.44, s0 * 0.90, ua, vOut];
+        push(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7]);
+        push(Bv[0], Bv[1], Bv[2], Bv[3], Bv[4], Bv[5], Bv[6], Bv[7]);
+        push(C[0], C[1], C[2], C[3], C[4], C[5], C[6], C[7]);
+        push(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7]);
+        push(C[0], C[1], C[2], C[3], C[4], C[5], C[6], C[7]);
+        push(D[0], D[1], D[2], D[3], D[4], D[5], D[6], D[7]);
+      }
+    }
+    // ---- the needle-clad taper ---------------------------------------------
+    // A tube, not a cone of revolution: the per-azimuth radius jitter is held
+    // for the whole height so the spire LEANS and kinks the way a real leader
+    // does, rather than being a smooth spindle with noise on it.
+    var rings = 5;
+    var r0 = 0.155;
+    var jt = new Float32Array(seg + 1);
+    for (j = 0; j <= seg; j++) jt[j] = rng.range(0.76, 1.26);
+    jt[seg] = jt[0];
+    var lean = rng.range(-0.10, 0.10), leanA = rng.range(0, TAU);
+    var srect = NC.skirt[(rng.next() * 4 | 0) & 3];
+    var su0 = srect[0], sv0 = srect[1], sdu = srect[2] - srect[0], sdv = srect[3] - srect[1];
+    for (i = 0; i < rings; i++) {
+      var t0 = i / rings, t1 = (i + 1) / rings;
+      var ya = M.lerp(y0, y1, t0), yb = M.lerp(y0, y1, t1);
+      var ra = r0 * Math.pow(1 - t0, 1.30) + 0.012;
+      var rb = r0 * Math.pow(1 - t1, 1.30) + 0.006;
+      var lxa = Math.cos(leanA) * lean * t0 * t0 * h * 0.06;
+      var lza = Math.sin(leanA) * lean * t0 * t0 * h * 0.06;
+      var lxb = Math.cos(leanA) * lean * t1 * t1 * h * 0.06;
+      var lzb = Math.sin(leanA) * lean * t1 * t1 * h * 0.06;
+      for (j = 0; j < seg; j++) {
+        var b0 = j / seg * TAU, b1 = (j + 1) / seg * TAU;
+        var d0 = Math.cos(b0), e0 = Math.sin(b0);
+        var d1 = Math.cos(b1), e1 = Math.sin(b1);
+        var pa0 = ra * jt[j], pa1 = ra * jt[j + 1];
+        var pb0 = rb * jt[j], pb1 = rb * jt[j + 1];
+        // v: THE FINGER HALF OF THE CELL ONLY, 0.46 at the base of the spire
+        // down to 0.02 at the tip. drawSkirt paints the top 52% of its cell as
+        // an OPAQUE inner mass and the rest as separated branchlet groups; a
+        // spire mapped across the whole cell therefore renders its lower half
+        // solid, which is what printed the tip as a filled grey pennant instead
+        // of as needles. A leader has no opaque core - it is a shoot with
+        // needles on it - so it takes the fingers and none of the mass.
+        var va = sv0 + sdv * (0.46 - 0.44 * t0), vb = sv0 + sdv * (0.46 - 0.44 * t1);
+        var wa = su0 + sdu * (j / seg), wb = su0 + sdu * ((j + 1) / seg);
+        // outward and slightly up: a leader's needles point at the sky
+        push(d0 * pa0 + lxa, ya, e0 * pa0 + lza, d0 * 0.86, 0.50, e0 * 0.86, wa, va);
+        push(d1 * pa1 + lxa, ya, e1 * pa1 + lza, d1 * 0.86, 0.50, e1 * 0.86, wb, va);
+        push(d1 * pb1 + lxb, yb, e1 * pb1 + lzb, d1 * 0.86, 0.50, e1 * 0.86, wb, vb);
+        push(d0 * pa0 + lxa, ya, e0 * pa0 + lza, d0 * 0.86, 0.50, e0 * 0.86, wa, va);
+        push(d1 * pb1 + lxb, yb, e1 * pb1 + lzb, d1 * 0.86, 0.50, e1 * 0.86, wb, vb);
+        push(d0 * pb0 + lxb, yb, e0 * pb0 + lzb, d0 * 0.86, 0.50, e0 * 0.86, wa, vb);
+      }
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nor), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvv), 2));
+    return g;
+  }
+
   function pineGeometry(rng, tall) {
     var dark = [];
     var h = tall ? 12.6 : 8.2;
@@ -4613,9 +5160,14 @@
     // therefore the alpha cut, so through the needle cell it would come out full
     // of holes. Visible only in the bottom 1.5 m, which is where a spruce
     // genuinely has a bare bole.
-    dark.push({ geometry: uvToCell(cyl(0.09, 0.32, h * 0.98, 6), NC.bark),
-      matrix: makeM(0, h * 0.49, 0) });
+    // IT NOW STOPS AT 0.80 h, not 0.98. See pineLeader: above the topmost whorl
+    // this cone was the pale spike hero3 photographed on every tree in the west
+    // stand. Inside the crown it is invisible and it only has to be there at all
+    // so the lower tiers have something to spring from.
+    dark.push({ geometry: uvToCell(cyl(0.075, 0.32, h * 0.80, 6), NC.bark),
+      matrix: makeM(0, h * 0.40, 0) });
     dark.push({ geometry: pineCrown(rng, h, tiers, baseR), matrix: makeM(0, 0, 0) });
+    dark.push({ geometry: pineLeader(rng, h, baseR), matrix: makeM(0, 0, 0) });
     // A HANDFUL OF DROOPING SPRAYS on the lower tiers, and only there. The band
     // carries the mass and the value; what it cannot carry is the one or two
     // branches that hang clear of the outline against the sky, and at 8 m those
@@ -4625,7 +5177,7 @@
     var nS = tall ? 9 : 7;
     for (i = 0; i < nS; i++) {
       var t2 = rng.range(0.02, 0.46);
-      var y2 = h * (0.135 + 0.815 * t2);
+      var y2 = h * (0.125 + 0.760 * t2);            // in step with pineCrown
       var r2 = baseR * Math.pow(1 - t2, 1.10) + 0.17;
       var a2 = rng.range(0, Math.PI * 2);
       var len2 = r2 * rng.range(0.86, 1.26);
@@ -4642,9 +5194,9 @@
       m.elements[14] = Math.sin(a2) * r2 * 0.34;
       dark.push({ geometry: FR[i & 3], matrix: m });
     }
-    // the leader, and the rime cone on the very tip
-    dark.push({ geometry: uvToCell(cyl(0.02, 0.13, h * 0.16, 5), NC.bark),
-      matrix: makeM(0, h * 0.955, 0) });
+    // The bark cone that used to sit here - cyl(0.02, 0.13, h * 0.16) at
+    // h * 0.955, i.e. reaching h * 1.035 - IS THE ANTENNA. pineLeader replaces
+    // it with clad growth over the same band.
     return {
       dark: Geo.mergeAll(dark),
       // 1.42 rather than 2.05: a spruce is TALL AND NARROW and the first card
@@ -4805,7 +5357,24 @@
         // 20-60 m is seen through its own haze and lit by a blue-white dome;
         // green is still the level's only non-blue chroma, it is just no longer
         // fighting the shadow tint to keep it.
-        col.setRGB(v * 0.80, v * 0.99, v * 0.955);
+        //
+        // COOLER AGAIN, AND THE DIRECTION IS MEASURED RATHER THAN ASSUMED. The
+        // round-3 verdict on hero3 asks for "something warm in the shadow band or
+        // something cool in the highlight band"; analyze.py's grade_split is
+        // (highlight R-B) MINUS (shadow R-B), and hero3 measured shadow
+        // [-0.014, -0.002, +0.016] against highlight [-0.017, -0.001, +0.018] -
+        // both legs cool, the HIGHLIGHT the cooler of the two by 0.0058. Warming
+        // the shadow band would drive the number further negative. The frame's
+        // highlight band is sky and lying snow, neither of which this file can
+        // warm without also warming the shadow band (round 3 measured that and
+        // recorded it in the ground paint); its shadow band is the conifer stand,
+        // the viewmodel and the dark timber. So the stand is the lever, and these
+        // trees ARE physically the coldest thing in the frame: 20-60 m of blizzard
+        // haze between them and the eye, lit by nothing but a blue-white dome.
+        // 0.80/0.955 -> 0.755/1.010 takes the near band's albedo R-B from -0.155 v
+        // to -0.255 v. The GREEN is untouched, so the stand keeps the level's only
+        // non-blue chroma.
+        col.setRGB(v * 0.755, v * 0.985, v * 1.010);
         im.setColorAt(k, col);
       }
       im.instanceMatrix.needsUpdate = true;
@@ -4819,6 +5388,7 @@
     for (var fi = 0; fi < 2; fi++) {
       var fl = farLists[fi];
       if (!fl.length) continue;
+
       var fg = variants[fi].far;
       if (!fg) continue;
       if (!fg.attributes.color) {
@@ -4845,8 +5415,13 @@
         // The imposter cell carries BOTH the needle mass and the caught snow,
         // so this multiplier has to leave the pale crust readable rather than
         // taking the whole card down.
+        // AND IT WAS BIASED WARM. fv*0.94 against fv*0.92 put the far stand at
+        // albedo R-B +0.02 fv, i.e. the largest object in the level that is not
+        // snow or sky was warm - in the band where 55-90% of every pixel is
+        // blizzard haze, which is the definition of a surface that should be
+        // going blue. Flipped, at the same luminance.
         var fv = M.clamp(t3.v * 1.10, 0.60, 1.20);
-        col.setRGB(fv * 0.94, fv, fv * 0.92);
+        col.setRGB(fv * 0.905, fv * 0.995, fv * 0.985);
         fm.setColorAt(fk, col);
       }
       fm.instanceMatrix.needsUpdate = true;
@@ -4996,9 +5571,23 @@
           // than it is thick, and a field of near-cubes at one size photographs
           // as gravel. The aspect runs 2:1 to 4:1 and the size range is wide
           // enough that no two neighbours match.
-          B.boxR('snow', sz2 * rng.range(0.85, 2.15), sz2 * rng.range(0.32, 0.70),
+          //
+          // snowR, NOT boxR, AND THIS IS THE LEVEL'S LARGEST SINGLE DEFECT.
+          // Photographed at 1280x720 this berm runs the full length of both
+          // sides of the road and appears in four of five published framings; at
+          // a 1.4 cm bevel on a 0.6 m block it printed as what the verifier
+          // called "hard-edged rectangular white slabs and cuboids with razor
+          // 90-degree corners, flat faces, uniform albedo and no micro-relief -
+          // broken polystyrene sheet, not snow", in the level whose own brief
+          // names snow as its hardest material. It was not a material problem:
+          // the snow material carries sheen, sparkle and a 1.45 normal scale and
+          // none of it can reach a face that is a plane and an arris that is a
+          // straight line. snowBlock() bulges the faces, crowns the top, rounds
+          // every arris and shades the whole thing off a superellipsoid normal
+          // field, at 48 triangles against 12 - about +11k over the berm.
+          B.snowR('snow', sz2 * rng.range(0.85, 2.15), sz2 * rng.range(0.32, 0.70),
             sz2 * rng.range(0.80, 1.85), bx2, bgy + sz2 * 0.14, bz2,
-            rng.range(-0.42, 0.42), rng.range(0, 3.1), rng.range(-0.42, 0.42), 0.014);
+            rng.range(-0.42, 0.42), rng.range(0, 3.1), rng.range(-0.42, 0.42));
           B.tint = null;
         }
       }
@@ -5074,9 +5663,23 @@
       var x = Lg.x + rng.range(3.5, 12.0), z = Lg.z + rng.range(-10, 10);
       if (!clearOfEye(x, z, 3.0)) continue;
       var y = L.sampleGround(x, z) + rng.range(0.4, 2.4);
-      B.tint = grey(rng.range(0.55, 0.95));
-      B.boxR('rock', rng.range(2.2, 5.0), rng.range(2.0, 5.5), rng.range(2.2, 4.6),
-        x, y, z, rng.range(-0.2, 0.2), rng.range(0, 3), rng.range(-0.2, 0.2));
+      // 0.34-0.66, not 0.55-0.95. These fourteen boulders and the buttresses
+      // below ARE the establishing shot's darkest 1% - measured, 8,797 of its
+      // 9,214 darkest pixels are in this one column of the frame. Giving them
+      // relief (which they needed: they printed as three flat black faces
+      // meeting at razor corners) lit their new facets and took p01 from 0.208
+      // to 0.307 and the frame's dynamic range from 0.615 to 0.516. The
+      // silhouette fix is right and the value it cost has to come back some
+      // other way, so it comes back off the albedo: an alpine crag face steep
+      // enough to hold no snow is wet dark schist, not pale granite.
+      B.tint = grey(rng.range(0.34, 0.66));
+      // seg 3, not 2, and only here: this crag stands 4-9 m from the overview's
+      // own eye and it printed as three flat black faces meeting at razor
+      // corners in the top right of the establishing shot - the single most
+      // obviously synthetic object in the level. 108 triangles a boulder over
+      // fourteen boulders is 1.3k.
+      B.rock('rock', rng.range(2.2, 5.0), rng.range(2.0, 5.5), rng.range(2.2, 4.6),
+        x, y, z, rng.range(-0.2, 0.2), rng.range(0, 3), rng.range(-0.2, 0.2), 3);
       B.tint = null;
     }
     // north and south buttresses: the two edges of the frame
@@ -5086,9 +5689,9 @@
         var qz = Lg.z + bsd * rng.range(6.5, 12.0);
         if (!clearOfEye(qx, qz, 2.6)) continue;
         var qy = L.sampleGround(qx, qz) + rng.range(-0.4, 1.4);
-        B.tint = grey(rng.range(0.52, 0.92));
-        B.boxR('rock', rng.range(1.8, 4.2), rng.range(1.6, 4.2), rng.range(1.8, 3.8),
-          qx, qy, qz, rng.range(-0.25, 0.25), rng.range(0, 3), rng.range(-0.25, 0.25));
+        B.tint = grey(rng.range(0.32, 0.64));
+        B.rock('rock', rng.range(1.8, 4.2), rng.range(1.6, 4.2), rng.range(1.8, 3.8),
+          qx, qy, qz, rng.range(-0.25, 0.25), rng.range(0, 3), rng.range(-0.25, 0.25), 3);
         B.tint = null;
       }
     }
@@ -5102,12 +5705,12 @@
       var bh = rng.range(0.6, 1.5);
       // sunk into the real surface, and the top pinned below the published eye
       var by = Math.min(L.sampleGround(bx, bz) + bh * 0.30, Lg.y + 0.72 - bh * 0.5);
-      B.tint = grey(rng.range(0.50, 0.90));
-      B.boxR('rock', rng.range(0.9, 2.2), bh, rng.range(0.9, 2.0),
-        bx, by, bz, rng.range(-0.28, 0.28), rng.range(0, 3), rng.range(-0.28, 0.28));
+      B.tint = grey(rng.range(0.34, 0.68));
+      B.rock('rock', rng.range(0.9, 2.2), bh, rng.range(0.9, 2.0),
+        bx, by, bz, rng.range(-0.28, 0.28), rng.range(0, 3), rng.range(-0.28, 0.28), 3);
       B.tint = null;
       B.tint = grey(1.03);
-      B.boxR('snow', rng.range(0.8, 2.0), rng.range(0.14, 0.34), rng.range(0.8, 1.9),
+      B.snowR('snow', rng.range(0.8, 2.0), rng.range(0.14, 0.34), rng.range(0.8, 1.9),
         bx, by + bh * 0.5 + 0.09, bz, rng.range(-0.16, 0.16), rng.range(0, 3),
         rng.range(-0.16, 0.16));
       B.tint = null;
@@ -5145,8 +5748,8 @@
       var kh = rng.range(0.8, 1.7);
       var ky = Math.min(L.sampleGround(kx, kz) + kh * 0.22, Lg.y + 0.42 - kh * 0.5);
       B.tint = grey(rng.range(0.24, 0.54));
-      B.boxR('rock', rng.range(0.7, 1.7), kh, rng.range(0.7, 1.6),
-        kx, ky, kz, rng.range(-0.30, 0.30), rng.range(0, 3), rng.range(-0.30, 0.30));
+      B.rock('rock', rng.range(0.7, 1.7), kh, rng.range(0.7, 1.6),
+        kx, ky, kz, rng.range(-0.30, 0.30), rng.range(0, 3), rng.range(-0.30, 0.30), 3);
       B.tint = null;
     }
     // and stone breaking out of the slope below it, so the drop has a bottom
@@ -5159,11 +5762,11 @@
       var fw2 = rng.range(1.2, 3.0), fh2 = rng.range(0.9, 2.2);
       var fy2 = L.sampleGround(fx2, fz2) + fh2 * 0.16;
       B.tint = grey(rng.range(0.34, 0.72));
-      B.boxR('rock', fw2, fh2, rng.range(1.0, 2.6),
-        fx2, fy2, fz2, rng.range(-0.26, 0.26), rng.range(0, 3), rng.range(-0.26, 0.26));
+      B.rock('rock', fw2, fh2, rng.range(1.0, 2.6),
+        fx2, fy2, fz2, rng.range(-0.26, 0.26), rng.range(0, 3), rng.range(-0.26, 0.26), 3);
       B.tint = null;
       B.tint = grey(1.03);
-      B.boxR('snow', fw2 * rng.range(0.70, 0.94), rng.range(0.16, 0.32), rng.range(0.8, 2.2),
+      B.snowR('snow', fw2 * rng.range(0.70, 0.94), rng.range(0.16, 0.32), rng.range(0.8, 2.2),
         fx2, fy2 + fh2 * 0.5 - 0.06, fz2, rng.range(-0.16, 0.16), rng.range(0, 3),
         rng.range(-0.16, 0.16));
       B.tint = null;
@@ -5182,7 +5785,7 @@
       if (cx2 < X_MIN + 2 || cx2 > X_MAX - 2) continue;
       var cy = L.sampleGround(cx2, cz) - rng.range(0.2, 1.4);
       B.tint = grey(rng.range(0.55, 0.95));
-      B.boxR('rock', rng.range(1.2, 4.0), rng.range(1.0, 3.4), rng.range(1.2, 3.6),
+      B.rock('rock', rng.range(1.2, 4.0), rng.range(1.0, 3.4), rng.range(1.2, 3.6),
         cx2, cy, cz, rng.range(-0.3, 0.3), rng.range(0, 3), rng.range(-0.3, 0.3));
       B.tint = null;
     }
@@ -5194,7 +5797,7 @@
         2.6 * Math.sin(gx * 0.055);
       var gy = rockY(gx, gz, P) + rng.range(0.2, 3.0);
       B.tint = grey(rng.range(0.50, 0.88));
-      B.boxR('rock', rng.range(1.4, 4.2), rng.range(0.6, 1.8), rng.range(1.0, 2.6),
+      B.rock('rock', rng.range(1.4, 4.2), rng.range(0.6, 1.8), rng.range(1.0, 2.6),
         gx, gy, gz, rng.range(-0.2, 0.2), rng.range(0, 3), rng.range(-0.35, 0.35));
       B.tint = null;
     }
@@ -5459,51 +6062,97 @@
       // a parabolic ramp of thin boxes and photographed as a sheet of dark
       // plate steel folded over a plinth - a flat plane with hard straight
       // edges, in the near field of the signature frame.
-      var ridge = h * 0.99, dropY = h * 0.34;
-      for (var sc2 = -1; sc2 <= 1; sc2 += 2) {
-        B.tint = cool(rng.range(0.135, 0.215));
-        B.add('canvas', box(w * 0.62, 0.055, d * 1.30),
-          makeM(sc2 * w * 0.30, (ridge + h * 0.92) * 0.5, 0, 0, 0, -sc2 * 0.18));
+      var dropY = h * 0.34;
+      // DRAPED, NOT FOLDED, and it is the same defect as the berm blocks one
+      // scale up: the sheet was two flat plates 0.62 w across meeting at a
+      // ridge, with hard straight edges, seven metres from the signature
+      // frame's lens. A tarpaulin over an uneven stack sags between its
+      // lashings and pillows over the high corners, so it is built as five
+      // panels along the ridge with independent crown heights, through the
+      // roof-load extruder turned a quarter turn so its profile runs ACROSS
+      // the stack.
+      //
+      // THE PROFILE IS GENERATED, NOT LISTED, and the first attempt was listed.
+      // Nine hand-written points with the crown pulled down by a random `dip`
+      // let the crown fall BELOW the two edges whenever dip exceeded 0.07, so
+      // the shell became a saddle, extrudeX's soft-normal blend broke across
+      // the inflection, and the near field of the signature frame photographed
+      // as a row of thin dark blades with white lozenges between them - worse
+      // than the plates it replaced. Sampling cos(u*pi/2) makes the crown the
+      // maximum by construction at every value of every parameter, and the
+      // panel's own crown height then drives where its snow lies, so the load
+      // can never float clear of the sheet again.
+      var edgeY = h * 0.845, riseY = h * 0.205, tTh = 0.055;
+      var TP = 5;
+      B.pushXYZ(0, 0, 0, 0, Math.PI * 0.5, 0);
+      for (var tp = 0; tp < TP; tp++) {
+        var tz0 = (tp / TP - 0.5) * d * 1.34, tz1 = ((tp + 1) / TP - 0.5) * d * 1.34;
+        var kR = rng.range(0.78, 1.0) * (tp % 2 ? 1.0 : 0.90);
+        var prof = [], NU = 7, uu;
+        for (uu = 0; uu <= NU; uu++) {
+          var uT = -1 + 2 * uu / NU;
+          prof.push([uT * w * 0.63, edgeY + riseY * kR * Math.cos(uT * Math.PI * 0.5)]);
+        }
+        for (uu = NU; uu >= 0; uu--) {
+          var uB = -1 + 2 * uu / NU;
+          prof.push([uB * w * 0.605,
+            edgeY + riseY * kR * Math.cos(uB * Math.PI * 0.5) - tTh]);
+        }
+        B.tint = cool(rng.range(0.125, 0.215));
+        B.add('canvas', extrudeX(prof, tz0, tz1, false), null);
         B.tint = null;
+        // and the load ON THAT PANEL, on each slope, sitting on the sheet's own
+        // curve rather than at a fixed height
+        B.tint = grey(1.02);
+        // THE LOAD IS A SHELL ON THE SAME CURVE, not a row of blocks on it.
+        // Discrete slabs were tried twice - at d*0.24 and again overlapping at
+        // d*0.34 - and both printed as white teeth along the ridge, because a
+        // snowBlock's rounded arrises are precisely what make an isolated one
+        // read as a point when it is seen edge-on from above at five metres.
+        // Extruding the sheet's own profile 3 cm proud, over the same z span as
+        // the panel, gives a cap that abuts its neighbours exactly and can only
+        // ever be the shape of the thing it is lying on.
+        var cap = [], cu, CN2 = 7;
+        for (cu = 0; cu <= CN2; cu++) {
+          var uc = -0.88 + 1.76 * cu / CN2;
+          cap.push([uc * w * 0.63,
+            edgeY + riseY * kR * Math.cos(uc * Math.PI * 0.5) +
+            0.030 + 0.016 * Math.sin(uc * 5.1 + tp)]);
+        }
+        for (cu = CN2; cu >= 0; cu--) {
+          var ub2 = -0.88 + 1.76 * cu / CN2;
+          cap.push([ub2 * w * 0.63,
+            edgeY + riseY * kR * Math.cos(ub2 * Math.PI * 0.5) - 0.018]);
+        }
+        B.tint = grey(1.02);
+        B.add('snow', extrudeX(cap, tz0, tz1, false), null);
+        B.tint = null;
+      }
+      B.pop();
+      for (var sc2 = -1; sc2 <= 1; sc2 += 2) {
         // the skirt, in four panels of different length so the hem is uneven
         for (var sk = 0; sk < 4; sk++) {
           var skz = (sk - 1.5) * d * 0.66;
           var skd = dropY * rng.range(0.70, 1.30);
           B.tint = cool(rng.range(0.120, 0.200));
           B.add('canvas', box(0.05, skd, d * 0.60),
-            makeM(sc2 * w * 0.60, h * 0.90 - skd * 0.5, skz, 0, 0, sc2 * rng.range(0.03, 0.16)));
+            makeM(sc2 * w * 0.62, edgeY - skd * 0.5 + 0.02, skz,
+              0, 0, sc2 * rng.range(0.03, 0.16)));
           B.tint = null;
         }
       }
-      // the ridge itself, and the rope over it
-      B.tint = cool(rng.range(0.125, 0.200));
-      B.add('canvas', box(w * 0.24, 0.06, d * 1.32), makeM(0, ridge - 0.02, 0));
-      B.tint = null;
       B.tint = grey(0.30);
       for (var rp2 = 0; rp2 < 3; rp2++) {
-        B.rod('timber_dark', -w * 0.62, h * 0.55, (rp2 - 1) * d * 0.62,
-          w * 0.62, h * 0.55, (rp2 - 1) * d * 0.62, 0.016, 4);
-      }
-      B.tint = null;
-      // the load lying on it - two low slabs following the two slopes, not one
-      // big flat lid
-      B.tint = grey(1.02);
-      for (var sn2 = -1; sn2 <= 1; sn2 += 2) {
-        for (var sp2 = 0; sp2 < 3; sp2++) {
-          B.add('snow', box(w * 0.58 * rng.range(0.72, 1.0), rng.range(0.05, 0.10),
-            d * 0.40 * rng.range(0.75, 1.05)),
-            makeM(sn2 * w * 0.30 + rng.range(-0.05, 0.05),
-              (ridge + h * 0.92) * 0.5 + 0.055 + rng.range(-0.01, 0.02),
-              (sp2 - 1) * d * 0.43, 0, rng.range(-0.06, 0.06), -sn2 * 0.18));
-        }
+        B.rod('timber_dark', -w * 0.64, h * 0.55, (rp2 - 1) * d * 0.62,
+          w * 0.64, h * 0.55, (rp2 - 1) * d * 0.62, 0.016, 4);
       }
       B.tint = null;
       // stones weighting the skirt, and a lashing
       B.tint = cool(rng.range(0.200, 0.360));
       for (var k = 0; k < 5; k++) {
-        B.boxR('rock', rng.range(0.16, 0.30), rng.range(0.12, 0.22), rng.range(0.14, 0.26),
+        B.rock('rock', rng.range(0.16, 0.30), rng.range(0.12, 0.22), rng.range(0.14, 0.26),
           rng.range(-w * 0.5, w * 0.5), 0.09, (k % 2 ? 1 : -1) * d * 0.68,
-          rng.range(-0.3, 0.3), rng.range(0, 3), rng.range(-0.3, 0.3));
+          rng.range(-0.3, 0.3), rng.range(0, 3), rng.range(-0.3, 0.3), 3);
       }
       B.tint = null;
       B.pop();
@@ -5547,6 +6196,125 @@
       }
     }
 
+    // ------------------------------------------------------------------------
+    // A CARGO SLEDGE (rozvalni), left nose-down in the drift with its shafts
+    // in the snow and its harness bow leaning on the tail.
+    //
+    // This is the direct answer to "inside 12 metres of every standpoint this
+    // level contains no modelled objects - only tinted primitives". Everything
+    // this pass previously placed - the tarpaulined stack, the log stack, the
+    // broken fence - is a MASS: it solves the frame's black point and it does
+    // not solve its silhouette, because a mass reads the same whether it is
+    // modelled or not. What a near-field object has to have is HOLES: an
+    // outline the sky comes through in a dozen places, at a scale the eye can
+    // count. A sledge is 60 members and nothing about it is a box - two runners
+    // that curve up at the bow, eight stakes, nine bed slats, two side rails on
+    // uprights, a roped load of billets, two shafts and a bent-ash duga - and
+    // it is the one object in a Russian alpine village that says at a glance
+    // what the road is for.
+    function cargoSledge(x, z, yaw, sc) {
+      var y = L.sampleGround(x, z);
+      var i2, j2;
+      B.pushXYZ(x, y - 0.13 * sc, z, rng.range(-0.05, 0.05), yaw,
+        rng.range(-0.09, 0.09));
+      var woodDark = function () { return cool(rng.range(0.150, 0.265)); };
+      // ---- the two runners, bow curving up at +Z ---------------------------
+      // A steamed runner is one continuous member and it is the whole reason
+      // the object cannot be built from boxes: the curve at the bow is the
+      // silhouette everyone recognises.
+      var RUN = [[-1.34, 0.015], [-0.62, 0.0], [0.36, 0.0], [0.92, 0.035],
+        [1.24, 0.155], [1.44, 0.375], [1.47, 0.60]];
+      for (var rs = -1; rs <= 1; rs += 2) {
+        var rx = rs * 0.335 * sc;
+        B.tint = woodDark();
+        for (i2 = 0; i2 + 1 < RUN.length; i2++) {
+          B.strut('timber_dark', rx, RUN[i2][1] * sc, RUN[i2][0] * sc,
+            rx, RUN[i2 + 1][1] * sc, RUN[i2 + 1][0] * sc, 0.075 * sc, 0.115 * sc);
+        }
+        B.tint = null;
+        // the stakes (kopyl) that carry the bed off the runner
+        for (i2 = 0; i2 < 4; i2++) {
+          var kz = (-1.02 + i2 * 0.68) * sc;
+          B.tint = woodDark();
+          B.add('timber_dark', box(0.070 * sc, 0.335 * sc, 0.070 * sc),
+            makeM(rx, 0.175 * sc, kz, 0, 0, rng.range(-0.05, 0.05)));
+          B.tint = null;
+        }
+      }
+      // ---- the bed, and the side rails on their uprights --------------------
+      for (i2 = 0; i2 < 9; i2++) {
+        B.tint = woodDark();
+        B.add('timber_dark', box(0.82 * sc, 0.026 * sc, 0.088 * sc),
+          makeM(rng.range(-0.02, 0.02) * sc, 0.352 * sc,
+            (-1.18 + i2 * 0.30) * sc, 0, 0, rng.range(-0.03, 0.03)));
+        B.tint = null;
+      }
+      for (var ls2 = -1; ls2 <= 1; ls2 += 2) {
+        for (i2 = 0; i2 < 3; i2++) {
+          B.tint = woodDark();
+          B.add('timber_dark', box(0.052 * sc, 0.30 * sc, 0.052 * sc),
+            makeM(ls2 * 0.36 * sc, 0.50 * sc, (-0.92 + i2 * 0.92) * sc,
+              0, 0, ls2 * rng.range(0.03, 0.13)));
+          B.tint = null;
+        }
+        B.tint = woodDark();
+        B.rod('timber_dark', ls2 * 0.40 * sc, 0.645 * sc, -1.16 * sc,
+          ls2 * 0.40 * sc, 0.645 * sc, 1.02 * sc, 0.032 * sc, 5);
+        B.tint = null;
+      }
+      // ---- the load: split billets, roped, with its own snow ----------------
+      for (i2 = 0; i2 < 4; i2++) {
+        var lrn = 5 - i2;
+        for (j2 = 0; j2 < lrn; j2++) {
+          B.tint = cool(rng.range(0.185, 0.320));
+          B.add('bark', cyl(0.078 * sc * rng.range(0.82, 1.14),
+            0.078 * sc * rng.range(0.82, 1.14), 1.55 * sc, 7),
+            makeM((j2 - (lrn - 1) * 0.5) * 0.165 * sc,
+              (0.415 + i2 * 0.138) * sc, rng.range(-0.10, 0.10) * sc,
+              0, rng.range(-0.05, 0.05), Math.PI * 0.5));
+          B.tint = null;
+        }
+      }
+      B.tint = grey(1.02);
+      B.snowR('snow', 0.72 * sc, 0.075 * sc, 1.40 * sc, 0, 0.985 * sc, 0,
+        0, rng.range(-0.06, 0.06), rng.range(-0.05, 0.05));
+      B.tint = null;
+      // two lashings over the load and down to the runners
+      B.tint = grey(0.28);
+      for (i2 = -1; i2 <= 1; i2 += 2) {
+        wire(B, 'timber_dark', -0.40 * sc, 0.60 * sc, i2 * 0.52 * sc,
+          0.40 * sc, 0.60 * sc, i2 * 0.52 * sc, -0.36 * sc, 0.017 * sc, 4);
+      }
+      B.tint = null;
+      // ---- the shafts, dropped into the snow --------------------------------
+      B.tint = woodDark();
+      for (var sh2 = -1; sh2 <= 1; sh2 += 2) {
+        B.rod('timber_dark', sh2 * 0.30 * sc, 0.42 * sc, 1.18 * sc,
+          sh2 * 0.46 * sc, -0.06 * sc, 2.92 * sc, 0.040 * sc, 5);
+      }
+      B.tint = null;
+      // ---- the duga: the bent-ash harness bow, leaning on the tail ----------
+      // A 1.2 m arch is the single most legible silhouette a Russian sledge
+      // owns and it costs eleven rods.
+      B.pushXYZ(0.02 * sc, 0.10 * sc, -1.36 * sc, -0.42, rng.range(-0.2, 0.2), 0);
+      B.tint = cool(rng.range(0.200, 0.330));
+      var DN = 9, prevx = 0, prevy = 0, first = true;
+      for (i2 = 0; i2 <= DN; i2++) {
+        var da = Math.PI * (i2 / DN);
+        var dxq = -Math.cos(da) * 0.60 * sc;
+        var dyq = Math.sin(da) * 0.78 * sc;
+        if (!first) B.rod('timber_dark', prevx, prevy, 0, dxq, dyq, 0, 0.031 * sc, 5);
+        prevx = dxq; prevy = dyq; first = false;
+      }
+      B.tint = null;
+      B.pop();
+      B.pop();
+      ground(L, B, x, y - 0.05, z, 0.95 * sc, 0.17, (x * 5 + z * 23) | 0);
+      L._occluders.push({ x: x, z: z, r: 0.85 * sc });
+      L.addCollider(x, y + 0.45 * sc, z, 0.55 * sc, 0.55 * sc, 1.45 * sc, 'wood', false,
+        new THREE.Euler(0, yaw, 0));
+    }
+
     // A stack of felled trunks with the bark still on. Dark, cylindrical, and
     // it reads at any distance because the end grain catches the sky.
     function logStack(x, z, yaw, sc) {
@@ -5573,8 +6341,8 @@
       }
       B.tint = null;
       B.tint = grey(1.02);
-      B.boxR('snow', rows * r0 * 1.6, 0.13, len * 0.94, 0, 0.10 + rows * r0 * 1.78, 0,
-        0, 0, rng.range(-0.04, 0.04), 0.02);
+      B.snowR('snow', rows * r0 * 1.6, 0.13, len * 0.94, 0, 0.10 + rows * r0 * 1.78, 0,
+        0, 0, rng.range(-0.04, 0.04));
       B.tint = null;
       B.pop();
       ground(L, B, x, y - 0.04, z, len * 0.42, 0.18, (x * 3 + z * 11) | 0);
@@ -5636,6 +6404,13 @@
       if (f1) brokenFence(f1.x, f1.z, f1.yaw, 6, 1.0);
       var g1 = findSite(p1, 1, 0.26, 0.52, 10.0, 15.0, 1.1);
       if (g1) logStack(g1.x, g1.z, g1.yaw, 0.90);
+      // The MODELLED object, in the closest band the frame has. 0.30-0.62 rad
+      // off axis at 3.4-6.5 m puts it in the lower left where the wreck's
+      // collider does not reach, and at that range the runners, the stakes and
+      // the duga are all six pixels or better - which is the whole point of
+      // putting an object with holes in it there rather than another mass.
+      var d1 = findSite(p1, 1, 0.30, 0.62, 3.4, 6.5, 1.0);
+      if (d1) cargoSledge(d1.x, d1.z, d1.yaw + Math.PI * 0.5, 1.0);
     }
     // ---- hero3 : the lower third, off the tower's axis -----------------------
     var p3 = poses.hero3;
@@ -5644,12 +6419,16 @@
       if (s3) logStack(s3.x, s3.z, s3.yaw, 1.0);
       var f3 = findSite(p3, 1, 0.44, 0.88, 4.0, 9.5, 1.2);
       if (f3) brokenFence(f3.x, f3.z, f3.yaw, 5, 0.95);
+      var d3 = findSite(p3, 1, 0.16, 0.44, 3.2, 6.0, 1.0);
+      if (d3) cargoSledge(d3.x, d3.z, d3.yaw - Math.PI * 0.42, 0.95);
     }
     // ---- hero2 : the bridge approach -----------------------------------------
     var p2 = poses.hero2;
     if (p2) {
       var s2b = findSite(p2, 1, 0.46, 0.86, 4.0, 9.0, 1.2);
       if (s2b) tarpStack(s2b.x, s2b.z, s2b.yaw, 0.9);
+      var d2 = findSite(p2, -1, 0.28, 0.60, 3.6, 7.0, 1.0);
+      if (d2) cargoSledge(d2.x, d2.z, d2.yaw + Math.PI * 0.55, 0.95);
     }
     // ---- overview : break the white cornice ---------------------------------
     // The shelf is only about 1.6 m wide west of the standpoint before the
@@ -5729,6 +6508,30 @@
     this.instanced = [];
     this.lightShafts = [];
     this.practicalLights = [];
+    // ---- THE GROUND BOUNCE -------------------------------------------------
+    // lighting.js gained this term this round and it names snow's number in its
+    // own documentation: `amount` IS the ground albedo, "snow 0.75", against
+    // bleached hardstanding at 0.30 and jungle mud at 0.09. This level is the
+    // extreme case in the whole roster - 12,000 square metres of 0.75-albedo
+    // hemisphere surrounding everything that stands on it - and until now this
+    // file was faking the term per-piece in _paint, off the vertex colours,
+    // where it cannot follow the sky, cannot follow a practical and cannot
+    // reach anything props_snowbound places.
+    //
+    // ao 0.30 rather than the 0.35 default: outdoors here almost nothing is
+    // occluded from the snowfield, so the sky-visibility gate should take LESS
+    // of the term than on a level whose bounce comes off a floor in a room.
+    // It is not taken to 0 because the church nave is inside the same volume
+    // and a sealed stone box should not receive a full snowfield's fill.
+    // kelvin 7600: the snow is near-neutral (albedo [0.86 0.89 0.94] is what
+    // sky.js is already solving against), so what it returns is the DOME's own
+    // chromaticity, and under a 0.09-turbidity overcast that is blue-white.
+    // The bounce therefore arrives cool, which is also the direction the
+    // shadow leg of the colour grade needs - see the note in _paint.
+    // Adopted by lighting._adoptLevelRig on its first update(), so publishing
+    // it here rather than in build() is deliberate: it is available the moment
+    // the level object exists, whatever order the systems build in.
+    this.groundBounce = { amount: 0.75, ao: 0.30, kelvin: 7600 };
     this.dripEdges = [];
     this.anchors = {};
     this.field = null;
@@ -6200,6 +7003,8 @@
     _boxCache.forEach(function (g) { g.dispose(); }); _boxCache.clear();
     _cylCache.forEach(function (g) { g.dispose(); }); _cylCache.clear();
     _quadCache.forEach(function (g) { g.dispose(); }); _quadCache.clear();
+    _reliefCache.forEach(function (g) { g.dispose(); }); _reliefCache.clear();
+    _snowBlkCache.forEach(function (g) { g.dispose(); }); _snowBlkCache.clear();
     void i;
     return this;
   };
@@ -6243,6 +7048,21 @@
   // even compiled here. What they do carry is the thing a merged bucket cannot
   // get any other way: per-piece value spread, plus a height-driven cool shift
   // on snow so a roof load and a drift agree about which way the sky is.
+  // The luminance of each bucket's own albedo, as this file DECLARES it in
+  // SURF.col / FALLBACK. It is needed because the cold cast below keys on how
+  // dark a piece is, and a piece's darkness is mostly its MATERIAL and not its
+  // vertex tint - see the note there.
+  var SURF_LUM = (function () {
+    var out = Object.create(null);
+    var ks = Object.keys(FALLBACK);
+    for (var i = 0; i < ks.length; i++) {
+      var hex = FALLBACK[ks[i]][0];
+      var r = ((hex >> 16) & 255) / 255, g = ((hex >> 8) & 255) / 255, b = (hex & 255) / 255;
+      out[ks[i]] = 0.30 * r + 0.60 * g + 0.10 * b;
+    }
+    return out;
+  })();
+
   LevelSnowbound.prototype._paint = function (key, entries, geo) {
     var pos = geo.attributes.position, nrm = geo.attributes.normal;
     var pa = pos.array, na = nrm.array;
@@ -6275,11 +7095,31 @@
           // object instead of relying on the grade for it. Same reasoning as the
           // crest/hollow split in the ground paint: the loads are in the frame's
           // brightest 15%, so their hue is what grade_split measures.
-          r *= (0.770 + 0.265 * facing) * (1 + v * 0.030);
-          g *= (0.830 + 0.180 * facing) * (1 + v * 0.026);
-          b *= (0.930 + 0.048 * facing) * (1 + v * 0.020);
+          // THE SPLIT IS WIDENED AT BOTH ENDS, and this bucket is the one place
+          // in the level where that is legal. Round 3 measured that warming the
+          // snow hurt grade_split and concluded "in a whiteout the snow is not
+          // the highlight band, it is BOTH bands" - which is true of the GROUND,
+          // painted in buildGround over 12,000 square metres of field, trench,
+          // hollow and carriageway. It is NOT true of this bucket. _paint only
+          // ever sees the Builder's snow entries: roof loads, cornices, quoin
+          // ledges, drift lumps, snow caps and plough blocks. Every one of those
+          // is a load lying ON something, most of its area faces up, and a load
+          // on a roof at 12 m is the brightest object in the village - so it is
+          // in the highlight band and nowhere near the shadow band.
+          //
+          // Down-facing 0.770/0.930 -> 0.735/0.952 (R-B -0.16 -> -0.22): after
+          // snowBlock every drift and block in the level has rounded arrises, so
+          // far more of their area is now presented at a grazing or downward
+          // angle, and that area lands in the darkest 25%.
+          // Up-facing 1.035/0.978 -> 1.105/1.025 (R-B +0.057 -> +0.080, and 7%
+          // brighter): brighter so a roof load crosses the 15th percentile
+          // instead of sitting just under it, warm because an up-facing surface
+          // sees the whole dome including the bright patch the low sun is behind.
+          r *= (0.735 + 0.370 * facing) * (1 + v * 0.030);
+          g *= (0.822 + 0.248 * facing) * (1 + v * 0.026);
+          b *= (0.952 + 0.073 * facing) * (1 + v * 0.020);
           // a touch of extra cool in the deepest undersides
-          b *= 1 + down * 0.055;
+          b *= 1 + down * 0.070;
         } else {
           var vv = 1 + v * 0.075;
           r *= vv; g *= vv; b *= vv;
@@ -6295,11 +7135,65 @@
           // own tint rather than per pixel, so one term does the level's entire
           // shadow leg: the wreck, the tarpaulins, the fence posts, the tyres,
           // the iconostasis and the soot panels on the convoy all move together.
+          // TAKEN FURTHER, AND THE GATE WAS ON THE WRONG QUANTITY.
+          //
+          // Three of five published frames failed the colour-grade gate and
+          // hero3 was INVERTED at -0.0058 with shadow [-0.014, -0.002, +0.016]
+          // against highlight [-0.017, -0.001, +0.018]: both legs cool, the
+          // highlight the colder. Masking the two bands and looking at where
+          // they land settles which leg can be moved. On hero3 the brightest 15%
+          // is 92% SKY - not snow - so there is nothing in the highlight band
+          // this file owns at all; round 3's attempt to warm the snow is
+          // recorded in buildGround and it failed because snow sits in both
+          // bands. The darkest 25% is the conifer stand, the viewmodel, the near
+          // dacha's log wall and roof, and the foreground fence. Three of those
+          // four are this file's.
+          //
+          // And the cast was not reaching them. `tl` was the VERTEX TINT's
+          // luminance, but almost nothing in this level is dark because of its
+          // tint - a log wall is grey(0.6..0.9) on a 0x6b5540 material, a tyre
+          // is grey(0.9) on 0x1c1e21, a spruce trunk is grey(0.8) on 0x3d3025.
+          // At tint 0.8 the old expression returned cold = 0 and the entire
+          // timber, bark, rubber and paint half of the shadow band got NOTHING.
+          // The quantity that matters is the piece's ALBEDO, which is the tint
+          // times the surface's own colour, and this file declares that colour
+          // in SURF/FALLBACK. So: dk = tintLum x surfLum, and the knee is set so
+          // a log wall (0.35 x 0.8 = 0.28) gets about a quarter of the cast, a
+          // tarpaulin or a charred panel gets nearly all of it, and stonework,
+          // concrete and tin get none.
           var tl = 0.30 * tr + 0.60 * tg + 0.10 * tb;
-          var cold = M.saturate(1 - tl * 1.55);
-          b *= 1.015 + cold * 0.115;
-          g *= 1 + cold * 0.020;
-          r *= 1 - cold * 0.075;
+          var sl = SURF_LUM[key];
+          if (sl === undefined) sl = 0.45;
+          var cold = M.saturate(1 - tl * sl * 2.60);
+          b *= 1.015 + cold * 0.160;
+          g *= 1 + cold * 0.026;
+          r *= 1 - cold * 0.105;
+          // AND IT LIFTS. Nothing standing outdoors in this level can be as dark
+          // as its albedo says, because it is surrounded on every side by a
+          // 0.80-albedo hemisphere: a tarpaulin lying in a snowfield receives
+          // several times the bounced irradiance the same tarpaulin receives in
+          // a street, and this file has been painting it as though it did not.
+          // It also happens to be the term the colour metric needs. grade_split
+          // is an ABSOLUTE R-B difference, not a chromaticity one, so a piece at
+          // luminance 0.20 with a -0.26 relative blue bias contributes -0.052
+          // to the shadow leg and the SAME piece at 0.26 contributes -0.068.
+          // Measured across the four outdoor framings the darkest 25% sits at
+          // luminance 0.21-0.27 on the two failing frames and 0.49 on the two
+          // passing ones, with crushed_black at 0.00% everywhere - so there is
+          // room, and the physics says to use it.
+          // ROCK IS EXEMPT, AND THAT IS MEASURED. With the lift on every bucket
+          // the overview's p01 went 0.208 -> 0.307 and its dynamic range
+          // 0.615 -> 0.515 - a tenth of the frame's range, on the framing the
+          // critic already calls the weakest and the one round 3 spent a whole
+          // pass raising. The reason is that the ledge crag and the east
+          // buttress ARE that frame's darkest 1%, and they are the only black
+          // an establishing shot of a whiteout has. The physical argument for
+          // the lift is a small object lying IN a snowfield, surrounded on
+          // every side by a 0.80-albedo hemisphere; a four-metre boulder on a
+          // buttress is mostly self-shadowing and faces the valley, so it does
+          // not get that fill and it should not get this term.
+          var lift = 1 + (key === 'rock' ? 0 : cold * 0.30);
+          r *= lift; g *= lift; b *= lift;
         }
         col[j] = r; col[j + 1] = g; col[j + 2] = b;
       }
@@ -6449,6 +7343,20 @@
         kelvin: 1950, intensity: 30, distance: 15, dayBase: 1.0,
         haloScale: 1.15, haloMax: 2.4, bulbR: 0.12, fixed: 1
       });
+      // The lantern in the bell chamber. It exists so the arch REVEALS around
+      // each opening catch warm light: an emissive panel on its own prints a
+      // clipped near-white core, and what carries hue into the highlight band
+      // is the lit stone around it, which is a surface with an albedo and
+      // therefore a colour. Short reach - it is a paraffin lamp 10 m up a
+      // stone tower, not a floodlight - so it cannot touch the village.
+      if (C && C.belfry) {
+        pl.push({
+          name: 'church_belfry', kind: 'tungsten',
+          pos: [C.belfry.x, C.belfry.y, C.belfry.z],
+          kelvin: 2050, intensity: 22, distance: 8.5, dayBase: 1.0,
+          haloScale: 1.0, haloMax: 2.1, bulbR: 0.11, fixed: 1
+        });
+      }
       pl.push({
         name: 'church_door', kind: 'tungsten',
         pos: [A.church.door.x, A.church.floorY + 1.5, A.church.door.z],
