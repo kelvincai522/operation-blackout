@@ -1695,6 +1695,7 @@
     this._occ = new Map();
     this._skipped = 0;
     this._markCount = 0;
+    this._contactCount = 0;
     // WHY a placement was rejected, by reason.  Without this a site that has
     // been quietly eaten by one over-broad test is indistinguishable from a
     // site that was never authored - which is exactly how the first build lost
@@ -2188,7 +2189,53 @@
     if (!ok) return null;
     if (!opts.noOcc) this._occupy(x, z, r);
     if (opts.collider) this._collider(x, y, z, opts.collider, yaw, opts.material);
+    if (opts.contact !== false) this._contact(x, y, z, r * sc, yaw);
     return y;
+  };
+
+  // ==========================================================================
+  // WHERE AN OBJECT MEETS THE FLOOR
+  //
+  // THE CASCADES CANNOT DO THIS ON THIS LEVEL AND IT IS ARITHMETIC, NOT TUNING.
+  // The env profile pins sky = 'overcast', and sky.js cuts the directional key
+  // to 0.55 so the direct term is about seventeen per cent of the global
+  // illuminance. A cast shadow can therefore remove at most a fifth of a stop,
+  // which is under the grade's noise floor - so lv_overview photographed six oil
+  // drums, four crates, a sandbag stack and a spool standing on a lit field with
+  // NOT ONE of them darkening the ground it stood on. Every prop in the
+  // establishing shot read as a sticker, and no amount of shadow-map work can
+  // change that while the key is 17%.
+  //
+  // What DOES darken a floor under an overcast dome is ambient occlusion: the
+  // object is blocking the dome, which is where the other 83% comes from. So the
+  // contact is drawn, as a soft dark ellipse in the mark bucket that is already
+  // merged and already one draw call. Two triangles each, no new material, no
+  // new texture, no new draw call.
+  //
+  // Sized at 1.15x the placement radius and tinted 0.34-0.48 - a contact under a
+  // diffuse dome is a SOFT wide penumbra with no core, and painting it darker
+  // than the object standing in it is the classic tell.
+  // ==========================================================================
+  PropsJungle.prototype._contact = function (x, y, z, r, yaw) {
+    if (!(r > 0.24) || this._contactCount > 620) return;
+    var arr = this.S.marks;
+    if (!arr) return;
+    var R = this.rng;
+    var w = r * R.range(2.0, 2.5);
+    var uv = markUV(MARK.trample);
+    var g = flatGeo(w, w * R.range(0.82, 1.0), uv[0], uv[1], uv[2], uv[3]);
+    var st = this._settle(x, z, w * 0.5, yaw || 0, 1.0);
+    // Only for something actually standing ON the floor. A crate placed on the
+    // tower deck or a jerrycan on a revetment top has an explicit y, and
+    // _settle would happily return the ground six metres below it - i.e. a
+    // contact stain in the open with nothing above it.
+    if (Math.abs(y - st.y) > 0.40) return;
+    var p = part(g, Tn(x, Math.min(y, st.y) + 0.010, z, st.rx,
+      (yaw || 0) + R.range(-0.6, 0.6), st.rz));
+    p.tintColour = new THREE.Color(R.range(0.34, 0.48), R.range(0.34, 0.46),
+      R.range(0.30, 0.42));
+    arr.push(p);
+    this._contactCount++;
   };
 
   PropsJungle.prototype._collider = function (x, y, z, he, yaw, material) {
