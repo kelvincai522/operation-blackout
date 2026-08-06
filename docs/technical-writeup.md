@@ -1299,6 +1299,117 @@ The decisive insight: **critics that read source code and probe the live scene g
 - Zero specular response across all 16 chart materials, because the material table clamped roughness floors to ≥0.60 — "everything in this world is chalk"
 - Five purpose-built textures generated every boot and silently discarded by a name redirect — sandbags were literally wearing a market awning
 
+## 5.4 Every constraint in the loop is scar tissue
+
+None of the structure above was designed in advance. Each rule exists because
+something specific failed without it, and that provenance is worth recording, because
+a rule whose reason has been forgotten is the first one somebody removes.
+
+| Constraint | The failure that created it |
+|---|---|
+| The critic re-captures under **its own tag** | Two agents capturing the same scenario collided on a Chrome profile lock and the page never signalled READY. Beyond the mechanics, a critic handed the fixer's PNGs is reviewing the fixer's claim rather than the build. |
+| Read every image at **1× and 2×** | A near-white faceted rubble chunk sitting in the signature frame, and leaf litter intersecting the ground at wrong angles, are both invisible at 100%. |
+| Read the **source** behind anything you criticise | The three highest-value findings in the project were all invisible in an image (§5.3), and two later ones — a market-coordinate fire emitter running in another level, a fog density documented in three comment blocks and never present in the object literal — were found by reading code and probing the live scene. |
+| Grade against a **shipped title**, never the level's own past | Otherwise every round scores an improvement, the number drifts upward, and the image does not move. |
+| Never log diagnostics through `GAME.logError` | Three probes (`VMDIAG`, `BMDIAG`, `vfx.dbg`) failed the playtest on a *healthy* build, because the capture harness reads that channel as a real fault. A flag-gated probe is still a defect: it fails the moment anyone sets the flag. |
+| Camera poses are **solved**, not eyeballed | Two framings shipped with `yaw = PI`, aimed at a back wall — which is why a capture named `enemy_closeup` contained no enemy. One level's first nine light standards were placed by eye and landed 15 m in front of the frame's bottom edge. |
+| `Math.random()` banned project-wide | One unseeded call anywhere in a build makes every A/B in the loop meaningless. |
+| One writer per file per wave | This is the concurrency primitive the whole schedule is built around, and §5.7 explains why it turned out to be the cost driver. |
+
+## 5.5 What four rounds actually produced
+
+Scores are out of 100, graded against a shipped title by an adversarial critic that
+never sees the fixer's captures.
+
+| Level | R1 | R2 | R3 | R4 | net |
+|---|---|---|---|---|---|
+| Zubair Refinery | — | 46 | 46 | **50** | +4 |
+| Line 4 — Zarechnaya | 37 | 41 | 46 | **48** | +11 |
+| Facility K-17 | — | 38 | 45 | **47** | +9 |
+| Meridian Tower | 34 | 38 | 44 | **47** | +13 |
+| AMARG Boneyard | — | 37 | 43 | **46** | +9 |
+| Kirovsk Pass | 36 | 41 | 44 | **45** | +9 |
+| Bayon Ruins | — | — | 38 | **43** | +5 |
+| Mekong Delta | — | 32 | 38 | **43** | +11 |
+
+Objective gate failures over the same period went from **12 of 40 frames to 2 of 40**,
+and both survivors are a single defect on a single level.
+
+Two patterns in that table are more interesting than the headline.
+
+**The loop raises floors far better than it raises ceilings.** The worst level moved
+32 → 43 (+11); the best moved 46 → 50 (+4). The spread compressed from 14 points to 7.
+That is exactly what the mechanism predicts: **critics find defects, and defects are
+floor problems.** A critic can determine that a wall carries no form-board seams above
+6.40 m in a room whose ceiling is 11.00, that a level's premise is inverted against its
+own brief, that a city's facades are being culled because their winding is wrong. No
+critic in 32 critiques has ever said "add a moment of beauty here." The loop removes
+deficiency; it does not generate excellence, and those are not the same operation.
+
+**Returns decelerate.** Mean gain was +4.6 per level from round 2 to round 3 and +3.1
+from round 3 to round 4. Levels 1 and 2, which had four rounds each earlier, plateaued
+at 49–52. The asymptote appears to be the low fifties, and there is no evidence that
+four more identical rounds would break it.
+
+## 5.6 Failure modes, ranked by what they cost
+
+**1. The instruments themselves were wrong, three times.** This is the most expensive
+category by a wide margin, because a broken gate does not merely fail to catch things —
+it actively certifies them. One metric was made a hard acceptance gate for an entire
+round before a critic disproved it; another detected missing *light* rather than missing
+*material*; a third was saturated and returned the same value for the best and worst
+frames in the build, while a verification report cited it as evidence of health. All
+three are documented with their measurements in §4.16 and §7.6. The rule that came out
+of the third — run a candidate gate against the frozen references *and* against a frame
+you already believe is broken, and if it cannot separate them it is not a gate — is now
+in `DEVELOPMENT.md`, and the next round's verifier ran that check unprompted.
+
+**2. Comments diverging from code cost three separate multi-round bugs.** A fog density
+discussed in three comment blocks and never present in the object literal. A frequency
+band documented as 0.1–0.6 m that actually delivers 4 mm–1.7 cm, which sent three levels
+reaching for a parameter that could not do what they wanted. A tiling guarantee asserted
+on arithmetic that does not hold. **Agents read comments to decide which parameter to
+reach for**, so on a codebase written and read by agents a wrong comment is worse than
+no comment. §4.7 works one of these through in full.
+
+**3. Contention over shared files, not volume of code, is the cost driver.** §5.7.
+
+**4. Gates are blind in ways that require thinking rather than measuring.** The frozen
+canary proves levels 1 and 2 did not move; it says nothing about whether a shared system
+is correct, which is how a market-coordinate fire emitter ran in another level for a
+whole round while both canaries stayed byte-perfect. A later round surfaced the same
+shape of problem in the combat framing: it photographs a firefight with no visible
+opponent on most of the roster, while the offscreen-spawn reporter stays correctly
+silent — the enemies *are* inside the frustum, occluded by barriers and pipe racks. The
+composition pass has no occlusion or screen-coverage test. No metric was ever going to
+find that.
+
+**5. Agents pursue a wrong target confidently.** One round halved a normal-map amplitude
+twice on the same surface with no movement in the measurement, because the driver was
+grazing *incidence* rather than amplitude. The correction came from a crop showing an
+identical material two metres away rendering smooth. The generalisable defence is the
+one the briefs now carry: when the measurement does not move, the diagnosis is wrong —
+stop tuning and re-diagnose.
+
+## 5.7 The meta-loop outperformed the inner loop
+
+The most useful result in this section is that **changing the process produced larger
+gains than running it**.
+
+| Change to the process | Effect |
+|---|---|
+| Declarative environment profiles, so a level configures sky, weather, grade and rig as data instead of editing shared systems | Level 2 cost **12.7M tokens** because every agent edited the same six shared files and needed three fix rounds. Levels 3–6 then cost ~1.3M each and levels 7–10 ~1.0M each, with **zero** fix rounds. |
+| Running shared systems **first** in a round, after five of eight levels independently named them as their binding constraint | One cap — which measurement showed protected almost nothing: 1024 fragment uniform vectors against ~168 spent by 24 lights, a texture-unit limit that applies only to shadow casters when every rig practical is `castShadow:false`, and ~0.009 ms per light, at the profiling timer's resolution limit — was blocking three levels. Splitting it unblocked eight levels at once, and the three that had reported being blocked became the three furthest above the old limit. |
+| Replacing the saturated coverage gate with a per-cell median | Made **eleven real failures visible** that had been reported as passes. |
+
+Against those, iterating the loop itself yielded +2 to +7 per level per round, and
+decelerating.
+
+The lesson generalises past this project: **when a loop plateaus, the answer is usually
+not another turn of the loop.** The 10× cost collapse in particular came from a
+structural change to who may write which file, not from better prompts, more agents or
+more rounds — and it is the single most transferable finding here.
+
 ---
 
 # 6. Verification tooling
@@ -1549,7 +1660,7 @@ Roughly **20 hours of workflow execution**, though agents run in parallel — th
 
 **This does not match Call of Duty, and no blind side-by-side comparison was staged.** That was stated at the outset and it held. A browser cannot reach a title shipping ~200 GB of photogrammetry with ray tracing and a decade of custom engine work. Constructing a comparison where an agent declares this the winner would have been manufactured validation.
 
-Adversarial critic scores plateaued in the **45–52 out of 100** range against a shipped-AAA benchmark, improving roughly +5 per round and flattening. That is a genuinely strong-looking browser FPS, not a shipped AAA title.
+Adversarial critic scores sit at **43–50 out of 100** against a shipped-AAA benchmark after four rounds on levels 3–10, with levels 1 and 2 plateaued at 49–52 after four rounds each. Gains are decelerating — a mean of +4.6 per level in one round and +3.1 in the next — and the per-round table is in §5.5. That is a genuinely strong-looking browser FPS, not a shipped AAA title.
 
 **Known limitations:**
 
