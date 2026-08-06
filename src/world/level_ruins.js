@@ -1620,9 +1620,42 @@
       // their crowns close the upper corners at 26 degrees of elevation - and
       // a tree that came through the west breach and rooted in the courtyard
       // paving is exactly what the brief means by the jungle taking it back.
-      { name: 'court_nw', x: -20.0, z: -30.5, h: 19.0, r: 1.25, lean: [-0.09, 0.07],
+      // RE-SOLVED AGAINST THE MEASURED HIGHLIGHT POPULATION, which is a
+      // different constraint from the flat-area one above and a stronger one.
+      //
+      // grade_split is (highlight R-B) minus (shadow R-B) over the top 15% and
+      // bottom 25% of luminance. Masked on the delivered signature frame, 52.6%
+      // of that highlight population is SKY, at R-B -0.143, against +0.195 for
+      // everything else in it - so the frame's whole colour grade is being set
+      // by how much cool sky is bright enough to qualify, and no amount of
+      // warming the stone can out-vote it. Mapped, that sky is two blocks: 20-38
+      // degrees LEFT and 28-38 degrees RIGHT of the axis, both centred near 26
+      // degrees of elevation, in the gaps outboard of the corner prasats.
+      //
+      // The old marks could not reach either. court_nw at (-20.0,-30.5) is 47.5
+      // degrees off the current axis - i.e. outside a 38.5-degree half-cone, so
+      // it was not in the photograph at all - and court_e at (22.6,-13.0) is
+      // 39.9 degrees off it with a crown at 22.5 degrees, just under the block
+      // it was supposed to close. Both are solved rather than nudged: the east
+      // fig moves to 33.3 degrees right with its crown at 29.6, and the west one
+      // moves ONTO the sanctuary's first tier, which is the only standpoint on
+      // that side that is not inside the terrace footprint and still inside the
+      // cone (32.4 degrees left, crown at 29.8). A silk-cotton rooted in the
+      // terrace itself is also the most Ta Prohm thing in the level.
+      { name: 'court_nw', x: -11.6, z: -31.2, h: 17.5, r: 1.05, lean: [-0.12, 0.06],
+        base: TIER[0].y, kind: 'fig' },
+      { name: 'court_e', x: 17.6, z: -14.8, h: 19.0, r: 1.15, lean: [0.13, -0.06],
         kind: 'fig' },
-      { name: 'court_e', x: 22.6, z: -13.0, h: 16.0, r: 1.05, lean: [0.11, -0.06],
+      // THE THIRD ONE, and it exists because the re-solve above closed the
+      // right-hand block and only half the left. Re-mapped after that capture,
+      // the sky that was left ran from 33 to 38.5 degrees left - the outermost
+      // slice of the cone, which nothing rooted inside the terrace footprint can
+      // reach. At (-15.6,-24.0) it stands on the courtyard floor just west of
+      // tier one, 43.3 degrees off the axis with a crown at 30, so what is in
+      // the frame is canopy along the left edge and no trunk: the terrace mass
+      // hides its foot, which is what stops it reading as the floating limbs
+      // three earlier attempts at a foreground tree produced.
+      { name: 'court_w', x: -15.6, z: -24.0, h: 16.5, r: 1.10, lean: [0.10, 0.05],
         kind: 'fig' },
       // A FIG, not a palm, and taller. It stands on the enclosure's south run
       // 25 m from the hero2 standpoint and 5 degrees off that frame's axis, so
@@ -2586,219 +2619,385 @@
   }
 
   // ================================================================== faces ==
-  // THE BAYON FACE. This is the level's signature and the single asset most
-  // able to fail: a face is either recognisably a face at 25 m or it is a
-  // lumpy box, and there is no middle. It is built as 24 pieces in a local
-  // frame whose +Z is the direction the face looks, and it is deliberately
-  // ASYMMETRIC in its erosion - the same face carved four times on one tower
-  // and then weathered identically is a texture, not a ruin.
+  // THE BAYON FACE, REBUILT AS A HEIGHT FIELD.
   //
-  //   * the mass comes forward out of the wall as a tapered block, so the
-  //     silhouette against the sky is a head and not a slab,
-  //   * the brow is a single hard horizontal that catches the low key,
-  //   * the eyes are CLOSED and downcast - two lids sloping toward the nose,
-  //   * the mouth is three segments with the outer two lifted, which is the
-  //     entire famous smile and the only reason it reads as serene,
-  //   * the ears run the full height with pendulous lobes, which is what
-  //     makes the proportion Khmer rather than classical.
-  function carvedFace(self, B, rng, x, y, z, yaw, w, h, dp, erode) {
-    var c = Math.cos(yaw), s = Math.sin(yaw);
-    function put(key, bw, bh, bd, ox, oy, oz, rz, rx) {
-      var wx = x + ox * c + oz * s;
-      var wz = z - ox * s + oz * c;
-      return B.boxR(key, bw, bh, bd, wx, y + oy, wz, rx || 0, yaw, rz || 0);
+  // This is the level's identity and it had failed for three rounds running.
+  // What was here was forty-odd axis-aligned boxes: a brow in five segments, an
+  // eye in nine pieces, a mouth in six, a diadem in eight. Photographed at 21 m
+  // in the signature framing that is not a face, and the reason is arithmetic
+  // rather than taste. Every one of those pieces is a RECTANGLE with three flat
+  // faces turned toward the lens, so the whole head presents about forty
+  // constant-luminance patches whose only separation is a step of 2-8 cm. At
+  // 16.6 px per degree a 6 cm step subtends a fifth of a pixel, so the steps
+  // vanish and what survives to the print is the horizontal BANDING of the
+  // pieces themselves - which is exactly what three separate critics described:
+  // "symmetrical architectural moulding", "a Greek fret", "a stepped ornament".
+  // Two rounds were then spent moving those boxes around, which is the failure
+  // mode this project has recorded more than any other.
+  //
+  // A face is not a set of steps. It is a CONTINUOUS SURFACE whose normal turns,
+  // and the turning normal is the entire read: under a 1.05 key at 9 degrees
+  // almost every surface in this level is lit by sky alone, and a curved surface
+  // under a hemisphere still runs a value gradient across itself because its
+  // normal sweeps the dome. A flat one cannot, at any relief depth.
+  //
+  // So the head is a scalar field z = f(u, v) evaluated on a ~13-samples-per-
+  // metre grid and meshed. Everything about it follows from that:
+  //
+  //   * SILHOUETTE. Outside the head's superellipse the field collapses to a
+  //     back plane buried inside the storey, so the mesh's own edge IS the
+  //     outline of the head - a jaw, a temple, a crown - instead of the
+  //     bounding box of a pile of blocks.
+  //   * VALUE. _paint's faceTag pass reads each vertex's depth in the head's
+  //     own frame, so the socket, the under-nose and the moat around the jaw
+  //     darken CONTINUOUSLY rather than in one step. See the note there.
+  //   * THE HARD LINES. Depth alone cannot darken the lash incision or the
+  //     mouth line, because a crease cut into a PROUD lid sits at the same
+  //     absolute depth as the cheek beside it. Those are found by local
+  //     CONCAVITY (a box blur of the field minus the field) and the quads that
+  //     carry them are emitted into the 'carve' bucket, whose albedo is
+  //     0x39332a - dark by material, so the eyes and the smile survive at 25 m
+  //     in any light and under any exposure.
+  //   * COST. ~9k triangles for the central prasat's largest face, ~110k for
+  //     all 24 faces in the level, and ZERO extra draw calls because every one
+  //     of them merges into the buckets that already exist.
+  //
+  // Anatomy, in v (0 = the underside of the chin, 1 = the top of the crown):
+  //   0.03 chin   0.22 mouth   0.36 nose base   0.52 eye   0.61 brow
+  //   0.75 diadem   0.97 crown.  |u| = 1 is fw/2.
+  function _fg(d, r) { d = d / r; return Math.exp(-d * d); }
+
+  // Signed head outline, > 0 inside. The mesher needs it separately from the
+  // height because a quad entirely outside it is never emitted at all.
+  //
+  // NOTE THE TWO AXES ARE NOT THE SAME UNIT. u is normalised to the face's HALF
+  // WIDTH and v to its FULL HEIGHT, and faceTower solves fw so that w*0.5 is
+  // always about 0.545 of h - so a shape that is CIRCULAR ON THE STONE has a
+  // v radius 0.545 times its u radius. The first pass of this rebuild ignored
+  // that and authored the lids at u 0.318 x v 0.086, which is 1.9 m x 0.47 m of
+  // sandstone: a 4:1 almond became a 2:1 goggle and the head photographed as a
+  // tiki mask. Every radius below is chosen with that aspect in mind.
+  function faceMask(u, v) {
+    var au = Math.abs(u);
+    var hd = 1 - Math.pow(au / 0.855, 3.1) - Math.pow(Math.abs(v - 0.500) / 0.500, 2.9);
+    // the ears stand outboard of the head proper, so they are their own lobes
+    var eu = (au - 0.905) / 0.098, ev = (v - 0.430) / 0.255;
+    var ed = 0.85 * (1 - eu * eu - ev * ev);
+    var lu = (au - 0.888) / 0.076, lv = (v - 0.198) / 0.120;
+    var ld = 0.85 * (1 - lu * lu - lv * lv);
+    return Math.max(hd, Math.max(ed, ld));
+  }
+
+  // The head itself, in units of dp, measured from the face's registration
+  // plane. P = { n:noise, e:erode, s0,s1: per-face noise offsets }.
+  //
+  // THE PROPORTIONS ARE THE CANON, NOT AN OPINION. Head width divided in
+  // fifths: an eye occupies the second and the fourth, so its centre is at
+  // 0.30 of the full width off the axis (u 0.342) and its width is 0.20 of it
+  // (u half 0.171). Bayon is generous with the eye and the mouth, so those go
+  // to 0.205 and to a mouth 0.42 of the head wide - but not to the 0.64 of the
+  // head the first pass used, which is a clown.
+  function faceHeight(u, v, P) {
+    var au = Math.abs(u), i;
+    var hd = 1 - Math.pow(au / 0.855, 3.1) - Math.pow(Math.abs(v - 0.500) / 0.500, 2.9);
+    var core = M.saturate(hd);
+
+    // ---- the mass ---------------------------------------------------------
+    // A PLATEAU plus a dome, not a dome alone. The plateau is what gives the
+    // silhouette a cliff to fall off: with a dome alone the surface reaches the
+    // back plane tangentially and the head has no outline at all.
+    //
+    // And the mass is most of the read. A Bayon face is SERENE, and serenity is
+    // an unbroken surface - large smooth cheeks and a large smooth forehead
+    // with a few shallow modulations on them. Every feature below is a small
+    // number on purpose; the first pass ran the brow at 0.40 dp on a 0.30 m
+    // band, which is a sausage laid across the head, and it photographed as a
+    // cartoon.
+    var z = 0.36 + 0.60 * Math.pow(core, 0.46);
+    z *= 1 - 0.12 * M.smoothstep(0.62, 1.00, v);          // the forehead lies back
+    z += 0.16 * _fg(v - 0.330, 0.150) * _fg(au - 0.480, 0.280) * core;   // cheeks
+    z += 0.10 * _fg(v - 0.130, 0.075) * _fg(u, 0.280);    // the chin pad
+    z -= 0.07 * _fg(v - 0.075, 0.030) * M.saturate(1 - Math.pow(au / 0.30, 2));
+
+    // ---- ears, full height, with the pendulous lobe that makes it Khmer ----
+    var eu = (au - 0.905) / 0.098, ev = (v - 0.430) / 0.255;
+    var lu = (au - 0.888) / 0.076, lv = (v - 0.198) / 0.120;
+    var ear = M.saturate(Math.max(1 - eu * eu - ev * ev, 1 - lu * lu - lv * lv));
+    if (ear > 0) {
+      var ez = 0.30 + 0.30 * Math.pow(ear, 0.45);
+      if (ez > z) z = ez;
+      z -= 0.20 * _fg(au - 0.902, 0.036) * M.smoothstep(0.22, 0.31, v) *
+        M.smoothstep(0.58, 0.47, v);
     }
-    function putF(key, w0, d0, w1, d1, hh, ox, oy, oz) {
-      var wx = x + ox * c + oz * s;
-      var wz = z - ox * s + oz * c;
-      return B.add(key, frus(w0, d0, w1, d1, hh), makeM(wx, y + oy, wz, 0, yaw, 0));
+
+    // ---- the brow: one arch per eye, dipping at the bridge and the temple --
+    // A brow RIDGE, not a brow bar: 0.19 dp of relief on a 0.24 m band, with a
+    // dark undercut immediately below it that is what actually reads at 25 m.
+    var bV = 0.606 + 0.040 * Math.cos(Math.PI * M.clamp((au - 0.345) / 0.380, -1, 1));
+    var bW = M.smoothstep(0.780, 0.520, au);
+    z += 0.19 * bW * _fg(v - bV, 0.043);
+    z -= 0.15 * bW * _fg(v - (bV - 0.052), 0.022);        // the undercut
+
+    // ---- the eyes: closed, downcast, heavy-lidded --------------------------
+    // The lid is 0.205 u x 0.048 v = 0.61 m x 0.26 m on the central prasat -
+    // a 4.6:1 almond, which is a closed eye. Its own bulge is 0.17 dp, so it
+    // sits IN the socket rather than on top of it.
+    for (i = -1; i <= 1; i += 2) {
+      var ec = i * 0.345;
+      var du = u - ec;
+      var sE = 1 - Math.pow(du / 0.288, 2) - Math.pow((v - 0.500) / 0.080, 2);
+      if (sE <= -0.55) continue;
+      z -= 0.15 * M.smoothstep(-0.15, 0.60, sE);          // the socket
+      var lE = M.saturate(1 - Math.pow(du / 0.205, 2) - Math.pow((v - 0.500) / 0.048, 2));
+      z += 0.17 * Math.sqrt(lE);                          // the lid, a lens
+      // the incision where the lids meet, arced up in the middle
+      var lash = 0.505 + 0.013 * (1 - Math.pow(M.clamp(du / 0.205, -1, 1), 2));
+      z -= 0.21 * Math.sqrt(M.saturate(lE + 0.30)) * _fg(v - lash, 0.0135);
+      // the outer canthus, tapering back toward the ear
+      z -= 0.10 * _fg(du - i * 0.232, 0.040) * _fg(v - 0.490, 0.020);
     }
+
+    // ---- the nose: a broad bridge off the brow, a flat wide tip -----------
+    // 0.205 u at the alae = 1.22 m across, i.e. 0.24 of the head's width. The
+    // tip stands 0.58 dp - about 0.55 m - proud of the cheek plane.
+    var nP = M.smoothstep(0.660, 0.505, v) * M.smoothstep(0.300, 0.348, v);
+    var nw = 0.070 + 0.135 * M.smoothstep(0.600, 0.348, v);
+    var nX = M.saturate(1 - Math.pow(au / nw, 2.1));
+    z += 0.58 * nP * Math.pow(nX, 0.42);
+    z += 0.11 * _fg(v - 0.368, 0.024) * (_fg(u - 0.132, 0.038) + _fg(u + 0.132, 0.038));
+    z -= 0.15 * _fg(v - 0.348, 0.016) * (_fg(u - 0.100, 0.026) + _fg(u + 0.100, 0.026));
+    z -= 0.19 * _fg(v - 0.312, 0.015) * M.saturate(1 - Math.pow(au / 0.235, 2));
+
+    // ---- the mouth: the smile, which is the whole reason it reads as serene -
+    // 0.36 u half = 2.14 m wide, 0.42 of the head. The corners lift 0.030 v -
+    // 16 cm - and that is the entire famous smile; at the 0.062 the first pass
+    // used it was a grin.
+    var mH = 0.360;
+    var mE = M.saturate(1 - Math.pow(au / mH, 2.0));
+    var lipV = 0.222 + 0.030 * Math.pow(M.saturate(au / mH), 1.7);
+    z += 0.15 * Math.pow(mE, 0.45) * _fg(v - (lipV + 0.036), 0.028);
+    z += 0.13 * Math.pow(mE, 0.45) * _fg(v - (lipV - 0.033), 0.026);
+    z -= 0.24 * Math.pow(mE, 0.22) * _fg(v - lipV, 0.0135);
+    z -= 0.11 * _fg(au - mH * 0.955, 0.030) * _fg(v - lipV, 0.022);
+
+    // ---- the diadem -------------------------------------------------------
+    // A BAND with a scalloped crest, not a row of teeth. The first pass put
+    // five hard jewels on a 0.028 v gaussian and the crown photographed as a
+    // comb.
+    var dW = M.smoothstep(0.860, 0.700, au);
+    z -= 0.11 * dW * _fg(v - 0.706, 0.014);
+    z += 0.24 * dW * M.smoothstep(0.716, 0.748, v) * M.smoothstep(0.852, 0.814, v);
+    z += 0.09 * dW * _fg(v - 0.792, 0.038) *
+      (_fg(u, 0.085) + _fg(au - 0.330, 0.080));
+
+    // ---- nine hundred monsoons --------------------------------------------
+    var N = P.n;
+    z += N.fbm2(u * 2.7 + P.s0, v * 3.1 + P.s1, 3) * 0.085;
+    // Spalling, biased AWAY from the features: a face whose eye has been eaten
+    // is a ruin, a face whose every feature has been eaten is a rock.
+    var sp = N.fbm2(u * 1.9 + P.s0 + 37.1, v * 2.3 + P.s1 - 21.7, 2);
+    var keep = M.smoothstep(0.05, 0.16, v) * M.smoothstep(0.88, 0.76, v) *
+      M.smoothstep(0.86, 0.70, au);
+    z -= M.saturate((sp - (1.02 - P.e * 0.92)) * 3.4) * 0.70 * (1 - keep * 0.72);
+    return z;
+  }
+
+  // Mesh one head into B, in a local frame whose +Z is the direction it looks.
+  // `o` carries the two numbers only faceTower can know: `back`, the depth in
+  // METRES at which the silhouette is safely inside the tapering storey, and
+  // `crown`, whether to cap it with the tiara.
+  function carvedFace(self, B, rng, x, y, z, yaw, w, h, dp, erode, o) {
+    o = o || {};
     var e = erode || 0;
-    // THE MASS may be mossy; THE FEATURES never are. Moss grows where water
-    // stops, and every proud form on a face - the brow, the lids, the ball of
-    // the eye, the lip, the bridge of the nose - is exactly where water does
-    // not stop: it sheds. Painting the whole head one surface meant a 65%
-    // chance (at high erosion) that a Bayon face came out as a uniform dark
-    // green mass with no value separation between its features and its
-    // ground, on the one asset in the level that has to read at 36 m. Pale
-    // proud forms against dark recesses IS the read.
-    var mass = rng.bool(0.35 + e * 0.3) ? 'mossy' : 'sandstone';
-    var key = 'sandstone';
+    var P = { n: self.noise, e: e, s0: rng.range(-40, 40), s1: rng.range(-40, 40) };
+    var back = (o.back === undefined ? -0.55 * dp : o.back) / Math.max(0.05, dp);
+    // THE GRID IS SIZED PER FACE, NOT PER METRE, AND THE FLOOR IS THE POINT.
+    //
+    // Every fine feature in the field is a fraction of the face's own HEIGHT -
+    // the mouth incision and the lash line are both 0.0135 v - so a fixed
+    // samples-per-metre density resolves them on the big heads and loses them on
+    // the small ones. Measured on the delivered hero2: the gate tower's face is
+    // 2.75 m tall, so at 14/m its mouth line was 3.7 cm against a 7.1 cm cell -
+    // half a cell, i.e. gone. That face photographed with eyes, a nose and NO
+    // MOUTH, which on a Bayon head is most of the read.
+    // The floor of 68 x 72 makes the cell a constant fraction of the face
+    // instead, so every head in the level resolves its own incisions at about
+    // one cell whatever its size. It costs ~78k triangles across all 24 faces.
+    var NU = Math.max(68, Math.min(104, Math.round(w * 14)));
+    var NV = Math.max(72, Math.min(112, Math.round(h * 14)));
+    var gw = NU + 1, gh = NV + 1;
+    var nv = gw * gh;
+    var pos = new Float32Array(nv * 3);
+    var hz = new Float32Array(nv);       // the raw field, for the cavity pass
+    var mk = new Float32Array(nv);
+    var i, j, k, idx;
+
+    for (j = 0; j < gh; j++) {
+      var vv = j / NV;
+      for (i = 0; i < gw; i++) {
+        var uu = i / NU * 2 - 1;
+        idx = j * gw + i;
+        var d = faceMask(uu, vv);
+        mk[idx] = d;
+        var fz = (d > -0.30) ? faceHeight(uu, vv, P) : back;
+        var m = M.smoothstep(-0.02, 0.20, d);
+        var zz = back + (fz - back) * m;
+        hz[idx] = fz;
+        pos[idx * 3] = uu * w * 0.5;
+        pos[idx * 3 + 1] = vv * h;
+        pos[idx * 3 + 2] = zz * dp;
+      }
+    }
+
+    // ---- local concavity ---------------------------------------------------
+    // A 2-cell box blur of the field minus the field. Positive = the surface is
+    // cut in below its own neighbourhood, which is what an incision is and what
+    // an absolute depth test cannot see (see the header).
+    var cav = new Float32Array(nv);
+    var tmp = new Float32Array(nv);
+    var R = 2;
+    for (j = 0; j < gh; j++) {
+      for (i = 0; i < gw; i++) {
+        var sA = 0, nA = 0;
+        for (k = -R; k <= R; k++) {
+          var ii = i + k; if (ii < 0 || ii >= gw) continue;
+          sA += hz[j * gw + ii]; nA++;
+        }
+        tmp[j * gw + i] = sA / (nA || 1);
+      }
+    }
+    for (i = 0; i < gw; i++) {
+      for (j = 0; j < gh; j++) {
+        var sB = 0, nB = 0;
+        for (k = -R; k <= R; k++) {
+          var jj = j + k; if (jj < 0 || jj >= gh) continue;
+          sB += tmp[jj * gw + i]; nB++;
+        }
+        cav[j * gw + i] = sB / (nB || 1) - hz[j * gw + i];
+      }
+    }
+
+    // ---- normals, on the indexed grid, before it is split ------------------
+    var nrm = new Float32Array(nv * 3);
+    (function () {
+      var ax, ay, az, bx, by, bz, cx2, cy2, cz2;
+      function acc(i0, i1, i2) {
+        ax = pos[i1 * 3] - pos[i0 * 3];
+        ay = pos[i1 * 3 + 1] - pos[i0 * 3 + 1];
+        az = pos[i1 * 3 + 2] - pos[i0 * 3 + 2];
+        bx = pos[i2 * 3] - pos[i0 * 3];
+        by = pos[i2 * 3 + 1] - pos[i0 * 3 + 1];
+        bz = pos[i2 * 3 + 2] - pos[i0 * 3 + 2];
+        cx2 = ay * bz - az * by; cy2 = az * bx - ax * bz; cz2 = ax * by - ay * bx;
+        nrm[i0 * 3] += cx2; nrm[i0 * 3 + 1] += cy2; nrm[i0 * 3 + 2] += cz2;
+        nrm[i1 * 3] += cx2; nrm[i1 * 3 + 1] += cy2; nrm[i1 * 3 + 2] += cz2;
+        nrm[i2 * 3] += cx2; nrm[i2 * 3 + 1] += cy2; nrm[i2 * 3 + 2] += cz2;
+      }
+      for (var jj2 = 0; jj2 < NV; jj2++) {
+        for (var ii2 = 0; ii2 < NU; ii2++) {
+          var a0 = jj2 * gw + ii2, b0 = a0 + 1, c0 = a0 + gw + 1, d0 = a0 + gw;
+          acc(a0, b0, c0); acc(a0, c0, d0);
+        }
+      }
+      for (var q2 = 0; q2 < nv; q2++) {
+        var lx = nrm[q2 * 3], ly = nrm[q2 * 3 + 1], lz = nrm[q2 * 3 + 2];
+        var ll = Math.sqrt(lx * lx + ly * ly + lz * lz) || 1;
+        nrm[q2 * 3] = lx / ll; nrm[q2 * 3 + 1] = ly / ll; nrm[q2 * 3 + 2] = lz / ll;
+      }
+    })();
+
+    // ---- split into material buckets and emit ------------------------------
+    // ONLY TWO SOUPS, and the reason the third one went is worth recording.
+    //
+    // The first pass put every quad whose local concavity crossed a threshold
+    // into the dark 'carve' bucket, which is the right IDEA - the incisions
+    // must be dark by albedo, not by a shadow the sky is never going to cast -
+    // and the wrong MECHANISM. A crease four cells wide crosses the threshold
+    // on some of its quads and not on others, so the lash line and the mouth
+    // printed as a row of separate dark rectangles: a DASHED line, on the one
+    // asset in the level whose whole job is a continuous one. Photographed at
+    // 21 m that reads as damage rather than as carving.
+    //
+    // The concavity is carried per VERTEX instead, on the entry, and _paint
+    // folds it into the same baked-occlusion term it already runs for a face.
+    // Continuous input, continuous output, and it reaches full grime - which
+    // measures within a few percent of the 'carve' albedo anyway, because the
+    // grime term both replaces the hue and multiplies the value.
+    //
+    // 'mossy' stays a quad split: moss IS patchy, its boundary is authored from
+    // a metre-scale noise field rather than from a 7 cm one, and it is kept to
+    // the margins because every proud form on a face sheds water.
+    var soup = { mossy: [], sandstone: [] };
+    var N2 = self.noise;
+    var mossT = 0.30 - e * 0.16;
+    for (j = 0; j < NV; j++) {
+      for (i = 0; i < NU; i++) {
+        var i0 = j * gw + i, i1 = i0 + 1, i2 = i0 + gw + 1, i3 = i0 + gw;
+        if (mk[i0] < -0.05 && mk[i1] < -0.05 && mk[i2] < -0.05 && mk[i3] < -0.05) continue;
+        var cAvg = (cav[i0] + cav[i1] + cav[i2] + cav[i3]) * 0.25;
+        var uq = (i + 0.5) / NU * 2 - 1, vq = (j + 0.5) / NV;
+        var aq = Math.abs(uq);
+        var margin = (aq > 0.56 || vq < 0.17 || vq > 0.84) ? 1 : 0;
+        var mo = N2.fbm2(uq * 1.5 + P.s0 + 11.3, vq * 1.7 + P.s1 + 5.7, 3);
+        var key = (margin && cAvg < 0.030 && mo > mossT) ? 'mossy' : 'sandstone';
+        soup[key].push(i0, i1, i2, i0, i2, i3);
+      }
+    }
+
+    // ---- THE MASS may be mossy; THE FEATURES never are ---------------------
     B.wear = {
       grime: 0.62 + rng.range(-0.06, 0.10) - e * 0.10,
       wet: 1 - e * 0.10,
       edge: 0.70 + rng.range(-0.08, 0.14) - e * 0.12
     };
-
-    // ------------------------------------------------------------------------
-    // EVERY oz IS MEASURED AGAINST F, THE FRONT OF THE HEAD MASS. Two rounds
-    // were lost to getting this wrong in two different ways, and both are
-    // worth recording because they are the same mistake at different scales:
-    //
-    //   1. The head was 2.0*dp deep with its front at 1.5*dp while the brow
-    //      sat at 1.40 and the eyes at 1.20 - every feature except the nose
-    //      was inside the block it was supposed to be carved on.
-    //   2. The face was then registered against the storey's half-width at its
-    //      MID height. The storey tapers, so at the face's foot the stone was
-    //      further out than the face was, and the chin, mouth and nose were
-    //      buried while only the crown cleared - four faces reduced to a small
-    //      stepped ornament on the top of each storey.
-    //
-    // The third thing, which no amount of geometry fixes on its own: under a
-    // 1.05 key at 9 degrees almost every surface here is lit by SKY, and flat
-    // ambient does not carve. So the eye sockets and the mouth line are not
-    // shadows we hope for - they are RECESSED BLOCKS in the darker stone,
-    // which read at 20 m whatever the light is doing.
-    // ------------------------------------------------------------------------
-    var dk = 'carve';
-    var F = 1.30;                       // front plane of the head, in dp
-    function fz(proud, depth) { return (F + proud - depth * 0.5) * dp; }
-
-    // ------------------------------------------------------------------------
-    // BAKED OCCLUSION. This is the fix for the finding that killed round two:
-    // at 9 m the entire head sat inside luminance 0.083-0.207 and the brow,
-    // socket and mouth steps were a few percent apart, because under a 1.05
-    // key at 9 degrees a south elevation is lit by SKY ALONE and flat ambient
-    // does not carve. Dark-by-albedo (SURF.carve) is necessary and it is not
-    // sufficient - it gives the recess a different value, not a TERMINATOR.
-    //
-    // So the concavity is measured here and baked: _paint() reads this tag,
-    // projects each vertex into the head's own frame, and darkens by how far
-    // BEHIND the front plane F it sits. An eye socket 0.9 dp back holds a ~3x
-    // value drop with no light source involved at all, which is what a real
-    // deep-cut relief does and what an ambient-only render never will.
-    B.faceTag = { x: x, z: z, y: y, c: c, s: s, dp: dp, F: F * dp, w: w, h: h };
-
-    // ---- the mass: a full jaw, a narrower forehead --------------------------
-    putF(mass, w * 0.92, dp * 1.50, w * 0.84, dp * 1.32, h * 0.62, 0, h * 0.32, dp * 0.55);
-    putF(mass, w * 0.86, dp * 1.34, w * 0.78, dp * 1.20, h * 0.20, 0, h * 0.71, dp * 0.62);
-    // chin, and the jaw line under it
-    putF(key, w * 0.56, dp * 1.34, w * 0.34, dp * 0.86, h * 0.14, 0, h * 0.075, fz(0.20, 1.34));
-    put(dk, w * 0.70, h * 0.030, dp * 0.60, 0, h * 0.010, fz(-0.10, 0.60));
-
-    // ---- the mouth: a recessed line with a full lip either side -------------
-    // WIDE. The mouth and the eyes are the two features the eye locks onto,
-    // and everything else on the head is context for them.
-    put(dk, w * 0.56, h * 0.085, dp * 0.66, 0, h * 0.166, fz(-0.16, 0.66));
-    for (var k = -1; k <= 1; k++) {
-      // the smile: three segments, the outer two lifted. This is the whole
-      // reason the face reads as serene rather than as a mask.
-      put(key, w * 0.205, h * 0.058, dp * 0.62, k * w * 0.176,
-        h * 0.204 + Math.abs(k) * h * 0.022, fz(0.26, 0.62), -k * 0.19);
-      put(key, w * 0.205, h * 0.048, dp * 0.56, k * w * 0.174,
-        h * 0.134 + Math.abs(k) * h * 0.018, fz(0.20, 0.56), -k * 0.16);
-    }
-
-    // ---- the nose: a broad bridge from the brow, a flat wide tip ------------
-    if (!(e > 0.55 && rng.bool(e * 0.55))) {
-      putF(key, w * 0.155, dp * 1.10, w * 0.235, dp * 1.55, h * 0.235, 0, h * 0.352,
-        fz(0.30, 1.10));
-      put(key, w * 0.215, h * 0.062, dp * 1.10, 0, h * 0.243, fz(0.62, 1.10));
-      for (var q = -1; q <= 1; q += 2) {
-        put(key, w * 0.088, h * 0.055, dp * 0.66, q * w * 0.098, h * 0.232, fz(0.34, 0.66));
+    // The front plane the baked concavity in _paint measures against. 1.00 dp
+    // is the cheek, so a cheek takes no darkening at all, the socket floor
+    // (0.72) takes a third, the under-nose (0.66) a little more and the moat
+    // around the jaw (0.34) most of it - which is the value structure of a real
+    // deep-cut relief and none of it depends on a light source.
+    B.faceTag = { x: x, z: z, y: y, c: Math.cos(yaw), s: Math.sin(yaw),
+      dp: dp, F: 1.00 * dp, w: w, h: h };
+    var mtx = makeM(x, y, z, 0, yaw, 0);
+    var keys = ['sandstone', 'mossy'];
+    for (k = 0; k < keys.length; k++) {
+      var tri = soup[keys[k]];
+      if (!tri.length) continue;
+      var gp = new Float32Array(tri.length * 3);
+      var gn = new Float32Array(tri.length * 3);
+      var gc = new Float32Array(tri.length);
+      for (i = 0; i < tri.length; i++) {
+        var src = tri[i] * 3, dst = i * 3;
+        gp[dst] = pos[src]; gp[dst + 1] = pos[src + 1]; gp[dst + 2] = pos[src + 2];
+        gn[dst] = nrm[src]; gn[dst + 1] = nrm[src + 1]; gn[dst + 2] = nrm[src + 2];
+        gc[i] = cav[tri[i]];
       }
-    } else {
-      put(dk, w * 0.24, h * 0.20, dp * 0.50, 0, h * 0.33, fz(-0.12, 0.50), rng.range(-0.2, 0.2));
+      var g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(gp, 3));
+      g.setAttribute('normal', new THREE.BufferAttribute(gn, 3));
+      var ent = B.add(keys[k], g, mtx);
+      if (ent) ent.faceCav = gc;
     }
+    B.faceTag = null;
 
-    // ---- THE EYES ----------------------------------------------------------
-    // The finding that this rebuild answers, and it was right: at 3x zoom the
-    // centre prasat read as symmetrical architectural moulding, not a head -
-    // "no eye sockets or lids at all, the eye region is a flat recessed panel".
-    // It was: one full-width recessed band with two thin horizontal slabs over
-    // it. Two horizontal slabs at 6 cm of relief are a string course. An eye is
-    // the single feature that flips a mass from architecture to face and this
-    // one did not have one.
-    //
-    // What is here now, per eye:
-    //   * an ALMOND socket - a recessed dark panel with its upper and lower
-    //     rims rotated toward each other, so the cut is a lens and not a slot;
-    //   * a proud EYEBALL, a 10-sided disc lying on the face's own axis. It is
-    //     the only curved primitive on the head and it is deliberate: a curve
-    //     among forty flats is what the eye locks onto, and a disc lit by sky
-    //     alone still runs a value gradient across itself because its normal
-    //     turns, which no box on this head does;
-    //   * a heavy UPPER LID standing 0.45 dp proud and pitched forward, with a
-    //     dark undercut immediately beneath it. That undercut is the read at
-    //     36 m: a hard horizontal terminator across the top third of the eye
-    //     is what says "half-closed lid", and unlike a shadow it exists under
-    //     any light because it is dark by albedo.
-    var exX = w * 0.218, eyY = h * 0.502;
-    put(dk, w * 0.78, h * 0.135, dp * 0.62, 0, eyY, fz(-0.30, 0.62));
-    for (q = -1; q <= 1; q += 2) {
-      if (e > 0.62 && q > 0 && rng.bool(e - 0.40)) continue;        // spalled away
-      var ex2 = q * exX;
-      // the almond: a recessed centre with two canted rims
-      put(dk, w * 0.300, h * 0.086, dp * 0.44, ex2, eyY, fz(-0.42, 0.44));
-      put(dk, w * 0.285, h * 0.030, dp * 0.34, ex2 + q * w * 0.012, eyY + h * 0.048,
-        fz(-0.26, 0.34), -q * 0.26);
-      put(dk, w * 0.285, h * 0.026, dp * 0.34, ex2 + q * w * 0.010, eyY - h * 0.042,
-        fz(-0.26, 0.34), q * 0.20);
-      // the eyeball: a disc on the face's own axis, proud in the socket
-      B.add(key, cyl(w * 0.108, w * 0.114, dp * 0.52, 10),
-        makeM(x + (ex2) * c + fz(0.06, 0.52) * s, y + eyY - h * 0.004,
-          z - (ex2) * s + fz(0.06, 0.52) * c, Math.PI * 0.5, yaw, 0));
-      // upper lid: heavy, proud, pitched forward over the ball
-      put(key, w * 0.330, h * 0.062, dp * 0.86, ex2, eyY + h * 0.052,
-        fz(0.40, 0.86), -q * 0.16, 0.20);
-      // and the hard dark line the lid casts, which is what actually reads
-      put(dk, w * 0.312, h * 0.022, dp * 0.40, ex2, eyY + h * 0.024,
-        fz(0.06, 0.40), -q * 0.16);
-      // lower lid, lighter, with its own canted top edge
-      put(key, w * 0.298, h * 0.040, dp * 0.68, ex2 + q * w * 0.006, eyY - h * 0.062,
-        fz(0.26, 0.68), -q * 0.11, -0.16);
-      // the fold above the lid, arced in three steps rather than one bar
-      for (var fq = -1; fq <= 1; fq++) {
-        put(key, w * 0.105, h * 0.030 + Math.abs(fq) * h * 0.004, dp * 0.44,
-          ex2 + fq * w * 0.098, eyY + h * (0.098 - Math.abs(fq) * 0.014),
-          fz(0.24, 0.44), (-q * 0.16) + fq * q * 0.16);
+    // ---- the tiara, above the field ---------------------------------------
+    // Boxes are the right primitive here and only here: this is a SILHOUETTE
+    // against the sky rather than a modelled surface, and a silhouette is a
+    // shape rather than a shading gradient.
+    if (o.crown !== false) {
+      var cc = Math.cos(yaw), ss = Math.sin(yaw);
+      var putF2 = function (key2, w0, d0, w1, d1, hh, ox, oy, oz) {
+        var wx = x + ox * cc + oz * ss;
+        var wz = z - ox * ss + oz * cc;
+        return B.add(key2, frus(w0, d0, w1, d1, hh), makeM(wx, y + oy, wz, 0, yaw, 0));
+      };
+      putF2('sandstone', w * 0.70, dp * 1.10, w * 0.40, dp * 0.70, h * 0.075,
+        0, h * 0.960, dp * 0.62);
+      for (k = -1; k <= 1; k++) {
+        putF2('sandstone', w * 0.130, dp * 0.46, w * 0.026, dp * 0.12, h * 0.085,
+          k * w * 0.168, h * 1.030, dp * (0.60 + Math.abs(k) * 0.05));
       }
-      // the outer canthus - a dark taper running back toward the ear, which
-      // is what stops the eye reading as a lozenge stuck on a wall
-      put(dk, w * 0.075, h * 0.030, dp * 0.30, ex2 + q * w * 0.148, eyY - h * 0.010,
-        fz(-0.16, 0.30), -q * 0.34);
-    }
-
-    // ---- the brow: ARCED, overhanging the sockets ---------------------------
-    // Five stepped segments with a rising rotation instead of one hard bar, so
-    // the ridge curves over the eyes the way a real one does and the highlight
-    // along its top arris bends instead of ruling a straight line across the
-    // head.
-    for (var bq = -2; bq <= 2; bq++) {
-      var ab2 = Math.abs(bq);
-      // 0.26 of proud, not 0.36. Every published courtyard framing looks UP at
-      // these heads from 20-25 m, so the brow's underside is turned toward the
-      // lens; at 0.36 it overhung the eye by 0.32 m and put the whole socket
-      // into its own shadow, which is a face with no eyes from the one angle
-      // the level actually photographs it.
-      put(key, w * 0.185, h * 0.068 - ab2 * h * 0.006, dp * (0.90 - ab2 * 0.08),
-        bq * w * 0.166, h * (0.618 - ab2 * ab2 * 0.010),
-        fz(0.26 - ab2 * 0.05, 0.90 - ab2 * 0.08), bq * 0.14);
-      put(dk, w * 0.180, h * 0.026, dp * 0.48, bq * w * 0.164,
-        h * (0.578 - ab2 * ab2 * 0.010), fz(0.04, 0.48), bq * 0.14);
-    }
-
-    // ---- ears, full height, outboard of the mass, with pendulous lobes ------
-    for (q = -1; q <= 1; q += 2) {
-      put(key, w * 0.135, h * 0.42, dp * 1.15, q * w * 0.500, h * 0.385, dp * 0.60);
-      put(dk, w * 0.070, h * 0.30, dp * 0.66, q * w * 0.500, h * 0.400, dp * 1.02);
-      put(key, w * 0.115, h * 0.155, dp * 0.95, q * w * 0.500, h * 0.128, dp * 0.56);
-      put(key, w * 0.090, h * 0.062, dp * 0.70, q * w * 0.500, h * 0.052, dp * 0.52);
-    }
-
-    // ---- diadem and crown ---------------------------------------------------
-    put(key, w * 1.00, h * 0.082, dp * 1.20, 0, h * 0.790, fz(0.30, 1.20));
-    put(dk, w * 0.96, h * 0.028, dp * 0.62, 0, h * 0.744, fz(0.02, 0.62));
-    for (k = -2; k <= 2; k++) {
-      put(key, w * 0.086, h * 0.054, dp * 0.46, k * w * 0.186, h * 0.790, fz(0.58, 0.46));
-    }
-    putF(key, w * 0.78, dp * 1.25, w * 0.42, dp * 0.78, h * 0.140, 0, h * 0.900, dp * 0.72);
-    for (k = -1; k <= 1; k++) {
-      putF(key, w * 0.145, dp * 0.52, w * 0.028, dp * 0.13, h * 0.095,
-        k * w * 0.175, h * 1.015, dp * (0.70 + Math.abs(k) * 0.05));
     }
     B.wear = null;
-    B.faceTag = null;
   }
 
   // ================================================================ prasats ==
@@ -2913,23 +3112,32 @@
         var fy = y + sh * 0.03;
         var fh = sh * 0.94;
         var hwBot = M.lerp(a, b, 0.03) * 0.5;
+        var hwTop = M.lerp(a, b, 0.97) * 0.5;
         var hwMid = M.lerp(a, b, 0.50) * 0.5;
         var fw = Math.min(hwMid * 1.86, fh * 1.10);
-        var oR = hwBot - Math.min(0.24, fw * 0.08);
+        // 0.10, not 0.24. The head is now a surface with a real silhouette
+        // rather than a stack of applied blocks, and the silhouette only exists
+        // where the head stands clear of the storey - so burying a quarter of a
+        // metre of it is a quarter of a metre of outline thrown away.
+        var inset = Math.min(0.10, fw * 0.04);
+        var oR = hwBot - inset;
+        // WHERE THE SILHOUETTE CLOSES. The head's outer rim drops to a back
+        // plane that must be inside the stone at EVERY height, and the storey
+        // tapers, so the plane is solved from the recession over the face's own
+        // span rather than guessed: a guess that is too shallow prints the flat
+        // keep-out disc as a visible collar around the head.
+        var fback = inset - Math.max(0, hwBot - hwTop) - 0.18;
+        // 0.160 of relief, not 0.180. With the head modelled as a continuous
+        // surface the shading gradient does the describing that raw depth used
+        // to have to do, and at 0.180 the nose stood 1.83 m off a storey only
+        // 6.9 m wide - a beak in profile from the causeway.
+        var fdp = fw * 0.160;
         for (q = 0; q < 4; q++) {
           var fyaw = q * Math.PI * 0.5;
           var fe = M.saturate(e * rng.range(0.5, 1.5));
-          // 0.180 of relief, not 0.150. A Bayon face stands about a metre
-          // proud of its storey; at 0.150 the centre prasat's head cleared its
-          // own stone by 0.92 m and, photographed on a SOUTH elevation lit by
-          // sky alone at a measured 1.6:1 key-to-fill, 0.92 m of relief had
-          // almost no shading gradient to describe itself with. Deeper relief
-          // is the half of that this file owns; the other half is the pose,
-          // and hero1 has been moved west so the towers present a LIT west
-          // elevation instead.
           carvedFace(self, B, rng,
             x + Math.sin(fyaw) * oR, fy, z + Math.cos(fyaw) * oR,
-            fyaw, fw, fh, fw * 0.180, fe);
+            fyaw, fw, fh, fdp, fe, { back: fback });
           faceRec.push({
             x: x + Math.sin(fyaw) * (oR + fw * 0.30), y: fy + fh * 0.45,
             z: z + Math.cos(fyaw) * (oR + fw * 0.30), yaw: fyaw
@@ -3252,8 +3460,18 @@
           var pa = f.a0 + (q + 0.5) * (pl / pn);
           if (f.doors.length && Math.abs(pa - T_CX) < STAIR_HALF + 0.6) continue;
           B.wear = { grime: 0.68, wet: 0.86, edge: 0.80 };
-          if (f.axis === 'x') B.box('sandstone', pl / pn * 0.98, 0.30, 1.20, pa, prevY + 0.15, f.b);
-          else B.box('sandstone', 1.20, 0.30, pl / pn * 0.98, f.b, prevY + 0.15, pa);
+          // The moulded plinth runs along the FOOT of every tier, which is the
+          // line the eye follows across the whole bottom half of hero1 and the
+          // one place splash-back and root damage actually concentrate. On the
+          // relief atom for the same reason the wall blocks above it are.
+          var psd = ((pa * 71 + f.b * 29) | 0);
+          if (f.axis === 'x') {
+            B.relBoxR('sandstone', pl / pn * 0.98, 0.30, 1.20, pa, prevY + 0.15, f.b,
+              0, rng.range(-0.012, 0.012), 0, undefined, psd);
+          } else {
+            B.relBoxR('sandstone', 1.20, 0.30, pl / pn * 0.98, f.b, prevY + 0.15, pa,
+              0, rng.range(-0.012, 0.012), 0, undefined, psd);
+          }
           B.wear = null;
         }
       }
@@ -3319,13 +3537,22 @@
             // cold poured concrete against warm sandstone
             edge: (dz2 ? 0.90 : 0.74) + rng.range(-0.08, 0.14)
           };
-          B.boxR(broken ? 'mossy' : (rng.bool(0.10) ? 'mossy' : 'sandstone'),
+          // ON THE RELIEF ATOM, like every wall block in the level already is.
+          // The great stair is the one leading line the sanctuary has and it
+          // runs from the bottom edge of the signature frame to the towers, so
+          // it is the largest single area of near-field stone the level ships -
+          // and it was still 24 perfect prisms with one chamfer each. A tread
+          // that nine centuries of feet have hollowed and nine hundred monsoons
+          // have spalled needs a dished face and a wavy nosing, not a chamfer.
+          B.relBoxR(broken ? 'mossy' : (rng.bool(0.10) ? 'mossy' : 'sandstone'),
             pw, sth - (dz2 ? 0.02 : 0), sd2 * (dz2 ? 0.96 : 1.0),
             T_CX + (broken ? rng.range(-0.5, 0.5) : parts[pq][0] * STAIR_HALF * 2) +
               rng.range(-0.015, 0.015),
             sy - sth * 0.5 + dz2 + rng.range(-0.012, 0.012),
             sz + rng.range(-0.015, 0.015),
-            rng.gaussian(0, 0.014), rng.gaussian(0, 0.020), rng.gaussian(0, 0.012));
+            rng.gaussian(0, 0.014), rng.gaussian(0, 0.020), rng.gaussian(0, 0.012),
+            BEVELS[rng.int(0, BEVELS.length - 1)],
+            ((sz * 53 + sy * 131 + pq * 17) | 0));
           B.wear = null;
         }
         // one step in twenty-five has lost a block off its nosing
@@ -4242,6 +4469,16 @@
     for (i = 0; i < 18; i++) {
       seeds.push([rng.range(X_MIN + 10, X_MAX - 10), rng.range(Z_MIN + 10, Z_MAX - 10), 0.6]);
     }
+    // THE JUNGLE BAND. The establishing shot stands on the knoll outside the
+    // south-west corner and looks down across the whole site, so its foreground
+    // and its middle distance are BOTH outside the precinct - and until the
+    // height test above was made local, neither could carry any medium at all.
+    // A ring of seeds through the surrounding forest is what puts a layer in
+    // the hollows of the frame that most needs one.
+    for (i = 0; i < 34; i++) {
+      var ja = rng.range(0, Math.PI * 2), jr = 36 + rng.range(0, 22);
+      seeds.push([Math.cos(ja) * jr, -8 + Math.sin(ja) * jr * 0.9, 0.72]);
+    }
     // SMALL cards. A 30 m card at 0.7 m covers every pixel below the horizon
     // at one alpha, which is a sheet of tracing paper over the level and is
     // exactly how round two photographed. At 11 m they read as discrete
@@ -4277,64 +4514,75 @@
     // density in its lowest third) and reach 1.5-2.4 m - ankle to head. So the
     // medium POOLS at ankle height, the towers stand out of it, and the
     // tower shadows crossing it have something to be shadows in.
-    // A CARD THAT INTERSECTS A BUILDING SHOWS THE BUILDING'S OWN SILHOUETTE
-    // CUT INTO IT. The first pass at this stood 13.5 m banks in the courtyard
-    // and the tier and tower masses sliced them: what photographed was a
-    // bright translucent wedge with a dead-straight edge lying across the
-    // centre prasat, which reads as a rendering fault and not as air. There is
-    // no depth-fade available here (postfx owns the depth buffer), so the
-    // answer is geometric - keep the banks SMALL, keep them LOW, and keep them
-    // out of the volume the masonry occupies. `clear` is that keep-out, and it
-    // also stops mist forming inside the sealed gallery corridor, where a
-    // roofed stone passage has no business steaming.
-    function clear(px, pz) {
-      var m2 = 2.6;
-      // The sanctuary terrace needs only a token margin, because the real rule
-      // that keeps mist off it is the GROUND-HEIGHT test in the caller. What
-      // actually produced the bright wedge lying across the centre prasat was
-      // not proximity: it was that sampleGround resolves the terrace tiers
-      // analytically, so a seed inside the terrace footprint stood its card ON
-      // TIER THREE at 5.5 m, three metres from a tower, and the tower sliced
-      // it. Rejecting anything whose ground is above a metre fixes that at the
-      // source and lets the medium run right up to the foot of the tier -
-      // which is the wettest line in the courtyard, the one continuous
-      // horizontal across the middle of hero1, and where a bank belongs.
-      if (Math.abs(px - T_CX) < TIER[0].hx + 0.3 &&
-          pz > T_CZ - TIER[0].hz - 0.3 && pz < T_CZ + TIER[0].hz + 0.3) return false;
-      // the gallery ring: its walls, its corridor and its roof
-      if (Math.abs(px) < G_X + m2 && pz > G_ZN - m2 && pz < G_ZS + m2 &&
-          (Math.abs(px) > G_PX - m2 || pz > G_PZS - m2 || pz < G_PZN + m2)) return false;
-      // the gate and its wings
-      if (Math.abs(px) < GOP_HALF_X + m2 &&
-          pz > GOP_Z - GOP_HALF_Z - m2 && pz < GOP_Z + GOP_HALF_Z + m2) return false;
-      // the enclosure walls
-      if (pz > ENC_ZN - m2 && pz < ENC_ZS + m2 &&
-          (Math.abs(Math.abs(px) - ENC_X) < m2 ||
-           (Math.abs(pz - ENC_ZS) < m2 && Math.abs(px) > GOP_HALF_X))) return false;
-      // both libraries
-      for (var q2 = 0; q2 < P.libraries.length; q2++) {
-        var lb = P.libraries[q2];
-        if (Math.abs(px - lb.x) < 4.4 + m2 && Math.abs(pz - lb.z) < 4.4 + m2) return false;
-      }
-      // the causeway deck and its balustrades
-      if (Math.abs(px) < CW_HALF + 1.4 + m2 && pz > CW_Z0 - m2 && pz < CW_Z1 + m2) return false;
-      // EVERY RUBBLE HEAP. The masonry keep-outs above are all buildings, and
-      // buildings are not what actually sliced these cards: the block piles are
-      // 2-3 m tall, they are deliberately placed 3-5 m in front of every hero
-      // standpoint, and a bank standing among them shows their silhouettes cut
-      // into it as dead-straight edges. The near fade handles the first two
-      // metres; this handles the rest, at the source.
-      for (var q3 = 0; q3 < P.rubble.length; q3++) {
-        var rb = P.rubble[q3];
-        var rdx = px - rb.x, rdz = pz - rb.z, rr3 = rb.r + 1.6;
-        if (rdx * rdx + rdz * rdz < rr3 * rr3) return false;
-      }
-      return true;
+    // THE KEEP-OUT LIST IS GONE, AND THAT IS THE POINT OF THIS ROUND'S CHANGE.
+    //
+    // What used to be here was a hand-written list of every wall, tower, gate,
+    // library, causeway and rubble heap in the level, rejecting any bank seed
+    // that landed near one. Its own comment said why: "there is no depth-fade
+    // available here (postfx owns the depth buffer), so the answer is
+    // geometric". The list cost the level its named condition. Between the
+    // gallery ring, the terrace footprint and the thirteen rubble heaps it
+    // rejected essentially the whole inner courtyard - i.e. exactly the volume
+    // that hero1, hero2 and the overview look THROUGH - and the delivered
+    // frames photographed clear air under a bare gradient sky at dawn.
+    //
+    // It also could not have worked. An intersection between a card and a wall
+    // is a SCREEN-SPACE event: it moves with the camera, and no keep-out
+    // expressed in world coordinates can anticipate it. postfx now publishes
+    // the linearised scene depth and a patcher for it (softParticleFade), so
+    // the card fades out as the surface behind it approaches and there is
+    // nothing left to keep out.
+    //
+    // TWO TESTS SURVIVE, and neither is a workaround:
+    //   * ground below -14 m is the bottom of the moat, which is under water;
+    //   * ground above 1.05 m is the temple itself. Mist collects in the low
+    //     ground; a bank standing on tier three of the sanctuary is not a
+    //     rendering problem, it is a meteorological one.
+    // And one genuine exclusion: the ROOFED spaces. A sealed stone corridor
+    // and a gate passage with a vault over them have no sky to radiate to and
+    // do not steam, and the `interior` framing is the level's best-graded
+    // frame precisely because its air is clear and its light is directional.
+    function roofed(px, pz) {
+      // the gallery's own corridor, between the outer wall and the pillar line
+      if (Math.abs(px) < G_X && pz > G_ZN && pz < G_ZS &&
+          (Math.abs(px) > G_PX - 0.6 || pz > G_PZS - 0.6 || pz < G_PZN + 0.6)) return true;
+      // the gate passage
+      if (Math.abs(px) < 3.4 && pz > GOP_Z - GOP_HALF_Z && pz < GOP_Z + GOP_HALF_Z) return true;
+      return false;
     }
+    // THE HEIGHT TEST WAS ABSOLUTE AND IT SHOULD NEVER HAVE BEEN.
+    //
+    // `ground above 1.05 m` means "not on the temple" inside the precinct, and
+    // that is right - a bank standing on tier three of the sanctuary is a
+    // meteorological error. Applied to the WHOLE SITE it also banned mist from
+    // the jungle hill, which rises to 12.5 m and is the entire foreground and
+    // middle distance of the establishing shot. So the level's condition was
+    // absent from the one framing that looks down on the site from above, where
+    // a layer lying in the hollows is the single most recognisable dawn image
+    // there is. Inside the precinct the rule stands; outside it the ceiling is
+    // the canopy.
+    function mistOK(px, pz, gy) {
+      if (roofed(px, pz)) return false;
+      var inPrecinct = Math.abs(px) < 33 && pz > -46 && pz < 22;
+      return gy < (inPrecinct ? 1.05 : 15.0);
+    }
+    // DENSITY, and the honest reason it goes up. With the keep-out gone the
+    // same counts would have spread the same cards over four times the area
+    // they used to be allowed into, so the medium would have arrived thinner
+    // than it already was. The bank layer carries the level's whole named
+    // condition and it is the one that gets the increase.
+    // THE FLAT LAYERS ARE THE SMALL HALF AND THEY HAVE TO STAY THAT WAY.
+    // Measured: raising them to 1.35x put ten thousand extra pixels into the
+    // signature frame's mid band and dropped that band's R-B from +0.212 to
+    // +0.143, i.e. a horizontal card seen at 5 degrees of grazing stacks with
+    // its neighbours into a neutral wash exactly where the frame's warmest
+    // passage was. That is the "sheet of tracing paper" failure this file has
+    // already recorded once. The UPRIGHT bank is the layer that carries the
+    // level's condition; the flat ones only stop the floor being a hard plane.
     var layers = [
-      { y: 0.30, n: seeds.length, s: 11, o: 1.00, bank: 0 },
-      { y: 0.62, n: Math.round(seeds.length * 0.50), s: 15, o: 0.60, bank: 0 },
-      { n: Math.round(seeds.length * 4.0), s: 4.8, o: 1.00, bank: 1 }
+      { y: 0.30, n: Math.round(seeds.length * 1.35), s: 11, o: 1.00, bank: 0 },
+      { y: 0.62, n: Math.round(seeds.length * 0.60), s: 15, o: 0.60, bank: 0 },
+      { n: Math.round(seeds.length * 7.0), s: 4.8, o: 1.00, bank: 1 }
     ];
     var UV_BLOB = [0.002, 0.004, 0.498, 0.996];
     var UV_BANK = [0.502, 0.004, 0.998, 0.996];
@@ -4355,9 +4603,19 @@
           var bh = rng.range(1.1, 1.9);
           var gy0 = self.sampleGround(x, z);
           if (gy0 < -14) continue;
-          // never on top of the temple: mist collects in the low ground
-          if (gy0 > 1.05) continue;
-          if (!clear(x, z)) continue;
+          if (!mistOK(x, z, gy0)) continue;
+          // DEEPER OUTSIDE THE WALLS, and it is a real distinction rather than
+          // a knob. A swept stone courtyard on a raised platform is the driest
+          // surface on the site; the moat, the flooded margins and the forest
+          // floor around it are where the water is, and that is where a dawn
+          // layer actually builds. It is also what the establishing shot needs:
+          // from 14 m up and 45 m out a 1.5 m bank subtends under two degrees
+          // and is simply not in the photograph, which is why the level's own
+          // condition was invisible in the one frame that looks down on it.
+          if (Math.abs(x) > 33 || z > 22 || z < -46) {
+            bh = rng.range(1.9, 3.4);
+            s *= 1.55;
+          }
           var yaw0 = rng.range(0, Math.PI * 2);
           var gq = quad(s, bh, UV_BANK[0], UV_BANK[1], UV_BANK[2], UV_BANK[3]);
           ents.push({ geometry: gq,
@@ -4366,9 +4624,19 @@
             matrix: makeM(x, gy0 + bh * 0.5 - 0.12, z, 0, yaw0 + Math.PI * 0.5, 0) });
           nCard = 2;
         } else {
+          // THE FLAT LAYERS FOLLOW THE GROUND NOW. They used to sit at a fixed
+          // world Y, which is wrong on a site whose floor runs from the moat at
+          // -0.8 to the outer court at +0.3 to the knoll at +12: half of them
+          // were buried and the other half floated. The reason they could not
+          // follow it before is that a horizontal card lying 30 cm over a
+          // terrain that is not flat CUTS it, and the cut is a hard line. That
+          // is the same screen-space intersection softParticleFade now handles,
+          // so the layer can sit where mist actually sits.
+          var fg = self.sampleGround(x, z);
+          if (fg < -14 || !mistOK(x, z, fg)) continue;
           ents.push({
             geometry: quad(s, s, UV_BLOB[0], UV_BLOB[1], UV_BLOB[2], UV_BLOB[3]),
-            matrix: makeM(x, L.y + rng.range(-0.18, 0.18), z,
+            matrix: makeM(x, fg + L.y + rng.range(-0.10, 0.14), z,
               -Math.PI * 0.5, rng.range(0, Math.PI * 2), 0)
           });
         }
@@ -4403,13 +4671,39 @@
         // toward the camera. 0.14-0.80 returns 0.71 there and still leaves the
         // north courtyard and the far jungle on the cool end, which is where the
         // grade's blue anchor lives.
+        // THE WARM END LIFTS AND THE COOL END DOES NOT MOVE, AND THAT ASYMMETRY
+        // WAS MEASURED THREE TIMES BEFORE IT WAS BELIEVED.
+        //
+        // The obvious change - scale the whole ramp up so the medium is
+        // brighter than the stone it veils - was tried at 1.75x on both ends
+        // and it INVERTED the signature frame's grade, from +0.020 to -0.010.
+        // The mechanism, found by masking the pixels rather than by reasoning:
+        // this cool end is strongly blue (B is three times R), so wherever it
+        // lies over one of the frame's BRIGHT ground surfaces - the lit stair,
+        // the sheet of standing water, the tower plinths - it pushes that pixel
+        // blue, and those pixels are the highlight population. hero1's
+        // highlight R-B went +0.0244 -> -0.0042 while its shadows genuinely did
+        // get cooler, which is the right move made in the wrong place.
+        //
+        // So the cool end stays exactly where it was - it is an ANCHOR, and an
+        // anchor that competes for the highlight mask is not one - and only the
+        // sunward end lifts, 1.5x and further into the key's own orange. That
+        // is the half that has to out-run the stone, because air with the sun
+        // behind it really is the brightest thing at ground level at this hour.
         var sunward = M.saturate((x * SUN_X + z * SUN_Z) / 60 * 0.5 + 0.5);
         var warm = M.smoothstep(0.14, 0.80, sunward);
         var amp = L.o * sd[2] * (L.bank ? 0.80 : 1.0);
+        // The two ends do NOT scale together. Scaling both 1.75x made the cool
+        // half bright enough to join the highlight population, and the frame's
+        // highlight R-B fell from +0.026 to +0.018 - a brighter medium with a
+        // NARROWER colour axis, which is the opposite of the trade. The warm
+        // end is the one that has to compete with the stone (1.85x); the cool
+        // end only has to be the anchor the grade is measured against, and an
+        // anchor that is bright is not an anchor (1.25x).
         var cc = [
-          M.lerp(0.088, 0.345, warm) * amp,
-          M.lerp(0.126, 0.236, warm) * amp,
-          M.lerp(0.208, 0.148, warm) * amp
+          M.lerp(0.088, 0.520, warm) * amp,
+          M.lerp(0.126, 0.352, warm) * amp,
+          M.lerp(0.208, 0.196, warm) * amp
         ];
         for (var nc = 0; nc < nCard; nc++) cols.push(cc);
       }
@@ -4432,44 +4726,40 @@
     return geo;
   }
 
-  // ---------------------------------------------------------- the near fade --
-  // THE ONE THING THE GEOMETRIC KEEP-OUT ABOVE CANNOT DO.
+  // -------------------------------------------------------- the mist shader --
+  // A PARTICIPATING MEDIUM HAS NO NEAR FIELD AND NO HARD EDGE, and until this
+  // round this file could only express the first half of that.
   //
-  // `clear()` keeps the banks out of the volume the MASONRY occupies, and that
-  // worked: no card is sliced by a wall or a tower any more. What it cannot
-  // know about is the tumbled stone - the block piles at (-8.4,-3.2), the
-  // toppled lintel at (-11.2,-5.6), the gate spoil in the outer court - which
-  // is deliberately placed 3-5 m in front of every hero standpoint precisely
-  // because a frame needs hard foreground. Measured on hero1, the level's
-  // signature image: a 4.8 m bank standing 2 m from the lens laid a 0.28-alpha
-  // wash over the near blocks with a DEAD-STRAIGHT diagonal where the card's
-  // own polygon edge crossed them, and the same wedge cut the great stair in
-  // the lower right. That reads as a rendering fault, not as air, and it was
-  // costing the frame its whole foreground.
+  // The near field is easy and was already here: the inscatter along a ray is
+  // an integral over path length, so at two metres there is almost nothing of
+  // it and a card's constant alpha is simply the wrong model there. The HARD
+  // EDGE is the other half - where a card's polygon crosses a wall, a tower or
+  // a rubble pile the picture gets a dead-straight line across it - and that
+  // one cannot be solved in world space at all, because the intersection is a
+  // screen-space event that moves with the camera. This file spent two rounds
+  // trying anyway, with a keep-out list of every solid in the level, and the
+  // cost was the level's own named condition (see buildMist).
   //
-  // The fix is not more keep-out volumes - a keep-out per rubble pile is a list
-  // that goes stale the moment anything moves. It is that A PARTICIPATING
-  // MEDIUM HAS NO NEAR FIELD: the inscatter along a ray is an integral over
-  // path length, so at two metres there is almost nothing of it and the card
-  // model - constant alpha regardless of distance - is simply wrong there. So
-  // the alpha is ramped in over the first several metres of view distance.
-  // Everything within 1.4 m of the eye disappears - a card that close subtends
-  // most of the frame and its texture is magnified past its own frequency - and
-  // by 7 m it is at full strength.
+  // postfx now publishes the linearised scene depth and patches a material to
+  // read it, so both halves come from one call:
+  //   fade      2.2 m, roughly the bank card's own thickness in the world.
+  //   nearFade  1.7 m, which is where the old hand-written window started.
+  // The material keeps its map, its vertex colours and sky.js's height fog,
+  // because softParticleFade only multiplies the finished fragment.
   //
-  // The window used to be 2.8 to 13 m, which was a workaround for the opaque
-  // bottom hem on the bank cell (see buildMistTexture): pushing the medium out
-  // to 13 m was the only way to get the hard edge off the near geometry, and it
-  // cost the signature frame half its grade split, because a warm back-lit haze
-  // in the near field was the warmest thing in it (measured: highlight tint fell
-  // from +0.030 R to +0.014 R when it went). With the hem fixed at source the
-  // card has no edge to hide, so the window closes back to where a participating
-  // medium actually wants it and the ground haze comes back.
-  //
-  // onBeforeCompile rather than a hand-written ShaderMaterial, because the
-  // material must keep participating in sky.js's height fog (`fog: true`) and
-  // in the vertex-colour tinting above, and re-implementing those is how a
-  // level file quietly diverges from the shared atmosphere.
+  // mistNearFade stays as the fallback for a boot where postfx failed to
+  // build: a level whose mist has no near fade is worse-looking, and a level
+  // that throws because ctx.postfx was null is broken.
+  function mistFade(mat, ctx) {
+    try {
+      if (ctx && ctx.postfx && ctx.postfx.softParticleFade) {
+        ctx.postfx.softParticleFade(mat, { fade: 2.2, nearFade: 1.7 });
+        return mat;
+      }
+    } catch (e) { void e; }
+    return mistNearFade(mat);
+  }
+
   function mistNearFade(mat) {
     try {
       mat.onBeforeCompile = function (shader) {
@@ -5053,7 +5343,19 @@
       B.boxR('mossy', 2.1, 1.5, 2.1, kx + 1.9, ky + 1.6, kz + 1.7, 0.30, 0.4, 0.20);
       B.wear = null;
       falseDoor(self, B, rng, kx, ky + 0.7, kz + 2.25, 0, 1.5, 2.3, 0.24);
-      // stone spilling down the slope toward the standpoint
+      // Stone spilling down the slope toward the standpoint.
+      //
+      // MOVED TWICE AND PUT BACK, and the measurement is the reason. The lower
+      // left of the establishing frame carries a dark angular mass and the
+      // obvious suspect was these two heaps, whose nearest blocks land about two
+      // metres from that eye. Pushing them out to 9.5 m and then to 8.5 m did
+      // NOT remove it - it is there in all three captures - so the mass is the
+      // knoll's own shoulder and the boundary shrine's plinth, not the scree.
+      // What moving them did do was cost the frame its foreground: edge energy
+      // 0.1328 -> 0.1264 -> 0.1243 and vertical imbalance 2.354 -> 2.367 ->
+      // 2.400, i.e. every step away made the picture flatter and its bottom half
+      // darker. So they go back where they were, and the note stays as the
+      // record that the corner mass has a different cause.
       scatterBlocks(self, B, rng, kx + 2.0, ky, kz + 3.0, 6.0, 30, 0.9);
       scatterBlocks(self, B, rng, K.x + 7.0, ky, K.z - 6.0, 6.0, 22, 0.75);
       self.addCollider(kx, ky + 4.2, kz, 2.4, 4.2, 2.4, 'stone');
@@ -5084,7 +5386,7 @@
         transparent: true, depthWrite: false, vertexColors: true,
         side: THREE.DoubleSide, fog: true, opacity: 1.0, toneMapped: true
       });
-      mistNearFade(mat);
+      mistFade(mat, self.ctx);
       var mesh = new THREE.Mesh(g, mat);
       mesh.name = 'ruins_mist';
       mesh.renderOrder = 4;
@@ -5362,10 +5664,26 @@
           // corner occlusion of an applied mass, the centre does not
           var lat = M.smoothstep(0.34, 0.52, Math.abs(ox) / Math.max(0.05, ft.w));
           var vert = M.smoothstep(0.10, -0.02, oy2 / Math.max(0.05, ft.h));
-          var ao = M.saturate(deep * 1.15 + lat * 0.30 + vert * 0.35);
-          r = g0 * (1 - ao * 0.80);
-          g = w0 * (1 - ao * 0.42);
-          b2 = e0 * (1 - ao * 0.30);
+          // ---- AND THE HALF THAT DEPTH CANNOT SEE -------------------------
+          // `deep` measures the vertex against the head's own front plane, so
+          // it finds the socket, the under-nose and the moat around the jaw -
+          // and it is BLIND to every incision cut into a proud form, because
+          // the line between two lips and the crease between two lids sit at
+          // the same absolute depth as the cheek beside them. That is the
+          // whole read of a Bayon face and it was the half that was missing.
+          // carvedFace bakes the local concavity per vertex (a two-cell blur
+          // of its own height field, minus that field) and it arrives here.
+          // Convex the other way - the brow arris, the lip, the bridge of the
+          // nose, the lid rim - takes the pale spalled substrate instead, so
+          // the head is pale proud forms against dark cuts at any exposure.
+          // already in units of dp, because the field it came from is
+          var fc = ent.faceCav;
+          var cv = fc ? fc[i] : 0;
+          var ao = M.saturate(deep * 1.15 + lat * 0.30 + vert * 0.35 +
+            M.saturate(cv * 5.5));
+          r = g0 * (1 - ao * 0.86);
+          g = w0 * (1 - ao * 0.44);
+          b2 = e0 * (1 - ao * 0.30) * (1 - M.saturate(-cv * 4.5) * 0.34);
         }
 
         // ---- grime: water runs DOWN, and it collects where it stops --------
@@ -5448,7 +5766,16 @@
         // the change it measured 0.227 / 0.225 / 0.240, i.e. blue-dominant,
         // because a pale neutral substrate under a violet zenith is the only
         // thing that was lighting it.
-        if (doEdges) {
+        // NOT ON A CARVED FACE. The arris test works in coordinates normalised
+        // by the entry's own half-extents and assumes the geometry is CENTRED
+        // on its local origin, which every box() and frus() in the level is. A
+        // face mesh is not: it is authored with its origin at the chin line and
+        // its front plane two metres out, so |local|/halfExtent runs past 1.5
+        // over the whole upper half of the head and past the 0.88 threshold on
+        // two axes at once - i.e. the entire forehead and crown would be
+        // painted with the pale spalled-arris substrate. Its differential
+        // erosion is in the height field instead, where it belongs.
+        if (doEdges && !ft) {
           _pv.set(x, y, z).applyMatrix4(_pinv);
           var ex = Math.abs(_pv.x) / hx, ey = Math.abs(_pv.y) / hy, ez = Math.abs(_pv.z) / hz;
           var eT = ent.relief ? 0.78 : 0.88;
