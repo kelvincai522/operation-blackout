@@ -1346,6 +1346,33 @@ own brief, that a city's facades are being culled because their winding is wrong
 critic in 32 critiques has ever said "add a moment of beauty here." The loop removes
 deficiency; it does not generate excellence, and those are not the same operation.
 
+![Bayon Ruins, before and after the round that added the carved faces](embed/loop_ruins_identity.jpg)
+
+*The clearest illustration of what a critic can and cannot do. Round 3 scored this
+level 38 and its verdict named something different from every other level in the
+build: "The Bayon face. Everything else on this list is a defect; this one is the
+level's identity failing." The roster brief leads with carved faces and the level is
+named after them, and there were none in any published framing. Round 4 delivered
+four, at the cost of +77% triangles — the largest geometry spend of the round. This is
+the loop working exactly as designed: a critic can determine that the defining feature
+of a level is **absent**. What no critic has ever produced is the instruction that
+would have made the faces good rather than merely present — round 4's critic still
+reads them as "soft low-poly forms rather than carved sandstone."*
+
+
+![Line 4 — Zarechnaya, the same signature framing after each round of the loop](embed/loop_metro_rounds.jpg)
+
+*Line 4 — Zarechnaya, the same signature framing captured after each round. The first
+build is a near-black vault with one barrel and a scaffold tower; content arrives in
+the middle rounds; the last round is where the level gets a lighting **design** rather
+than more objects — hot fluorescents, a shaft landing on the platform, hard falloff
+into black between sources, a torn ceiling slab. Its scores over those rounds were
+37 → 41 → 46 → 48. Note that the two middle frames are nearly identical, and that is
+not a rendering artefact: this level's fix agent finished early in one round, so the
+sheet written at the end of that round already contained the next round's work. It is
+recorded rather than hidden because it is exactly the kind of thing that makes a
+round-over-round comparison lie if nobody checks the timestamps.*
+
 **Returns decelerate.** Mean gain was +4.6 per level from round 2 to round 3 and +3.1
 from round 3 to round 4. Levels 1 and 2, which had four rounds each earlier, plateaued
 at 49–52. The asymptote appears to be the low fifties, and there is no evidence that
@@ -1363,6 +1390,19 @@ three are documented with their measurements in §4.16 and §7.6. The rule that 
 of the third — run a candidate gate against the frozen references *and* against a frame
 you already believe is broken, and if it cannot separate them it is not a gate — is now
 in `DEVELOPMENT.md`, and the next round's verifier ran that check unprompted.
+
+![The bunker interior before and after, with what each gate reported](embed/loop_saturated_gate.jpg)
+
+*Why a broken gate is worse than no gate. Both of these frames scored **0.00% dead
+cells** on the original coverage metric, which judged each cell on its 95th percentile
+— a cell is 14,400 pixels, so 720 bright ones redeem an otherwise black cell, and one
+lit fixture anywhere in it passes. Re-gated on the per-cell median, the left frame
+measures 42.19% against a limit of 12 and the right measures 3.12%. Look at the
+ceiling: on the left it is a void with a few floating fixtures, on the right it carries
+cable trays, ductwork and structure. The metric that was supposed to catch exactly this
+had been reporting the left frame as healthy for two rounds, and a verification report
+cited "39 of 40 frames inside every gate" on its strength.*
+
 
 **2. Comments diverging from code cost three separate multi-round bugs.** A fog density
 discussed in three comment blocks and never present in the object literal. A frequency
