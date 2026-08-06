@@ -1029,6 +1029,58 @@
     return cv;
   };
 
+  // ---- THE CONTACT PATCH ----------------------------------------------------
+  // Nothing in this level casts a shadow and nothing can: lighting.js makes
+  // every rig practical castShadow:false except the two harbour masts, and an
+  // interior rig has no CSM sun to cast with either.  So the single most
+  // reported defect in the round-3 signature frame - a rubble chunk sitting a
+  // metre from the lens "not reading as seated, no AO where it meets the
+  // floor" - is not a lighting bug that can be fixed with more light.  It is a
+  // missing OCCLUSION term, and the only honest place a level can put one is
+  // in the geometry.
+  //
+  // This is that term: a soft radial darkening laid on the floor under every
+  // prop, alpha-blended so it multiplies nothing and simply occludes, with the
+  // profile of real ambient occlusion under a resting object - near-opaque in
+  // the first 25% of the radius, falling off as an inverse square out to
+  // nothing at the rim, so the quad's own boundary can never be seen.  A tiny
+  // amount of noise in the alpha keeps it from reading as an airbrushed disc,
+  // which is what a plain gaussian looks like on a wet floor.
+  //
+  // One 128 px texture, one InstancedMesh, one draw call for the whole level.
+  TX.contact = function (size, seed) {
+    var cv = TX.canvas(size);
+    if (!cv) return null;
+    var g = cv.getContext('2d');
+    var N = new GAME.Noise((seed ^ 0x0AC) >>> 0);
+    g.clearRect(0, 0, size, size);
+    var img = g.createImageData(size, size);
+    var d = img.data;
+    for (var y = 0; y < size; y++) {
+      for (var x = 0; x < size; x++) {
+        var u = (x + 0.5) / size, v = (y + 0.5) / size;
+        var dx = (u - 0.5) * 2, dy = (v - 0.5) * 2;
+        var r = Math.sqrt(dx * dx + dy * dy);
+        // Flat core, then (1-r)^2 to exactly zero at r = 1.  Reaching zero AT
+        // the quad edge is the whole point - a truncated gaussian leaves a
+        // step, and a step in a shadow reads as a decal.
+        var core = 0.26;
+        var f = r <= core ? 1 : Math.max(0, (1 - r) / (1 - core));
+        var a = f * f;
+        // Break the perfect circle: an object does not sit in a round hole.
+        var n = N.fbm2(u * 4.2, v * 4.2, 3, 2.1, 0.55);
+        a = M.saturate(a * (1 + n * 0.42) - 0.012);
+        var i = (y * size + x) * 4;
+        // A shadow on a green-lit flooded floor is not neutral - it is what is
+        // left when the green goes, i.e. the cold end of the fill.
+        d[i] = 12; d[i + 1] = 16; d[i + 2] = 16;
+        d[i + 3] = a * 226;
+      }
+    }
+    g.putImageData(img, 0, 0);
+    return cv;
+  };
+
   // ---- stains --------------------------------------------------------------
   // 2x2: rust weep, water streak / efflorescence, soot, mould bloom.  These go
   // on walls under fixings and on the floor under everything.
@@ -1365,15 +1417,66 @@
     return it;
   };
 
-  // Concrete rubble chunk.
+  // ---- Concrete rubble chunk ------------------------------------------------
+  // The single most-reported object in the round-3 signature frame, and both
+  // halves of the complaint were geometric rather than tonal: "a ~7-facet
+  // near-white rubble chunk close to camera, the brightest thing in the lower
+  // frame ... not reading as seated".
+  //
+  // SEVEN FACETS is what a detail-0 icosahedron gives you: 20 triangles, of
+  // which about eight face the lens, all of them the same size, all of them
+  // meeting at 138 degrees. That is the construction of a cut gem, and it reads
+  // as one at any albedo. A lump of vault concrete that came off a soffit is
+  // the opposite: it has TWO OR THREE LARGE FLAT FRACTURE PLANES where it
+  // parted along its own weak lines, a chipped and irregular perimeter where it
+  // hit the deck, and no facet anywhere else.
+  //
+  // So it is built as that: detail 1 for a perimeter that can actually be
+  // irregular (80 triangles - 110 instances is 8,800, against a 4.5M budget),
+  // an anisotropic squash so it is a slab and not a ball, three lobes of
+  // low-frequency displacement so no two rotations of it read as the same
+  // object, and then the two fracture planes CUT rather than modelled: every
+  // vertex below the bed plane is projected onto it, which flattens the
+  // underside into one real face. That bed face is also what makes it sit -
+  // a lump resting on a facet edge floats however good the shadow under it is.
   K.chunk = function (N, R) {
-    var g = new THREE.IcosahedronGeometry(0.24, 0);
+    var g = new THREE.IcosahedronGeometry(0.26, 1);
     var p = g.attributes.position;
-    for (var i = 0; i < p.count; i++) {
-      p.setXYZ(i, p.getX(i) * 1.25, p.getY(i) * 0.68 + 0.16, p.getZ(i) * 1.05);
+    var i, x, y, z, lump;
+    for (i = 0; i < p.count; i++) {
+      x = p.getX(i); y = p.getY(i); z = p.getZ(i);
+      // Three lobes of low-frequency swell: this is the SILHOUETTE, and it has
+      // to be at a period comparable to the object or it is just surface noise.
+      lump = 1;
+      if (N) lump += N.fbm3(x * 4.6 + 3.1, y * 4.6, z * 4.6 - 1.7, 2, 2.0, 0.5) * 0.44;
+      x *= 1.36 * lump; y *= 0.62 * lump; z *= 1.04 * lump;
+      p.setXYZ(i, x, y, z);
     }
+    // The bed face: everything below it is projected onto it. A slab that
+    // parted along a bar line has a flat bottom, and a flat bottom is what
+    // makes an object read as RESTING rather than as balanced.
+    var bed = -0.085;
+    // ...and the shear face, an oblique plane through one flank at about 40
+    // degrees, which is where the piece came away from the slab.
+    var sx = 0.766, sy = 0.643;      // unit normal of the shear plane
+    var sd = 0.148;
+    var minY = 1e9;
+    for (i = 0; i < p.count; i++) {
+      x = p.getX(i); y = p.getY(i); z = p.getZ(i);
+      if (y < bed) y = bed;
+      var t = x * sx + y * sy - sd;
+      if (t > 0) { x -= sx * t; y -= sy * t; }
+      if (y < bed) y = bed;
+      p.setXYZ(i, x, y, z);
+      if (y < minY) minY = y;
+    }
+    // Sit the bed on y = 0 so _drop's ground sample puts it ON the deck.
+    for (i = 0; i < p.count; i++) p.setY(i, p.getY(i) - minY);
     p.needsUpdate = true;
-    if (N) roughen(g, N, 0.055, 4);
+    // Chipping on the arrises only - a small high-frequency term, applied after
+    // the planes so it breaks their edges without curving the planes.
+    if (N) roughen(g, N, 0.016, 13);
+    g.computeVertexNormals();
     var it = new Item();
     it.add('concrete', g);
     return it;
@@ -1983,6 +2086,7 @@
     this._dripParts = [];
     this._stainCount = 0;
     this._scumCount = 0;
+    this._contactCount = 0;
 
     this.stats = { instances: 0, drawCalls: 0, tris: 0, colliders: 0, skipped: 0, full: [] };
 
@@ -2066,6 +2170,7 @@
     t.sign = TX.tex(TX.signs(512, 0x21), true, 1, 1, aniso, true);
     t.litter = TX.tex(TX.litter(512, 0x31), true, 1, 1, aniso, true);
     t.scum = TX.tex(TX.scum(256, 0x41), true, 1, 1, aniso, true);
+    t.contact = TX.tex(TX.contact(128, 0x71), true, 1, 1, aniso, true);
     t.stain = TX.tex(TX.stains(512, 0x51), true, 1, 1, aniso, true);
     t.drip = TX.tex(TX.drip(64, 256, 0x61), true, 1, 1, aniso);
     if (t.drip) { t.drip.wrapS = THREE.ClampToEdgeWrapping; t.drip.wrapT = THREE.RepeatWrapping; }
@@ -2170,9 +2275,19 @@
     m.wood = this._material('wood_plank',
       W({ albedoTarget: 0x6d6053, roughness: 0.93, wearColor: SUB_TIMBER,
         normalScale: 0.72, detail: 0.50 }));
+    // normalScale 0.46, not 0.70, and mesoScale 0.55 rather than the library's
+    // 1.82. This material is the rubble field and the stalactites, i.e. objects
+    // 20-60 cm across seen from one to three metres, and at 800-1150 texels/m
+    // the default meso tile puts its whole band at 4-8 mm - below the pixel at
+    // that distance, so it only ever contributed shimmer, while the 0.70 normal
+    // turned every one of those sub-pixel bumps into its own specular decision
+    // under a grazing source. At 0.55 tiles/m the same layer delivers 5-20 cm
+    // features, which on a chunk of broken vault is the exposed aggregate and
+    // the bar shadow - structure the silhouette can actually carry.
     m.concrete = this._material('concrete',
       W({ albedoTarget: 0x7a7770, roughness: 0.94, wearColor: SUB_DIELECTRIC,
-        normalScale: 0.70, detail: 0.45, meso: 0.40 }));
+        normalScale: 0.46, detail: 0.34, meso: 0.42, mesoScale: 0.55,
+        grain: 0.55 }));
     m.tile = this._material('tile',
       W({ albedoTarget: 0xa4a496, roughness: 0.40, wearColor: SUB_DIELECTRIC,
         normalScale: 0.46, detail: 0.38 }));
@@ -2272,6 +2387,21 @@
       alphaTest: 0.02, envMapIntensity: 1.2
     });
     m.scum.name = 'mt_scum';
+
+    // The contact patch.  MeshBasic, not Standard: this is an occlusion term
+    // and a term that is itself lit would brighten in exactly the places it is
+    // meant to darken.  depthWrite off so it never occludes the prop standing
+    // in it, and polygonOffset so it beats the flood sheet 6 mm below without
+    // needing a z bias big enough to float on a slope.
+    m.contact = new THREE.MeshBasicMaterial({
+      map: this.tex.contact || null, color: 0xffffff,
+      transparent: true, depthWrite: false, opacity: 1.0,
+      side: THREE.FrontSide, vertexColors: true, fog: true,
+      toneMapped: true,
+      polygonOffset: true, polygonOffsetFactor: -5, polygonOffsetUnits: -5
+    });
+    if (!this.tex.contact) m.contact.opacity = 0.0;
+    m.contact.name = 'mt_contact';
 
     m.stain = new THREE.MeshStandardMaterial({
       map: this.tex.stain || null, color: 0xffffff,
@@ -2540,6 +2670,23 @@
     if (!ok) return null;
     this._occupy(x, z, r);
     if (opts.collider) this._collider(x, y, z, opts.collider, yaw, opts.material);
+    // ---- THE CONTACT PATCH, ON EVERY PROP THAT HAS A FOOTPRINT -------------
+    // Nothing in this level can cast a shadow (see TX.contact), so without this
+    // every one of these objects terminates on a hard line against the floor
+    // and floats.  Gated on `contact !== false` and on a real footprint - a
+    // 4 cm glass shard occludes nothing - and on the prop actually being ON a
+    // surface rather than sitting on a scaffold deck, where `y` was passed in.
+    // A prop standing on ANOTHER prop - a bucket on a scaffold deck, a cable
+    // reel on a trolley - is the one case where this goes wrong, because the
+    // patch would be drawn wider than the deck it is meant to be lying on and
+    // would hang in the air past its edge.  The test is exactly that: an
+    // explicit `y` that does not agree with the ground under it is a prop that
+    // is standing on something, and it opts out unless the caller insists.
+    if (opts.contact !== false && r >= 0.15 &&
+        (opts.contact === true || opts.y === undefined ||
+         Math.abs(y - this._ground(x, z)) < 0.15)) {
+      this._contact(x, z, r, y, opts.contactDeep);
+    }
     // Anything standing in a flooded room grows a tide ring where it meets the
     // water: silt against the upstream face, biofilm all round.  This is the
     // metro's version of the harbour's wet halo and it is what stops a prop
@@ -2620,6 +2767,29 @@
     }
     this._static('stain', g, m);
     this._stainCount++;
+  };
+
+  // The occlusion patch where a prop meets the floor.  See TX.contact.
+  //
+  // `r` is the object's own footprint radius; the patch is drawn a little wider
+  // than that because ambient occlusion under a resting object reaches past its
+  // silhouette - a chunk 30 cm across darkens a good 45 cm of floor.  `deep`
+  // scales the opacity: a bin standing flat on the deck occludes far more of
+  // the hemisphere than a tile shard lying on it.
+  PropsMetro.prototype._contact = function (x, z, r, y, deep) {
+    if (this._contactCount >= 300) return;
+    var b = this.B.contact;
+    if (!b || b.n >= b.max) return;
+    var w = Math.max(0.22, r * 2.5);
+    var k = M.clamp(deep === undefined ? 1 : deep, 0.15, 1.6);
+    // Per-instance opacity, through the vertex-colour multiply on a Basic
+    // material: a field of patches at one strength reads as a stencil.
+    var v = k * this.rng.range(0.82, 1.08);
+    _col.setRGB(v, v, v);
+    b.add(T(x, (y === undefined ? this._ground(x, z) : y) + 0.006, z,
+      0, this.rng.range(0, TAU), 0,
+      w * this.rng.range(0.88, 1.14), 1, w * this.rng.range(0.88, 1.14)), _col);
+    this._contactCount++;
   };
 
   // Biofilm and silt on the water, or a tide ring round a standing prop.
@@ -2761,6 +2931,18 @@
       // that reads as "wet through" and still returns its own shape.
       flat: { noise: N, soak: 0.38, rise: 0.45, grime: 0.48, edge: 0.22, hiY: 0.4 },
       stone: { noise: N, soak: 0.55, rise: 0.30, grime: 0.52, edge: 0.30, hiY: 0.5 },
+      // ---- COLLAPSE DEBRIS, AND WHY debrisTint WAS NOT ENOUGH ---------------
+      // debrisTint fixes the INSTANCE colour (B = 1, i.e. "add no edge wear to
+      // this one") and the round-3 chunks were still measured at 0.648 mean
+      // against 0.414 for the deck under them, because the instance colour
+      // MULTIPLIES the mask and the mask's own edge term was `stone`'s 0.30.
+      // On an up-facing extremity that resolves to 36% of the way toward
+      // wearColor - a pale grey substrate - whatever the instance says. Edge
+      // wear is scuffing from hands, boots and barrow wheels; a slab that came
+      // off a soffit and has been under water since has never been touched by
+      // any of them, and its arrises are the DIRTIEST part of it, not the
+      // cleanest. 0.08 and a heavier grime term is what that actually is.
+      debris: { noise: N, soak: 0.58, rise: 0.32, grime: 0.66, edge: 0.08, hiY: 0.5 },
       // anything hanging or high: no capillary rise, but it holds the drip film
       hung: { noise: N, soak: 0.0, rise: 0.2, drip: 0.34, grime: 0.38, edge: 0.18, hiY: 0.6 },
       // the big one-offs get their gradient measured over their own height
@@ -2829,10 +3011,10 @@
     bat('panel', fin(mergeKeys(it, ['steel']), 'painted_metal', W.flat), m.steel, 36);
 
     it = K.chunk(N, R);
-    bat('chunk', fin(mergeKeys(it, ['concrete']), 'concrete', W.stone), m.concrete, 110);
+    bat('chunk', fin(mergeKeys(it, ['concrete']), 'concrete', W.debris), m.concrete, 110);
 
     it = K.shard(R);
-    bat('shard', fin(mergeKeys(it, ['tile']), 'tile', W.flat), m.tile, 240, false);
+    bat('shard', fin(mergeKeys(it, ['tile']), 'tile', W.debris), m.tile, 240, false);
 
     it = K.rebar(R);
     bat('rebar', fin(mergeKeys(it, ['rust']), 'rusted_metal', W.flat), m.rust, 30);
@@ -2878,6 +3060,14 @@
     Geo.copyUV1(sg);
     paintCard(sg, N, 1.0, 0.0);
     bat('scum', sg, m.scum, 200, false);
+
+    // ---- the contact patches -------------------------------------------------
+    // Unpainted on purpose: the wear mask would be read as a vertex colour by a
+    // MeshBasicMaterial and multiplied straight into the shadow, so every patch
+    // would come out a different opacity for no reason anybody could see.  The
+    // per-instance colour carries the whole variation instead.
+    var cg = flatQuad(1.0, 1.0, [0.0, 0.0, 1.0, 1.0]);
+    bat('contact', cg, m.contact, 300, false);
 
     // A raft of debris: two planks and a scrap of ply that drifted together and
     // stopped against something.  One batch, animated as a unit.
@@ -2954,13 +3144,24 @@
     this._place(K.scaffold(2.85), tx, ty, tz, 0.06);
     this._collider(tx, ty, tz, [0.80, 1.45, 0.62], 0.06, 'metal');
     this._occupy(tx, tz, 1.15);
+    this._contact(tx, tz, 1.05, ty, 1.1);
     this._place(K.ladder(2.55), tx + 0.86, ty, tz + 0.10, -0.10, 1, 0.05);
     // materials on the tower deck and at its foot
     this._drop(this.B.bucket, tx - 0.30, tz + 0.42, { y: ty + 2.55, r: 0.22, noClear: true, halo: false, tilt: 0.02 });
     this._drop(this.B.plank, tx + 0.10, tz - 0.36, { y: ty + 2.55, r: 0.30, noClear: true, halo: false, yaw: 0.05, tilt: 0.01 });
+    // ---- AND THESE ARE THE THREE THAT WERE WHITE ---------------------------
+    // debrisTint exists precisely for this (see its own comment: "46 chamfered
+    // cubes reading as polystyrene packaging") and three of the four chunk
+    // fields in this file were still taking the default wearTint, whose B
+    // channel - EDGE WEAR, which materials.js blends toward a PALE substrate -
+    // runs 0.80 to 1.00. One of these three lands 1.6 m from the signature
+    // frame's lens, and it photographed as the brightest object in the lower
+    // half of the image: a bright white polyhedron in a level whose one-line
+    // brief is rat-run grime. A lump that came off a vault under a decade of
+    // standing water is silted, soaked and has no bright arris anywhere.
     for (i = 0; i < 3; i++) {
       this._drop(this.B.chunk, tx + R.range(-1.8, 1.8), tz + R.range(-1.6, 1.6),
-        { r: 0.35, scale: R.range(0.7, 1.3) });
+        { r: 0.35, scale: R.range(0.7, 1.3), color: debrisTint(R), contactDeep: 1.15 });
     }
 
     // ---- the pump, at the platform edge, hose over the side -----------------
@@ -2969,6 +3170,7 @@
     this._place(K.pumpSet(), px, py, pz, Math.PI * 0.5 + 0.06);
     this._collider(px, py, pz, [0.42, 0.34, 0.66], 0, 'metal');
     this._occupy(px, pz, 1.1);
+    this._contact(px, pz, 0.95, py, 1.1);
     // the suction hose, over the coping and into the trench.  It is the only
     // curve in the frame and it is what says the pump was WORKING, not stored.
     var hose = new Item();
@@ -2988,6 +3190,7 @@
     this._place(K.genset(), gx, gy, gz, -Math.PI * 0.5 + 0.04);
     this._collider(gx, gy, gz, [0.48, 0.50, 0.78], 0, 'metal');
     this._occupy(gx, gz, 1.3);
+    this._contact(gx, gz, 1.05, gy, 1.05);
     var run = new Item();
     run.sag('cable', 0, 0.30, 0, 2.2, 0.05, -1.1, 0.16, 0.028, 6);
     run.sag('cable', 2.2, 0.05, -1.1, 3.6, 0.05, -1.6, 0.06, 0.028, 4);
@@ -3248,7 +3451,9 @@
     this._place(K.hoarding(N, R), hx, hy, hz, 0.72 + Math.PI);
     this._collider(hx, hy, hz, [1.55, 0.48, 1.05], 0.72, 'metal');
     this._occupy(hx, hz, 1.8);
-    this._drop(this.B.chunk, hx + 1.6, hz + 1.1, { r: 0.3, scale: 1.1 });
+    this._contact(hx, hz, 1.55, hy, 1.2);
+    this._drop(this.B.chunk, hx + 1.6, hz + 1.1,
+      { r: 0.3, scale: 1.1, color: debrisTint(R), contactDeep: 1.15 });
     this._drift(hx - 1.1, hz + 1.4, 6, 1.0);
 
     // 2. A second hoarding at the west end, still on its feet but leaning on the
@@ -3258,6 +3463,7 @@
     this._place(K.hoarding(N, R), wx2, wy2, wz2, -2.35);
     this._collider(wx2, wy2, wz2, [1.30, 0.80, 0.90], -2.35, 'metal');
     this._occupy(wx2, wz2, 1.7);
+    this._contact(wx2, wz2, 1.35, wy2, 1.15);
 
     // 3. THE HANGING PANEL, just west of the collapse edge, at chest height on
     //    two surviving hangers. hero1's mid-ground gets a real sightline break
@@ -3274,7 +3480,8 @@
     // and what fell out of the void it left
     for (i = 0; i < 5; i++) {
       this._drop(this.B.chunk, px2 + R.gaussian(0, 0.9), pz2 + R.gaussian(0, 0.7),
-        { r: 0.22, scale: R.range(0.6, 1.2), noClear: true });
+        { r: 0.22, scale: R.range(0.6, 1.2), noClear: true, color: debrisTint(R),
+          contactDeep: 1.1 });
     }
     this._stain(1, px2, this._ground(px2, pz2) + 0.006, pz2, 2.4, 2.0, 0, 1, 0, 0.4);
 
@@ -3285,6 +3492,7 @@
     this._place(K.trolley(), tx2, ty2, tz2, 1.28);
     this._collider(tx2, ty2, tz2, [0.62, 0.48, 0.42], 1.28, 'metal');
     this._occupy(tx2, tz2, 1.1);
+    this._contact(tx2, tz2, 0.9, ty2, 1.05);
     this._drop(this.B.reel, tx2 - 0.35, tz2 + 0.20, { r: 0.62, y: ty2 + 0.32,
       yaw: 1.28, tilt: 0.02, noClear: true, halo: false });
     this._drop(this.B.bucket, tx2 + 1.05, tz2 - 0.55, { r: 0.26, tilt: 0.18, yaw: 0.9 });
@@ -3298,6 +3506,7 @@
     this._place(K.seatStack(N, R), sx2, sy2, sz2, 1.62);
     this._collider(sx2, sy2, sz2, [0.55, 0.52, 1.15], 1.62, 'wood');
     this._occupy(sx2, sz2, 1.6);
+    this._contact(sx2, sz2, 1.25, sy2, 1.2);
     this._drop(this.B.crate, sx2 - 0.30, sz2 + 1.55, { r: 0.5, yaw: 1.5, tilt: 0.03,
       collider: [0.40, 0.26, 0.30], material: 'wood' });
     this._drift(sx2 + 0.7, sz2 - 1.3, 5, 0.9);
@@ -3359,6 +3568,7 @@
     this._place(K.kiosk(this.noise, R), kx, ky, kz, Math.PI);
     this._collider(kx, ky, kz, [1.28, 1.20, 0.80], 0, 'metal');
     this._occupy(kx, kz, 1.8);
+    this._contact(kx, kz, 1.55, ky, 1.2);
     // it is papered over, and there is a crate of unsold stock still outside
     for (i = 0; i < 3; i++) {
       this._poster('poster', R.int(0, 3), kx - 1.25, ky + 1.05 + i * 0.62, kz + R.range(-0.5, 0.5),
@@ -3551,6 +3761,7 @@
     var ty = Math.max(this._ground(tx, tz), this.waterY - 0.10);
     this._place(K.trolley(), tx, ty, tz, 0.10, 1, 0.06);
     this._occupy(tx, tz, 1.2);
+    this._contact(tx, tz, 1.05, ty, 1.05);
     this._drop(this.B.drum, tx - 0.25, tz + 0.05, { y: ty + 0.32, r: 0.30, noClear: true, halo: false, tilt: 0.06 });
     this._drop(this.B.pipe, tx + 0.35, tz - 0.10, { y: ty + 0.33, r: 0.30, noClear: true, halo: false, yaw: 0.08, tilt: 0.02 });
     this._scum(tx, tz, 1.6);
@@ -3891,13 +4102,13 @@
       // the floor of the aisle is the only prop in here that gets a key.
       var sw = W2(2.9, -0.55);
       this._drop(this.B.suitcase, sw[0], sw[1], { y: fy, r: 0.35, yaw: yaw + 0.6, tilt: 0.10,
-        noClear: true, halo: false });
+        noClear: true, halo: false, contact: true });
       var sw2 = W2(-1.8, 0.42);
       this._drop(this.B.suitcase, sw2[0], sw2[1], { y: fy, r: 0.32, yaw: yaw - 1.1, tilt: 0.42,
-        noClear: true, halo: false });
+        noClear: true, halo: false, contact: true });
       var cw = W2(0.6, -0.62);
       this._drop(this.B.crate, cw[0], cw[1], { y: fy, r: 0.4, yaw: yaw + 0.9, tilt: 0.05,
-        noClear: true, halo: false });
+        noClear: true, halo: false, contact: true });
       // One object in the NEAR field of the saloon.  The car is a 2.7 m tube
       // with black walls and its only light points down the aisle at the floor,
       // so the floor of the aisle is the only place a prop can be seen at all -
@@ -3920,27 +4131,27 @@
         noClear: true, halo: false, collider: [0.40, 0.26, 0.30], material: 'wood' });
       var nw2 = W2(-2.30, -0.90);
       this._drop(this.B.duffel, nw2[0], nw2[1], { y: fy, r: 0.30, yaw: yaw + 2.2, tilt: 0.05,
-        noClear: true, halo: false });
+        noClear: true, halo: false, contact: true });
       var nw3 = W2(-1.55, 0.30);
       this._drop(this.B.panel, nw3[0], nw3[1], { y: fy, r: 0.36, yaw: yaw + 0.7, tilt: 0.14,
-        scale: 0.75, noClear: true, halo: false });
+        scale: 0.75, noClear: true, halo: false, contact: true });
       var nw4 = W2(-0.55, -0.62);
       this._drop(this.B.plank, nw4[0], nw4[1], { y: fy, r: 0.34, yaw: yaw + 1.35, tilt: 0.02,
-        noClear: true, halo: false });
+        noClear: true, halo: false, contact: true });
       this._drift(nw[0] + 0.35, nw[1] - 0.10, 5, 0.35, fy);
       this._drift(nw3[0], nw3[1] + 0.2, 4, 0.4, fy);
       var pw2 = W2(-0.4, 0.30);
       this._drop(this.B.plank, pw2[0], pw2[1], { y: fy, r: 0.35, yaw: yaw + 0.25, tilt: 0.02,
-        noClear: true, halo: false });
+        noClear: true, halo: false, contact: true });
       var dw = W2(-3.4, 0.62);
       this._drop(this.B.duffel, dw[0], dw[1], { y: fy, r: 0.30, yaw: yaw - 0.9, tilt: 0.08,
-        noClear: true, halo: false });
+        noClear: true, halo: false, contact: true });
       var kw = W2(6.2, 0.30);
       this._drop(this.B.panel, kw[0], kw[1], { y: fy, r: 0.4, yaw: yaw + 1.2, tilt: 0.22,
-        scale: 0.8, noClear: true, halo: false });
+        scale: 0.8, noClear: true, halo: false, contact: true });
       var kw2 = W2(-5.4, -0.35);
       this._drop(this.B.panel, kw2[0], kw2[1], { y: fy, r: 0.4, yaw: yaw - 0.7, tilt: 0.26,
-        scale: 0.72, noClear: true, halo: false });
+        scale: 0.72, noClear: true, halo: false, contact: true });
       // The extinguisher by the gangway door, and the bucket somebody bailed
       // with: the two objects that say people were still working in here after
       // it flooded.
@@ -3948,7 +4159,7 @@
       this._place(K.extinguisher(), ew[0], fy, ew[1], yaw + Math.PI * 0.5);
       var bw2 = W2(7.4, -0.80);
       this._drop(this.B.bucket, bw2[0], bw2[1], { y: fy, r: 0.26, yaw: yaw + 1.9,
-        tilt: 0.35, noClear: true, halo: false });
+        tilt: 0.35, noClear: true, halo: false, contact: true });
     }
   };
 

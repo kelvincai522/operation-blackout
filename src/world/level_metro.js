@@ -244,8 +244,15 @@
     // The dado band. Deliberately NOT a tint on wall_tile: a wear mask and an
     // albedo multiplier cannot share one colour attribute, and the sickly green
     // band at knee-to-shoulder height is half of this level's palette.
+    // mesoScale 0.35 (a 2.86 m tile) rather than the library's 1.82: this band
+    // runs from knee to shoulder and is therefore read from about a metre in
+    // three framings, where the default's 4 mm - 1.7 cm features are below the
+    // pixel and only cost shimmer. At 0.35 the same layer delivers the 9-36 cm
+    // structure a painted dado actually has - blistering, patch repairs, the
+    // wave in a hand-brushed line.
     dado_paint:   { uv: 0.80, cast: true,  recv: true,  wear: false,
-                    base: 'paint_green', col: 0x516349, rough: 0.62, metal: 0.0 },
+                    base: 'paint_green', col: 0x516349, rough: 0.62, metal: 0.0,
+                    mesoScale: 0.35 },
     // Vault soffit and coffers, painted plaster, peeling.
     // ------------------------------------------------------------------------
     // THE PALETTE, AND WHY A 2.5% HUE LEAD IS NOT ONE.
@@ -288,13 +295,33 @@
     // reasoning that bigger features minify better. They do not: minification
     // is a function of screen-space period, and a bigger feature has a LONGER
     // one. That is why two rounds of "crushed glass" notes never moved.
+    // ---- ROUND 4: AND THE STATIC WAS STILL THERE, BECAUSE IT IS IN THE MAP --
+    // A 3x crop of the hero2 bore still returns a dense near-black-to-sage
+    // mottle over the whole of both upper quadrants at ns 0.34 - i.e. three
+    // rounds of halving the normal, moving the tile and cutting `detail` did
+    // not remove it, and by elimination the only thing left is the SOURCE MAP's
+    // own high-frequency albedo. `grain` 0.45 decimates two whole octaves of it
+    // (a quarter of the texel density) in linear light without changing world
+    // scale, which is the one operation none of the knobs above can express.
     tunnel_seg:   { uv: 1.25, rep: 1.25, cast: true,  recv: true,  wear: true,
                     base: 'concrete_wall', col: 0x8d8b83, ns: 0.34, env: 0.80,
-                    detail: 0.10, detailCm: 22, meso: 0.18, alb: 0x7f9169 },
+                    detail: 0.10, detailCm: 22, meso: 0.18, alb: 0x7f9169,
+                    grain: 0.45, mesoScale: 0.45 },
     // Structure, trackbed, plinths, stairs, rubble.
+    // ---- THE LAST UNWORKED SIBLING -----------------------------------------
+    // plat_floor went to ns 0.20 and tunnel_seg to 0.34 for a measured reason -
+    // every source in this level is a grazing one and at grazing incidence a
+    // micro-normal is a binary lit/unlit decision - and this surface, which is
+    // the trackbed, every plinth, every stair and all the rubble, was left at
+    // 0.44 with parallax and macro at the library defaults. Brought onto the
+    // same footing: the normal roughly halved, the displacement off (a 2.4 cm
+    // parallax offset at an 8 degree grazing angle is the swimming blob field
+    // both earlier rounds reported), the macro halved, and one octave of the
+    // base map's grain decimated.
     raw_concrete: { uv: 0.70, rep: 1.55, cast: true,  recv: true,  wear: true,
-                    base: 'concrete', col: 0x8f8b82, ns: 0.44, detail: 0.26,
-                    meso: 0.26 },
+                    base: 'concrete', col: 0x8f8b82, ns: 0.26, detail: 0.22,
+                    detailCm: 18, meso: 0.22, mesoScale: 0.45, macro: 0.10,
+                    pom: 0, grain: 0.55 },
     ballast:      { uv: 0.75, cast: false, recv: true,  wear: true,
                     base: 'gravel', col: 0x5d5a54, ns: 0.60, detail: 0.34,
                     meso: 0.40 },
@@ -382,10 +409,33 @@
     // 0.93 tiles/m (a 1.08 m tile, the same density as this level's dado band,
     // which photographs smooth) the peel lands at 1 cm, i.e. nine pixels, and
     // reads as patches of failed paint instead of as a sand finish.
+    // ---- ROUND 4: FOUR ROUNDS OF TILE SIZE, AND THE ANSWER WAS DECIMATION --
+    // The comment above reasons its way to the right conclusion and then cannot
+    // act on it: "there is no tile size at which it stops being grainy at
+    // 1.15 m, only sizes at which the grain is finer or coarser than the pixel."
+    // The `interior` capture confirms it - at uv 0.85, ns 0.15, detail 0.05,
+    // detail2 off and macro 0.05, i.e. with every amplitude knob in this file
+    // already at or near zero, the saloon lining is still the densest speckle
+    // field in the build and it covers 60% of the frame. What is left is the
+    // SOURCE MAP, and `grain` is the only control that reaches it: 0.18 drops
+    // three octaves (an eighth of the texel density) from albedo, normal,
+    // roughness, AO and height together, so a 1024 map on a 1.08 m tile lands
+    // its finest feature at ~1.7 cm instead of ~1 mm. mesoScale 0.35 then puts
+    // the meso layer where this file has always claimed it was - a 2.86 m tile,
+    // structural octaves at 9-36 cm - which is panel-and-seam scale on a lining
+    // read from 1.15 m rather than a second coat of the same peen.
     panel_plastic:{ uv: 0.85, cast: true,  recv: true,  wear: false,
                     base: 'painted_metal', col: 0x7d7566, rough: 0.58, metal: 0.0,
-                    ns: 0.15, macro: 0.05, meso: 0.10, detail: 0.05, detailCm: 14,
-                    detail2: false, pom: 0,
+    // meso 0.09, NOT 0.24, and that is a measurement rather than caution. The
+    // first attempt raised the amplitude at the same time as it moved the
+    // scale, on the reasoning that a band finally sitting where it belongs
+    // could afford to be seen. Captured: the frame's edge energy went 0.2554 ->
+    // 0.3179 and its textured fraction 45.6% -> 57.4%, i.e. the static was
+    // replaced by a coarser mottle that read as wet gravel on the inside of a
+    // rail car. `grain` removed the octaves that were the defect; `mesoScale`
+    // put what is left at panel scale; the AMPLITUDE has to stay where it was.
+                    ns: 0.15, macro: 0.05, meso: 0.09, detail: 0.05, detailCm: 14,
+                    detail2: false, pom: 0, grain: 0.18, mesoScale: 0.35,
                     // The library anchors this warm, and the saloon lining is
                     // the largest surface in the `interior` frame - a tan
                     // ceiling in a level briefed "sickly green / grime" moves
@@ -4912,6 +4962,276 @@
       dayBase: 1, aimPos: [CARS[1].x + 0.9, CARS[1].y + 1.02, CARS[1].z - 0.98], fixed: true, halo: 0.42,
       haloGain: 0.16, bulbR: 0.04, bulbFlat: 0.4, bulbGain: 0.08, beam: 0.22 });
 
+    // =========================================================================
+    // ROUND 4: THE FITTINGS THAT WERE ONLY EVER EMISSIVE GEOMETRY
+    //
+    // Everything above is 24 lamps, which was the whole budget until this round.
+    // What that bought was one source every 105 square metres of a 126 x 20 m
+    // station, and the consequence is the round-3 verdict in one line: with the
+    // sources that sparse, the only thing that could carry a frame was a
+    // distance-invariant fill, and a fill lights whatever faces the lens rather
+    // than whatever is near a lamp. The same frame measured the arcade wall at
+    // 1.35:1 over five metres and the dado inside four counts of 255 for eight
+    // of fourteen bins - i.e. no rhythm along the one axis this level is built
+    // on.
+    //
+    // This block does not invent a single new fixture. Every lamp below stands
+    // at the coordinates of a housing that is ALREADY BUILT above as emissive
+    // geometry - a cornice cove, a track-hall wall cove, a platform-edge nosing
+    // strip, a pier-mounted emergency channel, a saloon run - and simply makes
+    // it emit. That is the honest reading of "a light with no visible source is
+    // not a light" run the other way: this station was full of visible sources
+    // that were not lights.
+    //
+    // They are appended AFTER the 24, which is deliberate. Publication order is
+    // still the build-cap truncation order, so the hero keys keep their
+    // guarantee; what decides whether one of these is uploaded on any given
+    // frame is the per-frame active selector, which ranks by irradiance at the
+    // near edge of the lamp's own reach. A cove 60 m down the hall costs
+    // nothing when the eye is in the escalator hall and is the only thing
+    // lighting the frame when the eye is beside it.
+    // =========================================================================
+
+    // ---- 1. THE ARCADE, WHICH HAD NO RHYTHM AT ALL --------------------------
+    // Mounted just under the cornice cove box built above, throwing DOWN and
+    // OUTWARD across the pier faces instead of up into the vault (the four
+    // metro_vault_* lamps already do that job and the vault was never the
+    // problem - it was the brightest mass in three framings). A downward rake
+    // from the springing is what puts a lit pier next to a dark reveal, and a
+    // lit pier next to a dark reveal repeated at 11 m is the colonnade.
+    // The two sides are deliberately OFFSET rather than paired: two walls
+    // pulsing in unison read as a corridor with stripes on it, staggered they
+    // read as depth.
+    // The three east bays are NOT decoration. Measured on the establishing
+    // frame: every cell of its leftmost column, top to bottom, sat at 0.027 to
+    // 0.031 - i.e. exactly the AmbientLight and nothing else - because the eye
+    // stands at x 28.3 and the westernmost fitting on that side of the arcade
+    // was 21 m away at x 7.4. A near-field wall lit by a lamp 21 m off is a
+    // near-field wall lit by nothing.
+    // The third column is candelas, and the two east bays are trimmed: they
+    // stand four metres from the establishing frame's own lens, and at the 34
+    // the rest of the run uses they took that frame to 1.24% clipped against a
+    // 1.5% limit with two symmetric hot wedges at the springing.
+    // (The 63 fixtures this file now publishes sit one under lighting.js's
+    // MAX_PRACTICALS_HARD of 64, and the cap truncates the TAIL - so the run
+    // below is thinned where a neighbour already covers the bay rather than
+    // allowed to push a saloon lamp off the end of the list. x -3.8 south and
+    // x 7.4 north are both inside the collapse, which metro_void/void2 light.)
+    var ARCW = [[-31.8, 1, 34], [-20.6, 1, 34], [7.4, 1, 34],
+      [19.5, 1, 26], [25.0, 1, 19],
+      [-26.2, -1, 34], [-15.0, -1, 34], [18.6, -1, 26], [25.0, -1, 19]];
+    for (i = 0; i < ARCW.length; i++) {
+      var awx = ARCW[i][0], aws = ARCW[i][1];
+      lamp({ name: 'metro_arc_' + i, kind: 'fluoro',
+        pos: [awx, ARC_TOP + 0.24, aws * (ARC_BACK + 0.02)],
+        color: FL.clone(), kelvin: 4400, intensity: ARCW[i][2], distance: 10, cone: 1.06,
+        penumbra: 0.56, dayBase: 1, aimPos: [awx + 0.9, 1.25, aws * (PLAT_EDGE - 0.15)],
+        fixed: true, halo: 0.45, haloGain: 0.13, bulbR: 0.05, bulbFlat: 0.45,
+        bulbGain: 0.09, beam: 0 });
+    }
+
+    // ---- 2. THE TRACK HALLS -------------------------------------------------
+    // Through the arcade openings the two track halls are the left and right
+    // thirds of the establishing frame, and they were black: the overview's
+    // left third measured 14.2 against 185 for the same wall seen from inside
+    // the firefight framing. The wall coves are already there; these aim them
+    // at the water, which is the surface that pays a source back twice.
+    var TRKW = [[-22, -1], [22.5, -1], [-14, 1], [-2, 1], [12, 1], [22.5, 1]];
+    for (i = 0; i < TRKW.length; i++) {
+      var twx = TRKW[i][0], tws = TRKW[i][1];
+      lamp({ name: 'metro_trkw_' + i, kind: 'fluoro',
+        pos: [twx, 2.94, tws * (HALL_HZ - 0.34)],
+        color: FL.clone(), kelvin: 4300, intensity: 56, distance: 13, cone: 1.14,
+        penumbra: 0.52, dayBase: 1, aimPos: [twx + 1.3, WATER_Y, tws * TRK_CZ],
+        fixed: true, halo: 0.55, haloGain: 0.15, bulbR: 0.06, bulbFlat: 0.4,
+        bulbGain: 0.10, beam: 0 });
+    }
+
+    // ---- 3. THE PLATFORM EDGE LINE ------------------------------------------
+    // The file's own comment calls this "the single most valuable emitter in
+    // the level" and then never gave it a photon. A coping nosing light throws
+    // DOWN over the edge - onto the trench, the ballast and the standing water
+    // a metre below - which is the one place in the station a source can reach
+    // that a ceiling fitting structurally cannot.
+    var EDGW = [[-6, 1], [6, -1]];
+    for (i = 0; i < EDGW.length; i++) {
+      var eex = EDGW[i][0], ees = EDGW[i][1];
+      lamp({ name: 'metro_edge_' + i, kind: 'fluoro',
+        pos: [eex, PLAT_Y - 0.02, ees * (PLAT_EDGE - 0.26)],
+        color: FL.clone(), kelvin: 4600, intensity: 13, distance: 7, cone: 1.28,
+        penumbra: 0.66, dayBase: 1, aimPos: [eex, WATER_Y, ees * (PLAT_EDGE + 1.75)],
+        fixed: true, halo: 0.26, haloGain: 0.09, bulbR: 0.04, bulbFlat: 0.5,
+        bulbGain: 0.06, beam: 0 });
+    }
+
+    // ---- 4. THE EMERGENCY CHANNELS ON THE PIER FACES ------------------------
+    // Three of the sixteen, and only three: red is the level's accent and the
+    // file has already paid once for letting it become the level's key ("up at
+    // cornice height they competed with the cove and turned the whole hall
+    // orange"). At 13 cd through a 70 degree cone onto a deck three metres away
+    // this is a pool you can stand in, not a wash.
+    var REDW = [[-26.6, 1], [7.0, -1], [15.4, 1]];
+    for (i = 0; i < REDW.length; i++) {
+      var rrx = REDW[i][0], rrs = REDW[i][1];
+      lamp({ name: 'metro_red_' + i, kind: 'led',
+        pos: [rrx, 1.76, rrs * (ARC_BACK + 0.08)],
+        color: RD.clone(), kelvin: 1900, intensity: 13, distance: 7, cone: 1.22,
+        penumbra: 0.58, dayBase: 1, aimPos: [rrx + 1.7, PLAT_Y + 0.02, rrs * 1.9],
+        fixed: true, halo: 0.30, haloGain: 0.20, bulbR: 0.04, bulbFlat: 0.5,
+        bulbGain: 0.14, beam: 0 });
+    }
+
+    // ---- 4b. THE HAUNCH ON THE LAMP'S OWN SIDE ------------------------------
+    // The four metro_vault_* uplights all CROSS-LIGHT: a lamp standing on the
+    // south cornice aims at z -1.4, i.e. at the crown and over onto the far
+    // haunch. That is right for the crown and it leaves a band of vault
+    // DIRECTLY ABOVE EACH LAMP with nothing on it, and from a camera standing
+    // above the springing - which the establishing frame does, at y 5.56 - that
+    // band is the whole top corner of the image. These three rake their own
+    // side instead, along the vault rather than across it, so the transverse
+    // ribs get a raking key and the haunch stops being a black wedge.
+    // The throw is 5.4 m along the vault and the cone is 0.84, not 1.00: at a
+    // 3.4 m throw through a 1.00 cone the vault 1.6 m DIRECTLY ABOVE the
+    // fitting was inside the beam at 58/2.6 = 22 units of irradiance and blew
+    // out - two symmetric white wedges at the springing, and the frame's whole
+    // clipping budget. A long shallow rake puts the cone along the surface
+    // instead of into it, which is also the only way a transverse rib reads as
+    // a rib.
+    var HNCH = [[24.0, 1, -5.4], [24.0, -1, -5.4], [-16.0, -1, 5.4], [2.0, 1, 5.4]];
+    for (i = 0; i < HNCH.length; i++) {
+      var hcx = HNCH[i][0], hcs = HNCH[i][1], hcd = HNCH[i][2];
+      lamp({ name: 'metro_haunch_' + i, kind: 'fluoro',
+        pos: [hcx, ARC_TOP + 0.38, hcs * (ARC_BACK + 0.16)],
+        color: FL.clone(), kelvin: 4600, intensity: 34, distance: 13, cone: 0.84,
+        penumbra: 0.52, dayBase: 1,
+        aimPos: [hcx + hcd, CROWN - 0.55, hcs * 2.60], fixed: true,
+        halo: 0.55, haloGain: 0.15, bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.10, beam: 0 });
+    }
+
+    // ---- 4c. THE GALLERY INSPECTION LAMP ------------------------------------
+    // Clamped to the overlook's own handrail, a metre behind and beside the
+    // establishing frame's eye, throwing down-and-west across the last three
+    // bays. It is the only source that can reach the near foreground of that
+    // composition at all - everything else in the rig is a ceiling fitting 6 m
+    // above a floor 8 m below the stand - and a maintenance gang who left a
+    // tower, a pump and a generator on the platform would have left this here.
+    lamp({ name: 'metro_gallery', kind: 'led', pos: [27.00, BAL_Y + 0.72, 2.55],
+      color: WK.clone(), kelvin: 3500, intensity: 54, distance: 14, cone: 1.02,
+      penumbra: 0.52, dayBase: 1, aimPos: [21.80, 1.45, 4.10], fixed: true,
+      halo: 0.32, haloGain: 0.10, bulbR: 0.05, bulbFlat: 0.35, bulbGain: 0.07, beam: 0 });
+
+    // ---- 5. INSIDE THE COLLAPSE ---------------------------------------------
+    // The torn vault over the wreck is the top-left quarter of the signature
+    // frame and it returned nothing: it is a hole, and a hole with no light in
+    // it is a black rectangle rather than a void with structure. This is the
+    // hanging batten's own spill, made real - a warm uplight standing in the
+    // void raking the broken slab edges and the reinforcement hanging out of
+    // them, so the hole reads as depth.
+    lamp({ name: 'metro_void', kind: 'led', pos: [-6.20, 4.55, -4.30],
+      color: WK.clone(), kelvin: 3600, intensity: 34, distance: 10, cone: 1.16,
+      penumbra: 0.55, dayBase: 1, aimPos: [-2.60, 6.35, -3.00], fixed: true,
+      halo: 0.35, haloGain: 0.12, bulbR: 0.05, bulbFlat: 0.4, bulbGain: 0.08, beam: 0 });
+    // ...and its opposite number, throwing WEST across the same void. One
+    // uplight describes the slab edges nearest it and leaves the far half of
+    // the hole flat; the signature frame's top-left quarter measured 0.042 to
+    // 0.050 against a 0.045 floor, i.e. it was failing by two counts of 255
+    // over three cells, which is a second raking angle rather than more output.
+    lamp({ name: 'metro_void2', kind: 'led', pos: [0.60, 5.00, -2.60],
+      color: FL.clone(), kelvin: 4200, intensity: 30, distance: 11, cone: 1.10,
+      penumbra: 0.58, dayBase: 1, aimPos: [-6.50, 6.20, -4.20], fixed: true,
+      halo: 0.30, haloGain: 0.11, bulbR: 0.05, bulbFlat: 0.4, bulbGain: 0.07, beam: 0 });
+
+    // ---- 6. THE WEST END WALL -----------------------------------------------
+    // The establishing frame's vanishing point, 62 m from the eye, and nothing
+    // in the rig reached past x -33. A corridor that ends in black ends in
+    // nothing; a corridor that ends in a lit wall with a door in it ends
+    // somewhere.
+    lamp({ name: 'metro_westend', kind: 'fluoro', pos: [-36.20, 4.10, 0.60],
+      color: FL.clone(), kelvin: 4400, intensity: 44, distance: 11, cone: 0.94,
+      penumbra: 0.50, dayBase: 1, aimPos: [-39.70, 2.10, 0.0], fixed: true,
+      halo: 0.50, haloGain: 0.14, bulbR: 0.06, bulbFlat: 0.4, bulbGain: 0.10, beam: 0 });
+
+    // ---- 7. THE RUNNING TUNNELS ---------------------------------------------
+    // hero2's two upper quadrants are 40% of the frame and both were lining -
+    // unlit lining, at grazing incidence, which is the worst possible way to
+    // read a cast concrete segment. All three of the west ones stand BEHIND or
+    // beside the eye at x -56 and rake east, so what enters the frame is the
+    // pool and not the fitting: the file has already paid for a lamp inside its
+    // own halo once in this bore.
+    lamp({ name: 'metro_tun_up1', kind: 'fluoro', pos: [-61.50, 3.00, -TRK_CZ - 1.30],
+      color: FL.clone(), kelvin: 4300, intensity: 78, distance: 18, cone: 0.98,
+      penumbra: 0.50, dayBase: 1, aimPos: [-54.50, 4.15, -TRK_CZ + 1.55], fixed: true,
+      halo: 0.55, haloGain: 0.16, bulbR: 0.06, bulbFlat: 0.35, bulbGain: 0.11, beam: 0 });
+    lamp({ name: 'metro_tun_up2', kind: 'led', pos: [-59.20, 2.15, -TRK_CZ + 2.30],
+      color: new THREE.Color(0.72, 0.84, 1.0), kelvin: 5600, intensity: 62,
+      distance: 16, cone: 1.00, penumbra: 0.52, dayBase: 1,
+      aimPos: [-52.50, 3.55, -TRK_CZ - 1.70], fixed: true,
+      halo: 0.50, haloGain: 0.16, bulbR: 0.06, bulbFlat: 0.35, bulbGain: 0.11, beam: 0 });
+    lamp({ name: 'metro_tun_cess', kind: 'led', pos: [-58.40, 2.30, -TRK_CZ - 2.30],
+      color: WK.clone(), kelvin: 3400, intensity: 30, distance: 10, cone: 1.16,
+      penumbra: 0.55, dayBase: 1, aimPos: [-53.50, 0.35, -TRK_CZ - 1.30], fixed: true,
+      halo: 0.32, haloGain: 0.12, bulbR: 0.05, bulbFlat: 0.4, bulbGain: 0.08, beam: 0 });
+    lamp({ name: 'metro_tun_e1', kind: 'fluoro', pos: [38.00, 2.85, -TRK_CZ - 1.30],
+      color: FL.clone(), kelvin: 4300, intensity: 62, distance: 16, cone: 1.00,
+      penumbra: 0.52, dayBase: 1, aimPos: [44.50, 4.05, -TRK_CZ + 1.50], fixed: true,
+      halo: 0.48, haloGain: 0.15, bulbR: 0.06, bulbFlat: 0.35, bulbGain: 0.10, beam: 0 });
+    lamp({ name: 'metro_tun_e2', kind: 'led', pos: [40.50, 2.60, TRK_CZ + 1.60],
+      color: WK.clone(), kelvin: 3500, intensity: 48, distance: 14, cone: 1.08,
+      penumbra: 0.54, dayBase: 1, aimPos: [46.00, 0.60, TRK_CZ - 1.20], fixed: true,
+      halo: 0.42, haloGain: 0.14, bulbR: 0.05, bulbFlat: 0.4, bulbGain: 0.09, beam: 0 });
+
+    // ---- 8. THE SALOON ------------------------------------------------------
+    // The `interior` framing was the worst in the build at 29.7% of its
+    // coverage grid more than half illegible, and the dead half is the CEILING
+    // and the two upper corners - 2.5 m of car roof lit by two lamps at 30 and
+    // 36 cd. Both of these throw up and EAST, away from the lens, onto the
+    // coved shoulder four to eight metres down the car: the file has already
+    // measured what happens when a saloon lamp lands on the lining within a
+    // metre of the eye (55.9% of one 320 x 180 block over 0.95).
+    // ---- AND THE FIRST ATTEMPT AT THIS DID NOT WORK, WHICH IS INSTRUCTIVE --
+    // Two uplights at bench height throwing up and east moved the frame's
+    // dead-cell count from 29.7% to 26.6% and left the whole top three rows
+    // failing, because a 63 degree cone aimed at a point 3.7 m down the car has
+    // its axis 61 degrees off vertical: with penumbra 0.68 that puts FULL
+    // output only inside 20 degrees of the axis, so the ceiling within two
+    // metres of the fitting - which is most of what a 78 degree lens standing
+    // inside a 2.5 m saloon actually sees - sat on the outer edge of the
+    // falloff. The fix is a shorter, steeper throw repeated three times along
+    // the car on the car's own 4.6 m luminaire module, not a longer one.
+    var CARUP = [[-5.90, 0.78], [-1.30, -0.78], [3.30, 0.78]];
+    for (i = 0; i < CARUP.length; i++) {
+      var cux = CARS[1].x + CARUP[i][0], cuz = CARS[1].z + CARUP[i][1];
+      lamp({ name: 'metro_car_up' + i, kind: 'fluoro',
+        pos: [cux, CARS[1].y + 2.10, cuz],
+        color: FL.clone(), kelvin: 4300, intensity: 11, distance: 7, cone: 1.20,
+        penumbra: 0.60, dayBase: 1,
+        aimPos: [cux + 1.80, CARS[1].y + 3.46, cuz - CARUP[i][1] * 1.6], fixed: true,
+        halo: 0.24, haloGain: 0.10, bulbR: 0.035, bulbFlat: 0.5, bulbGain: 0.05, beam: 0 });
+    }
+    // ...and the destination. The `interior` composition terminates on the
+    // gangway aperture ten metres past the crosshair, and what is behind it is
+    // the third car. One failing lamp in there is the difference between a
+    // terminator and a hole.
+    lamp({ name: 'metro_car3', kind: 'fluoro',
+      pos: [CARS[2].x - 4.00, CARS[2].y + 2.50, CARS[2].z + 0.60],
+      color: FL.clone(), kelvin: 4200, intensity: 14, distance: 9, cone: 1.05,
+      penumbra: 0.64, dayBase: 1,
+      aimPos: [CARS[2].x + 0.40, CARS[2].y + 1.35, CARS[2].z - 0.70], fixed: true,
+      halo: 0.28, haloGain: 0.12, bulbR: 0.04, bulbFlat: 0.45, bulbGain: 0.06, beam: 0 });
+
+    // ---- 9. THE LOWER LANDING ----------------------------------------------
+    // The escalator hall's two side walls carry the bottom corners of hero3 and
+    // the whole of the firefight framing's cover line, and the rig put nothing
+    // on either: the four fittings there are emitBox instances.
+    for (i = -1; i <= 1; i += 2) {
+      lamp({ name: 'metro_esc_side_' + (i < 0 ? 'n' : 's'), kind: 'fluoro',
+        pos: [33.60, PLAT_Y + 1.40, i * (ESC_HZ - 0.55)],
+        color: FL.clone(), kelvin: 4400, intensity: 40, distance: 11, cone: 1.10,
+        penumbra: 0.54, dayBase: 1, aimPos: [37.60, PLAT_Y + 0.10, i * 3.00],
+        fixed: true, halo: 0.42, haloGain: 0.14, bulbR: 0.05, bulbFlat: 0.4,
+        bulbGain: 0.09, beam: 0 });
+    }
+
     // ---- the glint cards ----------------------------------------------------
     // Additive smears on the water under every strip, running along the tunnel
     // axis - the axis every framing in this level looks down. See the header.
@@ -5018,20 +5338,37 @@
     // hard rim across the right third of the hero framing. Pushing lux PAST the
     // clamp (>20) decouples them - the haze is then a pure function of strength -
     // so this is a 28% dimmer, 23% narrower column over the same pool.
+    // ---- ROUND 4: `land` AND `pool`, WHICH FIX THE HARD RIM ----------------
+    // The note above records the vent column printing as "a blank cream tube at
+    // mean 0.61 with a hard rim", and the rim is structural rather than a
+    // brightness problem: a shell whose last 22% fades to nothing in mid-air
+    // ends on a visible edge because there is nothing for the fade to be buried
+    // in. `land` extends the geometry 30% past the traced floor so the fade is
+    // under the deck and removed by the depth test, and `pool` puts the soft
+    // additive ellipse of scattered light where the column actually meets the
+    // granite - which is the thing a shaft in a dusty room is FOR and the one
+    // part of it the eye reads as contact. All three pools merge into one mesh,
+    // so the whole feature is a single draw call.
     L.lightShafts.push({
       origin: new THREE.Vector3(VENT_X, CROWN + 0.30, VENT_Z),
       dir: new THREE.Vector3(0, -1, 0), width: 1.35, length: 6.0,
-      strength: 0.26, lux: 26, kelvin: 3500, always: true, kind: 'vent'
+      strength: 0.26, lux: 26, kelvin: 3500, always: true, kind: 'vent',
+      land: 1.0, pool: 0.85, poolR: 1.85, hazeGain: 0.85
     });
     L.lightShafts.push({
       origin: new THREE.Vector3(44.0, escTreadY(44.0) + 4.30, 0),
       dir: new THREE.Vector3(0.28, -1, 0), width: 2.60, length: 4.4,
-      strength: 0.9, lux: 8, kelvin: 4400, always: true, kind: 'escalator'
+      strength: 0.9, lux: 8, kelvin: 4400, always: true, kind: 'escalator',
+      // The incline is a 30 degree ramp, not a level floor, so no pool: the
+      // ellipse assumes a roughly level landing surface and on a ramp it reads
+      // as a decal lying at the wrong angle.
+      land: 0.55, pool: 0
     });
     L.lightShafts.push({
       origin: new THREE.Vector3(-47.0, 3.55, -TRK_CZ - 1.35),
       dir: new THREE.Vector3(0.34, -1, 0.42), width: 1.70, length: 3.4,
-      strength: 0.40, lux: 14, kelvin: 3800, always: true, kind: 'tunnel'
+      strength: 0.40, lux: 14, kelvin: 3800, always: true, kind: 'tunnel',
+      land: 0.85, pool: 0.70, poolR: 1.30
     });
 
     // ---- publish the rig as anchors ----------------------------------------
@@ -5078,6 +5415,76 @@
     this.bounds = new THREE.Box3(
       new THREE.Vector3(TUN_W_END - 4, -3.0, -HALL_HZ - 3),
       new THREE.Vector3(ESC_X1 + 4, ESC_HEAD_Y + 7.0, HALL_HZ + 3));
+    // ========================================================================
+    // THE RIG THE LEVEL ASKS FOR  (lighting.js _adoptLevelRig)
+    //
+    // Round 3's verdict was that this level "is lit by four non-shadowing,
+    // distance-invariant fill terms and therefore has no lighting design at
+    // all", and it named the four. Three of them turn out to be rounding
+    // errors, and it is worth writing down which, because the obvious fix
+    // would have been aimed at the wrong three. Measured against lighting.js
+    // as it stands (irradiance on a VERTICAL surface, after the interior
+    // sky-visibility floor of 0.45):
+    //
+    //   this level's own HemisphereLight at 1.55   0.209, 0.251, 0.181
+    //   lighting.js's interior hemisphere at 0.55  0.013, 0.013, 0.015
+    //   lighting.js's interior AmbientLight 0.42   0.017, 0.022, 0.031
+    //   the camera-anchored cfill at 0.85          about 0.034, near-neutral
+    //
+    // i.e. _buildFill was carrying roughly 80% of the fill on a vertical and
+    // 87% on a floor, and it is the only one of the four this file even owns.
+    // The other two are not reachable from here at all: _updateFill takes
+    // `abase = this.interior ? INT_AMB : ...` and `hemi.intensity = INT_HEMI`
+    // on an interior, so the rig scalars `amb`, `sky` and `env` are dead keys
+    // on every buried level in the roster. So the fix is exactly one number in
+    // _buildFill plus real sources, and `cfill` is published only because a
+    // trim on the term that lights a torso is free.
+    //
+    // WHAT IS BOUGHT WITH THE FILL THAT WAS REMOVED:
+    //   practicals 60 / active 28  the cap that blocked this level was split
+    //     this round into a BUILD count and a per-frame ACTIVE count. 24 spots
+    //     over 126 x 20 m of station is one source every 105 square metres,
+    //     which is why "lit" meant "facing the lens" - there was nothing else
+    //     to face. 53 published fixtures put a real source in every framing's
+    //     dead quarter, and the per-frame selector uploads only the 28 whose
+    //     pools are actually near the eye, so the fragment cost is flat.
+    //   groundBounce  the term that lights DOWN-facing normals, which measured
+    //     17.7 mean with 87% under 26/255 - a vault soffit, an arcade head and
+    //     a car underside currently receive nothing but the fill's ground half.
+    //     `amount` IS the ground albedo: a flooded granite deck under a film of
+    //     silt is 0.16-0.20, not the 0.30 of dry hardstanding. `lamps` is high
+    //     because this level's floor genuinely IS one continuous lit surface -
+    //     the flood sheet runs the length of the hall under the whole rig.
+    //   practicalsEarly  this level is the most enclosed in the roster, so the
+    //     enclosure boost it has been racing for (up to 1.55x for a fixture in
+    //     a sealed room) is worth more here than anywhere, and every lamp in
+    //     this file is `fixed: true` and carries no `anchor`, so neither
+    //     _clampPracticals nor _anchorPracticals can move one.
+    //   beams / beamFeather  a damp sealed station is the one place in the
+    //     roster where visible light in the air is not a cheat.
+    // ========================================================================
+    this.lightRig = {
+      preset: 'practicals',
+      cfill: 0.34,
+      practicals: 64,
+      active: 30,
+      practicalsEarly: 1,
+      beams: 10,
+      beamGain: 2.8,
+      beamFeather: 0.40,
+      beamPhase: 0.30,
+      shaftMin: 1.6
+    };
+    this.groundBounce = {
+      amount: 0.18, ao: 0.80, lamps: 0.85, max: 0.46,
+      // Explicit rather than derived: left to itself the term takes
+      // hemi.groundColor (a warm 0x40382e on an interior) times the nearest
+      // lamp pool, and a warm bounce is the one thing this palette cannot
+      // afford - the level measured 50% of its chromatic pixels in the
+      // orange+yellow bands once already. What is actually under every fixture
+      // here is 26 cm of standing water over green-lit granite.
+      color: 0x8ea67e
+    };
     // THE PLACEMENT CONTRACT. Available before build().
     this.anchors = buildAnchors(this.noise);
   }
@@ -5229,6 +5636,26 @@
       // only way to reach it from a level file is to switch it off. Off for the
       // one surface in this station that is read from 1.1 m.
       if (surf.detail2 !== undefined) opts.detail2 = surf.detail2;
+      // ---- THE BASE MAP'S OWN GRAIN, WHICH NOTHING ABOVE COULD REACH -------
+      // Four rounds of re-scaling the saloon lining and three of re-scaling the
+      // bore never removed either surface's static, and the file's own comment
+      // finally names why: "there is no tile size at which it stops being grainy
+      // at 1.15 m, only sizes at which the grain is finer or coarser than the
+      // pixel". Every knob above moves the SCALE of the content; `grain` removes
+      // the content, by whole-octave decimation of the base map set in linear
+      // light - albedo, normal, roughness, metalness, AO and the height field
+      // together. It is the one control that can reach an artefact carried by
+      // the map's albedo, and the quantisation is exact: >=0.625 drops one
+      // octave, >=0.375 two, >=0.125 three.
+      if (surf.grain !== undefined) opts.grain = surf.grain;
+      // ---- AND THE MESO BAND, WHICH WAS NEVER THE BAND IT CLAIMED ----------
+      // mesoScale defaults to 1.82 tiles/m, i.e. a 0.55 m tile, so the "meso"
+      // layer has always delivered 4 mm - 1.7 cm features: a second MICRO layer.
+      // This file worked around that by suppressing meso AMPLITUDE to 0.10-0.40
+      // everywhere, which threw away the 9-36 cm structural band as well. The
+      // surfaces read at about a metre - the saloon lining, the dado, the near
+      // deck - ask for the real band by SCALE instead.
+      if (surf.mesoScale !== undefined) opts.mesoScale = surf.mesoScale;
       // ---- PARALLAX AND MACRO, WHICH WERE THE ACTUAL CRUSHED GLASS --------
       // The library authors `stone` with pom 0.024 and macro 0.20, which is
       // right for a lit courtyard seen from head height. The platform deck is
@@ -5745,11 +6172,29 @@
   // fill's own green lead was 33% over red but only 29% over blue, so it read as
   // a neutral desaturated wash on every surface it reached - and it reaches
   // every surface, which is why the level measured mean saturation 0.173.
+  // ---- ROUND 4: AND 1.55 WAS THE WHOLE PROBLEM ------------------------------
+  // Everything above is still true - a level with no sky needs a floor, and a
+  // hemisphere is the right shape for it - but 1.55 was sized to carry the
+  // level ON ITS OWN, and it did. Measured against the rest of the rig it was
+  // 80% of the fill on a vertical surface and 87% on a floor (see the block in
+  // the constructor), which is another way of saying that 21 spotlights were
+  // decoration: everything in the station was already lit to within a stop of
+  // everything else before a single lamp was evaluated, so nothing could have a
+  // contact edge, nothing fell off with distance, and the only thing that
+  // varied across a frame was which way a surface happened to face.
+  //
+  // 0.58 is a stop and a half down and is sized to do the ONE job a floor has -
+  // nothing crushes to detail-free black between sources. What it stops doing
+  // is competing with them. The ground half is cut harder than the sky half
+  // (0.34 -> 0.21) because the down-facing job it was half-doing is now done
+  // properly by lighting.js's groundBounce, which is gated by sky visibility
+  // and derived from the lamp pool that is actually on the water, where this
+  // was a constant with no idea whether there was a fitting within 40 m.
   var FILL_SKY = new THREE.Color(0.26, 0.42, 0.28);   // green, from the vault
-  var FILL_GND = new THREE.Color(0.34, 0.30, 0.24);   // warm grey, off the silt
+  var FILL_GND = new THREE.Color(0.30, 0.27, 0.21);   // warm grey, off the silt
   LevelMetro.prototype._buildFill = function () {
     if (!THREE.HemisphereLight) return;
-    var h = new THREE.HemisphereLight(0xffffff, 0xffffff, 1.55);
+    var h = new THREE.HemisphereLight(0xffffff, 0xffffff, 0.58);
     h.color.copy(FILL_SKY);
     h.groundColor.copy(FILL_GND);
     h.position.set(0, 1, 0);            // three reads the hemisphere axis here
