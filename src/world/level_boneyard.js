@@ -229,14 +229,14 @@
     // what a concrete apron under thirty years of blown sand actually is, and
     // it is what keeps the highlight bucket warm even where the sky does get
     // into it.
-    hardstand:  { uv: 0.35, cast: false, recv: true, wear: true,
+    hardstand:  { uv: 0.35, cast: false, recv: true, wear: true, meso: 0.35,
                   base: 'concrete', target: 0x958a6f, rough: 0.90, env: 0.80 },
     // The saw-cut/tar joint lattice and the heat craze, as an alpha overlay on
     // its own world-aligned tile. See buildCrackTexture.
     crack:      { uv: 1 / 15.24, cast: false, recv: true, wear: false, own: true, keepUV: false },
     // Tracks the slab down so a bitumen repair keeps its ~3:1 step against the
     // concrete round it rather than closing to 2:1.
-    pad_patch:  { uv: 0.35, cast: false, recv: true, wear: true,
+    pad_patch:  { uv: 0.35, cast: false, recv: true, wear: true, meso: 0.35,
                   base: 'asphalt', target: 0x4b473f, rough: 0.88 },
     // ---------------------------------------------------------------------
     // THE HANGAR FLOOR, AND WHY IT IS WORTH A DRAW CALL.
@@ -251,7 +251,7 @@
     // this floor while the top half is lit cladding. One material, one draw
     // call out of ~85 spare, and the frame the brief calls the best-composed
     // in the set gets its floor back.
-    hg_floor:   { uv: 0.35, cast: false, recv: true, wear: true,
+    hg_floor:   { uv: 0.35, cast: false, recv: true, wear: true, meso: 0.35,
                   base: 'concrete', target: 0xada592, rough: 0.82, env: 0.75 },
     // Desert pavement comes down with the slab, but only half as far. Sand at
     // noon genuinely IS brighter than aged concrete, and the warm outfield is
@@ -300,11 +300,60 @@
     // uv 1.60 every pylon, rib and duct in the yard was speckled terrazzo.
     skin_dull:  { uv: 1 / 6.0, cast: true, recv: true, wear: false, own: true,
                   target: 0x8b8a82, rough: 0.78, metal: 0.18, env: 0.85 },
+    // ---------------------------------------------------------------------
     // Sprayed vinyl cocoon over canopies, intakes and exhausts. The one pure
     // white in the level, and it is what makes the rows read as STORED rather
     // than as parked.
-    wrap:       { uv: 1.70, cast: true, recv: true, wear: false, macro: 0,
-                  base: 'canvas_awning', target: 0xc6c2b4, rough: 0.90, metal: 0.0 },
+    //
+    // NOT `canvas_awning`, AND THIS IS THE FIX FOR THE LOUDEST ARTIFACT IN THE
+    // SIGNATURE FRAME - arrived at the second time, because the first attempt
+    // was measured and failed.
+    //
+    // canvas_awning is a WOVEN def (detailKind 'woven', tex 'cloth_canvas'),
+    // and it was running at uv 1.70 against the def's own repeat 1.0, i.e. one
+    // source tile per 0.59 m. Its major weave cells are two or three to a tile,
+    // so the cocoon over Sierra Seven's flight deck printed at 25 m as a
+    // 25-30 cm basket-weave cross-hatch - a hessian sack over an aeroplane.
+    //
+    // The obvious fix - worldTile 0.16 to shrink the tile and grain 0.45 to
+    // low-pass it - was tried and CAPTURED, and it does not work, for a reason
+    // worth writing down: `grain` decimates whole OCTAVES off the top of the map,
+    // and the weave is not the map's grain, it is the map's dominant MID
+    // frequency. Two octaves of decimation left it untouched and the smaller
+    // tile merely turned a basket into a quilt. A woven map cannot be made to
+    // stop being woven.
+    //
+    // Spraylat is a SPRAYED FILM: matte, faintly mottled where it has pooled and
+    // yellowed, with no thread in it anywhere. Its structure is the SAG of the
+    // sheet under it, which is geometry (see buildWrapCap). `plaster` is the
+    // library's only smooth mineral film - stochastic, domain-warped, triplanar,
+    // so it has no uv seam over a compound-curved cocoon and no lattice to
+    // alias. worldTile 0.9 lands it at 512 texels/m (exactly the library budget)
+    // with its blotches at 20-45 cm, which on a twenty-year-old cover is the
+    // staining, and macro 0.10 keeps those from becoming camouflage.
+    //
+    // AND THE TILE IS 2.6 m, WHICH IS THE THIRD MEASUREMENT ON THIS ONE
+    // SURFACE AND THE ONLY ONE THAT IS ABOUT SCALE RATHER THAN ABOUT WHICH MAP.
+    //
+    // plaster at worldTile 0.9 (569 texels/m) was captured and came back as
+    // popcorn: at the 23 m hero1 shoots the nose cocoon from, one pixel is
+    // 1.6 cm, so a 32-texel feature in genPlaster lands at 3-4 px and the map's
+    // own aggregate prints as a dense speckle. Turning the DETAIL layer down
+    // from 0.85 to 0.20 was captured too and barely moved it - because the
+    // speckle was never the detail layer, it was the base map at a tile small
+    // enough for its mid frequencies to resolve.
+    //
+    // 2.6 m puts the same features at 16 cm (10 px, a soft mottle - which on a
+    // twenty-year-old cover IS the staining) and the map's own grain at 5 mm,
+    // which is under a third of a pixel. grain 0.35 takes two octaves off the
+    // top so nothing up there can alias at 150 m, and detail 0.12 keeps a trace
+    // of tooth without reintroducing the aggregate. The structure this surface
+    // is supposed to have is the SAG OF THE SHEET, and that is geometry.
+    wrap:       { uv: 1.70, cast: true, recv: true, wear: false, macro: 0.14,
+                  worldTile: 2.6, detail: 0.12, detailRough: 0.10,
+                  mesoAmt: 0.30, grain: 0.35,
+                  base: 'plaster', target: 0xc6c2b4, rough: 0.90, metal: 0.0,
+                  env: 0.85 },
     canopy:     { uv: 0.39, cast: false, recv: true, wear: false,
                   base: 'glass', rough: 0.22, env: 1.6 },
     tyre:       { uv: 0.61, cast: true, recv: true, wear: false,
@@ -625,6 +674,50 @@
     return g;
   }
 
+  // ---------------------------------------------------------------------------
+  // The same patch from EXPLICIT sample lines rather than a uniform step.
+  //
+  // A uniform grid cannot carry a feature narrower than its own step, and the
+  // strongest mark on 204 x 168 m of airfield concrete - the sealed saw-cut
+  // joint at the 7.62 m (25 ft) bay pitch - is fifteen centimetres wide. On the
+  // 1.5 m grid the slab used, a joint fell between vertices essentially always:
+  // jointDip() is non-zero only within 7.5 cm of the line, so the modelled dip
+  // was sampled at its peak roughly never, and the per-bay tone the vertex pass
+  // wants to carry had nowhere to put an edge. The result is what the review
+  // called it - two hundred metres of slab with no story on it.
+  //
+  // Feeding the sample lines in explicitly fixes both at once: put four samples
+  // across every joint (clean, lip, lip, clean) and the 15 cm band renders as a
+  // 15 cm band with 6 cm ramps at any distance, while the bay INTERIOR keeps a
+  // ~1.45 m step, which is finer than the 1.5 m the uniform grid had.
+  // ---------------------------------------------------------------------------
+  function gridSurfaceXZ(xs, zs, fn) {
+    var vw = xs.length, vh = zs.length;
+    var pos = new Float32Array(vw * vh * 3);
+    var i, j, k = 0;
+    for (j = 0; j < vh; j++) {
+      for (i = 0; i < vw; i++) {
+        var x = xs[i], z = zs[j];
+        pos[k] = x; pos[k + 1] = fn(x, z); pos[k + 2] = z;
+        k += 3;
+      }
+    }
+    var idx = [];
+    for (j = 0; j + 1 < vh; j++) {
+      for (i = 0; i + 1 < vw; i++) {
+        var a = j * vw + i, b = a + 1, c = a + vw, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    var out = g.toNonIndexed();
+    g.dispose();
+    return out;
+  }
+
   // A height-field patch. The hardstanding, the desert ring, the hangar floor.
   function gridSurface(x0, x1, z0, z1, step, fn) {
     var nx = Math.max(1, Math.round((x1 - x0) / step));
@@ -759,6 +852,53 @@
   // strongest thing in a noon frame of bare concrete: it is what gives a 200 m
   // sheet scale, direction and a perspective grid to run the eye along.
   var BAY_PITCH = 7.62;
+  // Where the joint lines actually are, as a phase on each axis. jointDip has
+  // always used these two constants and buildCrackTexture draws its painted
+  // joints at the world positions they imply (uJ 0.25/0.75 of a 15.24 m tile is
+  // x = 3.81 mod 7.62; vJ 0.375/0.875 is z = 5.715 mod 7.62), so the modelled
+  // joint, the painted tar line and the vertex-coloured band are one joint.
+  var JOINT_X = -3.81, JOINT_Z = -1.90;
+  // half-widths of the sealant band and of the sample straddle either side of it
+  var JOINT_HW = 0.075, JOINT_OUT = 0.135;
+
+  // Distance from (x, z) to the nearest bay joint on either axis.
+  function jointDist(x, z) {
+    var a = ((x - JOINT_X) % BAY_PITCH + BAY_PITCH) % BAY_PITCH - BAY_PITCH * 0.5;
+    var b = ((z - JOINT_Z) % BAY_PITCH + BAY_PITCH) % BAY_PITCH - BAY_PITCH * 0.5;
+    return Math.min(Math.abs(a), Math.abs(b));
+  }
+
+  // Which slab bay this is, as a pair of integers. A bay is a single pour: it
+  // has its own age, its own aggregate and its own thirty years of traffic, and
+  // a step at the joint is what an airfield apron looks like from ten metres and
+  // from a hundred. Only expressible now that the mesh has an edge to put it on.
+  function bayIndex(x, z, out) {
+    out[0] = Math.floor((x - JOINT_X) / BAY_PITCH);
+    out[1] = Math.floor((z - JOINT_Z) / BAY_PITCH);
+    return out;
+  }
+
+  // Sample lines for one axis: four across every joint, then an even interior.
+  function bayAxis(a0, a1, phase, interior) {
+    var k0 = Math.floor((a0 - phase) / BAY_PITCH) - 1;
+    var k1 = Math.ceil((a1 - phase) / BAY_PITCH) + 1;
+    var raw = [], k, i;
+    for (k = k0; k <= k1; k++) {
+      var j = phase + k * BAY_PITCH;
+      raw.push(j - JOINT_OUT, j - JOINT_HW, j + JOINT_HW, j + JOINT_OUT);
+      var span = BAY_PITCH - 2 * JOINT_OUT;
+      for (i = 1; i < interior; i++) raw.push(j + JOINT_OUT + span * i / interior);
+    }
+    raw.sort(function (p, q) { return p - q; });
+    var res = [];
+    for (i = 0; i < raw.length; i++) {
+      if (raw[i] > a0 + 1e-4 && raw[i] < a1 - 1e-4) res.push(raw[i]);
+    }
+    res.unshift(a0);
+    res.push(a1);
+    return res;
+  }
+
   function jointDip(x, z) {
     var a = ((x + 3.81) % BAY_PITCH + BAY_PITCH) % BAY_PITCH - BAY_PITCH * 0.5;
     var b = ((z + 1.9) % BAY_PITCH + BAY_PITCH) % BAY_PITCH - BAY_PITCH * 0.5;
@@ -1126,7 +1266,24 @@
     //    and the colour grade measured as absent. Twenty-year chalked alclad
     //    in the Sonoran desert is a warm grey, not a cool one.
     //  * BRIGHTER, via SKIN_GAIN at the end of this function.
-    A.fillStyle = '#b8b4ab'; A.fillRect(0, 0, S, S);
+    //
+    // #bdb5a6, and the second warm step is measured off analyze.py's own
+    // buckets rather than guessed. grade_split subtracts the SHADOW bucket's
+    // r-b from the HIGHLIGHT bucket's, and on hero1 it reads +0.0258 against
+    // +0.12 on the establishing frame. Mapping both buckets onto a 4x4 tile grid
+    // says why, and it is not something a level can paint its way out of:
+    // 54-62% OF THE DARKEST QUARTER OF hero1, hero2 AND hero3 IS THE WEAPON
+    // VIEWMODEL, a black polymer rifle rendered in a separate pass by a file
+    // this level does not own. The shadow term is therefore fixed, and the only
+    // half of the metric a boneyard can move is the highlight - which on these
+    // three framings is 27-42% sunlit airframe skin, i.e. THIS MAP.
+    //
+    // r-b goes from 13 to 23 in 8-bit sRGB, which is what twenty years of warm
+    // oxide and Sonoran dust on chalked alclad actually is, and it is still well
+    // COOLER than the hardstanding it stands on (r-b 38) so the figure/ground
+    // separation the whole value architecture is built on is untouched.
+    // Luminance moves by +0.9%, so no exposure or coverage metric can see it.
+    A.fillStyle = '#bdb5a6'; A.fillRect(0, 0, S, S);
     H.fillStyle = '#808080'; H.fillRect(0, 0, S, S);
     R.fillStyle = '#6e6e6e'; R.fillRect(0, 0, S, S);     // 0.43 base roughness
 
@@ -1140,9 +1297,10 @@
       for (i = 0; i < colF.length; i++) {
         var k = (i * 3 + j * 5 + ((rng.next() * 5) | 0)) % STEPS.length;
         var v = STEPS[k], hu = HUES[(i + j * 2) % HUES.length];
-        var cr = M.clamp(0xb8 * v + hu[0], 0, 255) | 0;
-        var cg = M.clamp(0xb4 * v + hu[1], 0, 255) | 0;
-        var cb = M.clamp(0xab * v + hu[2], 0, 255) | 0;
+        // the same three channels the base fill uses - if one moves, all move
+        var cr = M.clamp(0xbd * v + hu[0], 0, 255) | 0;
+        var cg = M.clamp(0xb5 * v + hu[1], 0, 255) | 0;
+        var cb = M.clamp(0xa6 * v + hu[2], 0, 255) | 0;
         A.fillStyle = 'rgb(' + cr + ',' + cg + ',' + cb + ')';
         A.fillRect(cols[i], rows[j], cols[i + 1] - cols[i], rows[j + 1] - rows[j]);
         // roughness follows the repaint: a resprayed panel is duller
@@ -1574,6 +1732,70 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // AND THE OTHER HALF OF THE PANEL GRID: LONGITUDINAL STRAKES.
+  //
+  // fuseLapStraps gives the barrel its circumferential joints, and after it
+  // landed the fuselage still measured as the flattest large object in the
+  // signature frame: 207 sRGB across the whole upper two thirds of a 44 m tube
+  // with a standard deviation of 11, i.e. one value. The reason is that a
+  // circumferential strap on a body of revolution is a HOOP, and a hoop seen
+  // side-on is one short line - it breaks the tube along its length and does
+  // nothing at all across it.
+  //
+  // A real fuselage is also joined the other way. Its skin comes in rolled
+  // sheets that run FORE AND AFT, and the longitudinal laps between them are
+  // 10-12 cm doublers standing about a centimetre proud, running the whole
+  // length. Under a key 58 degrees up they are the one feature on the surface
+  // that gives a continuous lit crest with a hairline shadow beside it all the
+  // way from the nose to the tail - which is exactly the information a smooth
+  // near-white cylinder has none of.
+  //
+  // Seven of them, at the SAME angular boundaries _paint's `cin` strake index
+  // uses (a = -pi + k*2pi/7), so the modelled joint and the painted value step
+  // are the same joint. ~460 triangles an airframe, in the `airframe` bucket
+  // that already exists: no draw call, and 40 aircraft cost 18k of the 2.2M
+  // triangles this level has spare.
+  // ---------------------------------------------------------------------------
+  var STRAKE_N = 7;
+
+  function fuseStrakes(B, spec, key, proud) {
+    var half = spec.len * 0.5;
+    var flat = spec.flat === undefined ? 0.35 : spec.flat;
+    var ov = spec.ovoid === undefined ? 1.06 : spec.ovoid;
+    var ns = Math.max(8, Math.min(18, Math.round(spec.len * 0.42)));
+    // off the nose ogive and off the tail cut, where a straight strap would
+    // stand clear of a surface that is turning under it
+    var t0 = 0.135, t1 = 0.925;
+    var ai, i, k;
+    for (ai = 0; ai < STRAKE_N; ai++) {
+      var A = -Math.PI + ai * (Math.PI * 2 / STRAKE_N);
+      var rings = [];
+      for (i = 0; i <= ns; i++) {
+        var t = t0 + (t1 - t0) * (i / ns);
+        var z = -half + t * spec.len;
+        var r = Math.max(0.035, fuseProfile(t, spec)) + 0.0015;
+        var yc = fuseYc(t, spec);
+        // the doubler is an ARC LENGTH, not an angle: a 55 mm half-width on a
+        // 2.55 m transport and on a 0.86 m fighter are the same strap
+        var hw = M.clamp(0.055 * (spec.len / 20.0), 0.030, 0.11) / r;
+        hw = M.clamp(hw, 0.012, 0.30);
+        var ring = [];
+        for (k = 0; k < 4; k++) {
+          var da = (k === 0) ? -hw : (k === 1) ? -hw * 0.44 : (k === 2) ? hw * 0.44 : hw;
+          var up = (k === 1 || k === 2) ? proud : 0;
+          var a = A + da;
+          var c = Math.cos(a), s = Math.sin(a);
+          var rr = r + up, rv = (r + up) * ov;
+          if (c < 0 && flat) rv = rv * (1 - flat * (-c) * 0.55);
+          ring.push([s * rr, yc + c * rv, z]);
+        }
+        rings.push(ring);
+      }
+      B.add(key || 'airframe', ringLoft(rings, false), null);
+    }
+  }
+
   // ---- the wing -------------------------------------------------------------
   // NACA-style thickness distribution. Six points a side is enough at the range
   // these are seen from and the leading edge still rounds properly, which is
@@ -1642,18 +1864,53 @@
   // hard sun is a black line the whole span. Splitting the loft chordwise gives
   // all three for the cost of one extra ring set - and it gives the shaded
   // UNDERSIDE a rib line as well, which is what makes a stored panel readable.
-  var UMAIN = null, UCTRL = null;
-  function splitUs(split) {
-    var i;
-    if (!UMAIN || UMAIN._s !== split) {
-      UMAIN = [];
-      for (i = 0; i < AF_U.length; i++) UMAIN.push(AF_U[i] * split);
-      UMAIN._s = split;
+  // ---------------------------------------------------------------------------
+  // AND A THIRD PIECE AT THE FRONT, BECAUSE THE UNDERSIDE IS WHAT THE SIGNATURE
+  // FRAME ACTUALLY SHOWS.
+  //
+  // hero1 stands under Sierra Seven's port wing, so the wing crosses the top of
+  // the frame as its LOWER surface: measured at 81 sRGB with a standard
+  // deviation of 37 that is almost all the shading gradient across the span, and
+  // no internal break anywhere across seven metres of chord. The chordwise
+  // split at 0.68 gives the flap slot, which is at the BACK and edge-on from
+  // underneath; from below, the feature that reads is the LEADING EDGE, because
+  // that is where the surface turns through ninety degrees and the fill on it
+  // changes by a factor of three inside twenty centimetres.
+  //
+  // So the front 15.5% of the chord becomes its own closed loft with a 1.4%
+  // slot behind it - a slat break, which is what a transport wing has there
+  // anyway. It is one more ring set (~130 triangles a panel) and it gives the
+  // underside three things it had none of: a bright rounded strip along the
+  // whole leading edge, a hard shadow line in the slot behind it, and a value
+  // step between the two.
+  // ---------------------------------------------------------------------------
+  var UMAIN = null, UCTRL = null, ULE = null, _usKey = '';
+  function splitUs(split, le) {
+    le = le || 0;
+    var key = split.toFixed(4) + '|' + le.toFixed(4);
+    if (_usKey !== key) {
+      _usKey = key;
+      var i;
+      var u0 = 0;
+      if (le > 0.02) {
+        ULE = [];
+        for (i = 0; i < AF_U.length; i++) ULE.push(AF_U[i] * le);
+        u0 = le + 0.014;
+        UMAIN = [];
+        // the main box no longer owns the nose, so it gets an even distribution
+        // with a slightly denser front where the slot shadow lives
+        var mb = [0, 0.04, 0.12, 0.26, 0.45, 0.66, 0.84, 1.0];
+        for (i = 0; i < mb.length; i++) UMAIN.push(u0 + (split - u0) * mb[i]);
+      } else {
+        ULE = null;
+        UMAIN = [];
+        for (i = 0; i < AF_U.length; i++) UMAIN.push(AF_U[i] * split);
+      }
       UCTRL = [];
       var base = [0, 0.05, 0.15, 0.32, 0.55, 0.78, 1.0];
       for (i = 0; i < base.length; i++) UCTRL.push(split + 0.022 + (1 - split - 0.022) * base[i]);
     }
-    return [UMAIN, UCTRL];
+    return [UMAIN, UCTRL, ULE];
   }
 
   function loftPanel(B, spec, key, mirror, us) {
@@ -1675,13 +1932,19 @@
 
   var _ctrlTint = new THREE.Color();
 
+  var _leTint = new THREE.Color();
+
   function buildWing(B, spec, key, mirror) {
     // Anything under ~1.5 m of chord is a stabiliser tip or a rack shelf and a
     // 2 cm hinge slot in it is sub-pixel: those stay one piece.
     var split = spec.split;
     if (split === undefined) split = (spec.rootC > 1.6 && spec.span > 1.2) ? 0.68 : 0;
     if (!split) return loftPanel(B, spec, key, mirror, spec.us || AF_U);
-    var us = splitUs(split);
+    // The slat break, on big panels only: below about three metres of chord the
+    // slot is under a centimetre at the tip and it is a z-fight, not a feature.
+    var le = spec.le;
+    if (le === undefined) le = (spec.rootC > 3.2 && spec.span > 3.0) ? 0.155 : 0;
+    var us = splitUs(split, le);
     var rings = loftPanel(B, spec, key, mirror, us[0]);
     var old = B.tint;
     // the control surface, a step darker: it is drooped, so its upper skin
@@ -1690,6 +1953,18 @@
     else _ctrlTint.setRGB(0.90, 0.90, 0.91);
     B.tint = _ctrlTint;
     loftPanel(B, spec, key, mirror, us[1]);
+    if (us[2]) {
+      // and the slat a step BRIGHTER, which is not decoration: a leading edge
+      // is the one part of a stored airframe that is still bare polished
+      // alclad, because it is the part that gets rain-eroded rather than
+      // sun-chalked. It is also what turns the slot behind it into a readable
+      // dark line instead of two identical greys meeting.
+      if (old) _leTint.setRGB(Math.min(2, old.r * 1.09), Math.min(2, old.g * 1.09),
+        Math.min(2, old.b * 1.085));
+      else _leTint.setRGB(1.09, 1.09, 1.085);
+      B.tint = _leTint;
+      loftPanel(B, spec, key, mirror, us[2]);
+    }
     B.tint = old;
     return rings;
   }
@@ -1700,7 +1975,15 @@
   function wingUnderRibs(B, spec, key, mirror, s) {
     var old = B.tint, oldP = B.paint;
     B.tint = null; B.paint = 'metal';
-    var n = 6, i;
+    // NINE ribs, not six, and three spanwise stringers rather than one spar.
+    // Measured on hero1: the port wing's lower skin crossed 500 px of frame at
+    // 81 sRGB with no internal break, and six ribs on a twenty-metre semi-span
+    // is one line every 3.5 m - at that spacing they read as three stray marks
+    // rather than as structure. Nine at 2.4 m, crossed by three continuous
+    // spanwise runs, is a GRID, and a grid is what the eye reads as an
+    // engineered surface. Each member is a box or a strut in a bucket that
+    // already exists: 26 primitives a panel, no draw call.
+    var n = 9, i;
     var sgn = mirror ? -1 : 1;
     for (i = 1; i <= n; i++) {
       var f = i / (n + 1);
@@ -1713,13 +1996,44 @@
       B.boxR(key || 'skin_dull', 0.045 * s, 0.10 * s, c * 0.80,
         x, y - th * 0.30, zle + c * 0.46, 0, 0, 0, 0.01);
     }
-    // the main spar, running the span at 30% chord
-    var cm = M.lerp(spec.rootC, spec.tipC, 0.5);
-    var zm = spec.rootZ + spec.span * 0.5 * Math.tan(spec.sweep) + cm * 0.32;
-    B.strut(key || 'skin_dull', 0, spec.y - spec.thick * spec.rootC * 0.30, spec.rootZ + spec.rootC * 0.32,
-      sgn * spec.span, spec.y + spec.span * Math.tan(spec.dihedral) - spec.thick * spec.tipC * 0.30,
-      spec.rootZ + spec.span * Math.tan(spec.sweep) + spec.tipC * 0.32, 0.09 * s, 0.13 * s);
-    void zm;
+    // Spanwise runs at 32%, 55% and 76% of chord: the main spar, the rear spar
+    // and the flap-hinge beam. Each is solved at both ends off the same recipe
+    // the skin is, so it hugs the panel through the sweep and the dihedral.
+    var runs = [[0.32, 0.09, 0.13], [0.55, 0.055, 0.085], [0.76, 0.045, 0.070]];
+    for (i = 0; i < runs.length; i++) {
+      var cf = runs[i][0];
+      B.strut(key || 'skin_dull',
+        0, spec.y - spec.thick * spec.rootC * 0.30, spec.rootZ + spec.rootC * cf,
+        sgn * spec.span,
+        spec.y + spec.span * Math.tan(spec.dihedral) - spec.thick * spec.tipC * 0.30,
+        spec.rootZ + spec.span * Math.tan(spec.sweep) + spec.tipC * cf,
+        runs[i][1] * s, runs[i][2] * s);
+    }
+    // ---- THE FUEL-TANK ACCESS PANELS ---------------------------------------
+    // The single most recognisable thing about a transport wing seen from
+    // below, and the reason it is worth its triangles here: hero1 stands UNDER
+    // Sierra Seven's port wing, so the largest object in the level's signature
+    // frame presents its lower skin, and a lower skin with a rib grid on it is
+    // still a grid on a blank sheet. What breaks a blank sheet is a REPEATED
+    // OBJECT at a human scale the eye can count - and a row of 40 cm oval
+    // hatches on a 45 cm pitch, each ringed by bolts and standing 8 mm proud, is
+    // exactly that. Fourteen plates a panel, in the bucket that already exists.
+    if (spec.rootC > 3.2 && spec.span > 3.0) {
+      var np = 14;
+      for (i = 0; i < np; i++) {
+        var pf = (i + 0.6) / (np + 0.4);
+        var pxx = sgn * pf * spec.span;
+        var pc = M.lerp(spec.rootC, spec.tipC, pf);
+        var pzle = spec.rootZ + Math.abs(pxx) * Math.tan(spec.sweep);
+        var pyy = spec.y + Math.abs(pxx) * Math.tan(spec.dihedral);
+        var pth = M.lerp(spec.thick, spec.thick * 0.78, pf) * pc;
+        // the hatch itself, then the doubler ring it sits in
+        B.boxR(key || 'skin_dull', 0.40 * s, 0.030 * s, 0.52 * s,
+          pxx, pyy - pth * 0.46, pzle + pc * 0.44, 0, 0, 0, 0.012);
+        B.boxR(key || 'skin_dull', 0.52 * s, 0.016 * s, 0.64 * s,
+          pxx, pyy - pth * 0.455, pzle + pc * 0.44, 0, 0, 0, 0.010);
+      }
+    }
     B.tint = old; B.paint = oldP;
   }
 
@@ -2004,23 +2318,68 @@
 
   // ---- the shrink wrap ------------------------------------------------------
   // Sprayed vinyl (spraylat) over the canopy, the intakes and every opening.
-  // Modelled as an inflated, WRINKLED cap - the wrinkles are the whole point,
-  // because a smooth white blob over a canopy is a bar of soap.
+  //
+  // ---------------------------------------------------------------------------
+  // A COCOON IS BONDED TO THE SKIN AT ITS EDGE. THIS ONE WAS A FLYING CARPET.
+  //
+  // The previous loft was six rings of a CONSTANT 223-degree arc at a CONSTANT
+  // standoff from the body, run between two z stations - i.e. a rectangular
+  // sheet held a fixed distance off the fuselage, with four hard cut edges in
+  // mid-air. On Sierra Seven's flight deck at 25 m that printed exactly as the
+  // review described it: a rectangular swatch with a hard boundary, the near
+  // edge standing 20 cm proud of the crown with daylight visible under it and
+  // the far edge stopping dead against nothing.
+  //
+  // No material can fix that, because the defect is the SILHOUETTE. What
+  // spraylat actually is: a sheet laid over the opening and sprayed down, so
+  // (a) its footprint is a LOZENGE - broad over the canopy, closing to a
+  // narrow band at each end - not a rectangle, (b) at every edge it rolls over
+  // and tucks back onto the skin, which under a hard overhead key is a lit
+  // crest with a hairline shadow under it, and (c) at the two ends it sinks
+  // BELOW the skin line, so there is no edge to see at all.
+  //
+  // Three envelopes do all of that, and none of them costs a draw call:
+  //   env(t)   sin(pi t)^0.42 - 1 across the middle, 0 at both ends, and the
+  //            exponent is what keeps the middle broad instead of making the
+  //            whole thing a rugby ball
+  //   half(t)  the arc half-width, so the footprint narrows with the envelope
+  //   hem(u)   a smoothstep over the outer 14% of the arc that pulls the last
+  //            points in and DOWN, which is the rolled edge
+  // Nine rings instead of six for the wrinkle to have somewhere to live: 128
+  // triangles a cocoon against 80, in the `wrap` bucket that already exists.
+  // ---------------------------------------------------------------------------
   function buildWrapCap(B, z0, z1, r, yc, segs, bulge, seed) {
     var oldT = B.tint, oldP = B.paint;
     B.tint = null; B.paint = 'wrap';
-    var rings = [], i, k, ns = 5;
+    var rings = [], i, k, ns = 9;
+    // 15 points round the arc whatever the caller asks for. The wrinkle field
+    // below runs to sin(a*7), and at the 9 points the callers pass that is one
+    // sample per lobe: the sheet came back faceted into a regular diamond
+    // lattice, which is the wrinkle ALIASING rather than a wrinkle.
+    var na = Math.max(15, segs);
     for (i = 0; i <= ns; i++) {
       var t = i / ns;
       var z = M.lerp(z0, z1, t);
-      var rr = r * (1 + bulge * Math.sin(t * Math.PI) * 0.55);
+      // 1 across the middle, 0 at the two ends where the sheet is bonded down
+      var env = Math.pow(Math.max(0, Math.sin(Math.PI * t)), 0.42);
+      // the lozenge footprint: 108 degrees of arc at the ends, 223 in the middle
+      var half = Math.PI * (0.30 + 0.32 * env);
+      // and the standoff, which goes NEGATIVE at the ends so the sheet sinks
+      // under the skin line rather than stopping on top of it
+      var rr = r * (0.882 + 0.118 * env + bulge * env * 0.55);
       var ring = [];
-      for (k = 0; k < segs; k++) {
-        var a = -Math.PI * 0.62 + (k / (segs - 1)) * Math.PI * 1.24;
+      for (k = 0; k < na; k++) {
+        var u = k / (na - 1);
+        var a = -half + u * 2 * half;
+        // the rolled hem: the outer 14% of the arc turns in and drops
+        var eu = Math.min(u, 1 - u) / 0.14;
+        var he = eu >= 1 ? 0 : (1 - M.smoothstep(0, 1, eu));
         // sagging vinyl: a low-frequency wrinkle round the section and along it
-        var wr = 1 + 0.045 * Math.sin(a * 4.0 + seed) * Math.sin(t * 5.3 + seed * 1.7)
-          + 0.028 * Math.sin(a * 7.0 - seed * 2.1);
-        ring.push([Math.sin(a) * rr * wr, yc + Math.cos(a) * rr * wr * 1.02, z]);
+        var wr = 1 + 0.052 * Math.sin(a * 4.0 + seed) * Math.sin(t * 5.3 + seed * 1.7)
+          + 0.030 * Math.sin(a * 7.0 - seed * 2.1);
+        var rad = rr * wr * (1 - 0.26 * he);
+        ring.push([Math.sin(a) * rad,
+          yc + Math.cos(a) * rad * 1.02 - r * 0.30 * he, z]);
       }
       rings.push(ring);
     }
@@ -2231,6 +2590,8 @@
         // PANEL_PITCH is in the airframe's OWN (already scaled) local units,
         // which is the same space _paint bands in - so no `* s` here.
         fuseLapStraps(B, spec, 'airframe', PANEL_PITCH, 0.011 * s);
+        // and the joints running the OTHER way. See fuseStrakes.
+        fuseStrakes(B, spec, 'airframe', 0.011 * s);
       } catch (eL) { GAME.logError('boneyard.laps', eL); }
     }
 
@@ -2698,13 +3059,18 @@
     var i, j;
     B.paint = 'ground'; B.tint = null;
 
-    // 1.5 m cells, not 3. The joint grid and the crack field are painted (see
-    // buildCrackTexture) and always were, but at a 3 m step the slab's own
-    // CROWN and its settlement trough were being sampled too coarsely to read
-    // as anything but a plane, and the same 3 m vertices carry the wear colour,
-    // so every wear feature finer than three metres arrived as a soft blob.
-    // 32k triangles against a 4.5M budget is not a trade.
-    var slab = gridSurface(PAD_X0 - 3, PAD_X1 + 3, PAD_Z0 - 3, PAD_Z1 + 3, 1.5,
+    // ---- THE SLAB, ON ITS OWN BAY LINES ------------------------------------
+    // It was a uniform 1.5 m grid, which is finer than the 3 m it replaced and
+    // still could not carry the one mark that matters. See gridSurfaceXZ and
+    // bayAxis: five interior samples a bay leaves a ~1.45 m interior step -
+    // marginally finer than the grid it replaces, so every wear feature that
+    // used to resolve still does - and adds four lines across each joint, which
+    // is what lets `_paint` put a hard-edged 15 cm sealant band and a per-bay
+    // value step on 204 x 168 m of concrete that previously had neither.
+    // 45k triangles against 32k, in the same draw call.
+    var slab = gridSurfaceXZ(
+      bayAxis(PAD_X0 - 3, PAD_X1 + 3, JOINT_X, 5),
+      bayAxis(PAD_Z0 - 3, PAD_Z1 + 3, JOINT_Z, 5),
       function (x, z) { return groundY(x, z, N); });
     B.add('hardstand', slab, null);
 
@@ -3760,6 +4126,138 @@
     return out;
   }
 
+  // =============================================================== THE FAR YARD
+  // MEASURED FIRST, AND THE MEASUREMENT REVERSED THE OBVIOUS DIAGNOSIS.
+  //
+  // This level carries the highest flat_area_pct in the build and the assumption
+  // - mine and the review's - was that the culprit is 204 x 168 m of bare slab.
+  // It is not. Mapping analyze.py's own flat mask (9x9 local sd < 0.008) onto a
+  // 6 x 6 tile grid says the opposite in every framing:
+  //
+  //                   top third      middle third     bottom third (the slab)
+  //   hero1           50-100%          2-66%              0-37%
+  //   hero3           58-100%         10-88%              0-31%
+  //   overview        50-96%           2-52%              0-21%
+  //
+  // The hardstanding is already the LEAST flat part of every frame. What is
+  // flat is the upper half: a clear noon sky, which is physically flat and which
+  // this level is not allowed to fill with cloud, and - the part that IS mine -
+  // the band underneath it, where a 200 m yard ends at a fence and nothing
+  // stands between that fence and a hazed mountain 430 m away. On hero3 that
+  // band alone (rows 2-3, left half) runs 58-88% flat.
+  //
+  // The honest fix is the truthful one. AMARG is four thousand airframes over
+  // ten square kilometres; the fence at 120 m is a sector fence, not the edge of
+  // the world, and the roster's one-line brief for this level is "vast flat
+  // sprawl". So the yard CONTINUES: four bands of parked airframes in the
+  // 118-180 m ring, outside the fence and inside the near ridge's toe at 200 m,
+  // where a 15 m fin still subtends 5-6 degrees and reads as a hard silhouette
+  // against pale ground.
+  //
+  // They are built at the station count a 150 m silhouette actually resolves -
+  // a 9-segment fuselage, five-point aerofoils, no gear, no stencils, no straps
+  // - so 56 of them cost about 26k triangles in the `airframe` bucket that
+  // already exists. No draw call, no collider (the fence is the boundary and the
+  // navgrid stops at the pad), and nothing else in the file has to know.
+  // ===========================================================================
+  var FAR_US = [0.0, 0.06, 0.22, 0.55, 1.0];
+  var _farWarned = false;
+
+  function buildFarAirframe(B, big) {
+    var spec = big
+      ? { len: 36, r: 2.2, segs: 9, stations: 9, centreY: 3.5, noseT: 0.16,
+          tailT: 0.58, upsweep: 0.62, tailCut: 0.74, droop: 0.08,
+          ovoid: 1.08, flat: 0.40 }
+      : { len: 22, r: 1.5, segs: 8, stations: 8, centreY: 2.5, noseT: 0.18,
+          tailT: 0.60, upsweep: 0.50, tailCut: 0.70, droop: 0.06,
+          ovoid: 1.06, flat: 0.34 };
+    buildFuselage(B, null, spec, 'airframe');
+    var ws = {
+      span: big ? 17.0 : 10.0, rootC: big ? 5.8 : 3.4, tipC: big ? 2.0 : 1.2,
+      sweep: big ? 0.34 : 0.22, dihedral: -0.02, thick: 0.13,
+      rootZ: big ? -1.2 : -0.6, y: big ? 4.4 : 3.1, sections: 2, twist: 0
+    };
+    loftPanel(B, ws, 'airframe', false, FAR_US);
+    loftPanel(B, ws, 'airframe', true, FAR_US);
+    var fs = {
+      span: big ? 8.0 : 4.4, rootC: big ? 6.0 : 3.2, tipC: big ? 2.6 : 1.4,
+      sweep: 0.60, dihedral: 0, thick: 0.10, rootZ: spec.len * 0.28,
+      y: spec.centreY + spec.r * 0.72, sections: 2, twist: 0
+    };
+    finPiece(B, fs, 'airframe', FAR_US);
+    var ss = {
+      span: big ? 3.6 : 2.2, rootC: big ? 3.0 : 1.8, tipC: big ? 1.4 : 0.9,
+      sweep: 0.36, dihedral: 0.03, thick: 0.10,
+      rootZ: fs.rootZ + (big ? 4.6 : 2.4), y: fs.y + fs.span - 0.25,
+      sections: 2, twist: 0
+    };
+    loftPanel(B, ss, 'airframe', false, FAR_US);
+    loftPanel(B, ss, 'airframe', true, FAR_US);
+  }
+
+  function buildFarYard(L, B, rng, N) {
+    // Rows parallel to the fence they stand outside, on the 118-180 m ring.
+    // The corners are deliberately left empty: a continuous wall of aeroplanes
+    // round the horizon is a hedge, and what makes a sprawl read as a sprawl is
+    // that it is organised in rows with lanes between them.
+    // Three deep per side, not two, and on a 30 m bay rather than 36. The first
+    // pass was captured and it under-delivered where it was needed most: from
+    // the hero3 standpoint the far band held ONE silhouette, because two rows of
+    // 36 m bays put roughly one aeroplane per eight degrees of a frame the near
+    // storage rows already occlude half of. Three rows means a far bay is almost
+    // never empty behind a near one, which is what a real sector boundary looks
+    // like from inside a yard and what turns a band of haze into depth.
+    //
+    // The outermost row of every band stays inside 200 m, which is where
+    // buildRidge's near band has its toe: an airframe past that stands INSIDE
+    // the bajada and pokes through it.
+    var rows = [
+      { ax: 'x', at: 120, a0: -126, a1: 126, yaw: Math.PI },
+      { ax: 'x', at: 148, a0: -126, a1: 126, yaw: Math.PI },
+      { ax: 'x', at: 176, a0: -126, a1: 126, yaw: Math.PI },
+      { ax: 'x', at: -140, a0: -126, a1: 126, yaw: 0 },
+      { ax: 'x', at: -168, a0: -126, a1: 126, yaw: 0 },
+      { ax: 'x', at: -196, a0: -126, a1: 126, yaw: 0 },
+      { ax: 'z', at: -144, a0: -104, a1: 92, yaw: Math.PI * 0.5 },
+      { ax: 'z', at: -170, a0: -104, a1: 92, yaw: Math.PI * 0.5 },
+      { ax: 'z', at: -196, a0: -104, a1: 92, yaw: Math.PI * 0.5 },
+      { ax: 'z', at: 148, a0: -104, a1: 92, yaw: -Math.PI * 0.5 },
+      { ax: 'z', at: 172, a0: -104, a1: 92, yaw: -Math.PI * 0.5 },
+      { ax: 'z', at: 196, a0: -104, a1: 92, yaw: -Math.PI * 0.5 }
+    ];
+    var bodies = [BODY.bare, BODY.grey, BODY.tan, BODY.green, BODY.white, BODY.bare];
+    var oldP = B.paint, oldT = B.tint;
+    for (var ri = 0; ri < rows.length; ri++) {
+      var R = rows[ri];
+      var step = 30.0;
+      var n = Math.max(1, Math.floor((R.a1 - R.a0) / step));
+      for (var i = 0; i <= n; i++) {
+        // a gap here and there, so the rows are inventory rather than wallpaper
+        if (rng.next() < 0.16) { rng.next(); rng.next(); rng.next(); continue; }
+        var a = R.a0 + (R.a1 - R.a0) * (i / n) + rng.range(-3.0, 3.0);
+        var x = R.ax === 'x' ? a : R.at;
+        var z = R.ax === 'x' ? R.at : a;
+        var big = rng.next() < 0.52;
+        var val = rng.range(0.52, 1.0);
+        var body = bodies[(ri * 3 + i) % bodies.length];
+        var gy = groundY(x, z, N);
+        B.paint = 'skin';
+        B.tint = bodyTint(body, 0.55, val);
+        B.pushXYZ(x, gy, z, 0, R.yaw + rng.range(-0.09, 0.09), 0);
+        // The try/catch is INSIDE the loop on purpose and cannot be hoisted to
+        // the stage() wrapper: an exception between push and pop would leave the
+        // builder's transform stack unbalanced and every later stage would be
+        // built in the wrong frame. Reported once, not eighty times.
+        try { buildFarAirframe(B, big); }
+        catch (e) {
+          if (!_farWarned) { _farWarned = true; GAME.logError('boneyard.faryard', e); }
+        }
+        B.pop();
+      }
+    }
+    B.paint = oldP; B.tint = oldT;
+  }
+
   // ---- maintenance stands, the one piece of yellow in a bleached yard --------
   function buildStand(B, x, y, z, yaw, h, w) {
     B.pushXYZ(x, y, z, 0, yaw, 0);
@@ -4231,6 +4729,34 @@
       if (surf.env !== undefined) opts.envMapIntensity = surf.env;
       if (surf.macro !== undefined) opts.macro = surf.macro;
       if (surf.ns !== undefined) opts.normalScale = surf.ns;
+      // ---------------------------------------------------------------------
+      // THE MESO BAND, AND WHY THE GROUND SURFACES NOW NAME IT.
+      //
+      // materials.js's `mesoScale` defaults to 1.82, which is a 0.55 m tile and
+      // therefore puts the family tile's octaves at 4 mm to 1.7 cm - a second
+      // MICRO layer, not the 0.1-0.6 m band the code claims. On a 204 x 168 m
+      // apron read from 3 m to 200 m that band is sub-pixel at every range past
+      // about four metres, which is most of why this level has the highest
+      // flat_area in the build: the largest surface in four of five framings
+      // carries no structure at any distance a camera is standing at.
+      //
+      // 0.35 is a 2.86 m tile, i.e. structural octaves at 9-36 cm. At 20 m that
+      // is 6-22 px and at 3 m it is the aggregate/float texture of a power-
+      // floated slab. materials.js records the trade honestly - it is a clear
+      // win at about a metre and a loss in the 10-25 m mid field for a surface
+      // whose job is to be quiet - so it is named PER SURFACE here, on the three
+      // ground materials the player reads at arm's length and nowhere else. The
+      // desert, the verge and the range keep 1.82: their job IS the mid field.
+      if (surf.meso !== undefined) opts.mesoScale = surf.meso;
+      if (surf.grain !== undefined) opts.grain = surf.grain;
+      if (surf.worldTile !== undefined) opts.worldTile = surf.worldTile;
+      if (surf.uvScale !== undefined) opts.uvScale = surf.uvScale;
+      if (surf.detailRough !== undefined) opts.detailRough = surf.detailRough;
+      // `meso` above is the SCALE (tiles per world metre). The AMPLITUDE is a
+      // different number with a confusingly similar name in materials.js, so it
+      // is spelt out here rather than overloaded.
+      if (surf.detail !== undefined) opts.detail = surf.detail;
+      if (surf.mesoAmt !== undefined) opts.meso = surf.mesoAmt;
       if (surf.col !== undefined && surf.target === undefined) opts.color = surf.col;
       if (surf.emissive !== undefined) {
         opts.emissive = surf.emissive;
@@ -4414,6 +4940,13 @@
 
     stage('big', function () { self._buildBig(B, rng, N); });
     stage('hulks', function () { self.hulks = buildHulkRow(self, B, rng, N); });
+    // A FORKED stream, deliberately: the far yard draws several hundred numbers
+    // and the main plan - thirty-four types, positions and yaws - is downstream
+    // of the same rng. Taking them off a fork means adding, removing or retuning
+    // a distant silhouette can never reshuffle the yard the level is about.
+    stage('faryard', function () {
+      buildFarYard(self, B, rng.fork ? rng.fork(0x0FA4) : rng, N);
+    });
     await GAME.yieldFrame();
 
     stage('hangar', function () { self.hangarInfo = buildHangar(self, B, rng, N); });
@@ -4673,6 +5206,7 @@
     // lambert term against them is negative), and they are aimed off the real
     // sun in update() rather than off the authored one.
     this._buildBounceFill();
+    this._buildRig();
 
     // ---- the shade record ------------------------------------------------------
     this.shadeZones = this.anchors.shadeZones;
@@ -4718,10 +5252,28 @@
     // standing on the far slab, which is what a mirage is, rather than as a
     // coat of paint over the level's only graphic asset.
     //
-    // See sharedNeeds: the displacement and the mirage want separate scalars,
-    // and the mirage wants to attenuate with the view ray's PATH LENGTH through
-    // the hot layer rather than with the lit surface's height - an eye 20 m up
-    // on a water tower looks through 3 m of it and currently gets all of it.
+    // ------------------------------------------------------------------------
+    // AND BOTH HALVES OF THAT SHARED NEED WERE ANSWERED, SO THE COMPROMISE IS
+    // OFF. postfx now carries `mirage` as its own scalar (defaulting to
+    // `strength`, so the old record still means what it meant) and bands the
+    // mirage on the view ray's PATH LENGTH THROUGH THE HOT LAYER instead of on
+    // the lit surface's height. Round 3 had to hold BOTH down to 0.55 because
+    // one number drove them; there is no longer any reason to.
+    //
+    //   strength 1.15  the displacement, and it is the half the brief actually
+    //                  asks for ("heat shimmer over the tarmac"). postfx's own
+    //                  arithmetic is heatAmount x strength x 0.57 x frameHeight,
+    //                  so BLEACH_GRADE's 0.022 at 720p gives 10.4 px of vertical
+    //                  boil against the 5.0 px round 3 could afford. The same
+    //                  note calls 3.1 px "barely separable from TAA jitter".
+    //   mirage 0.28    the inferior mirage, i.e. the pale sheet that replaces
+    //                  the far ground. heatPale x mirage = 0.154 peak
+    //                  replacement, essentially where round 3 left it (0.165) -
+    //                  because that measurement was right. What changes is that
+    //                  the ESTABLISHING eye, 20 m up on the tower catwalk,
+    //                  crosses ~3 m of hot layer instead of being charged for
+    //                  24 m of it, so the far field of the overview stops being
+    //                  painted flat while the 1.66 m hero eyes keep theirs.
     //
     // The cells are re-aimed off the storage field for the same reason: inside
     // a cell `cell` goes to 1.0, i.e. nearly double the floor, and two of the
@@ -4731,7 +5283,7 @@
     // silhouette to dissolve and where a boil over bare slab is the whole
     // point. HEAT_CELL_MAX is 6 and this uses all six.
     this.heatShimmer = {
-      y: 0.0, strength: 0.55,
+      y: 0.0, strength: 1.15, mirage: 0.28,
       cells: [
         { x: 4, z: -30, r: 30 },     // taxiway mid-ground: hero1, hero3
         { x: 4, z: 34, r: 26 },      // taxiway north, the spawn run
@@ -4801,10 +5353,151 @@
   // (~0.35) times the full vertical key, but an underside is also a metre or two
   // above the card and sees it at less than a full hemisphere, and above ~1.0
   // the wing undersides stop reading as shade at all.
+  // ---------------------------------------------------------------------------
+  // AND THE UPWARD CARD IS NOW MOSTLY THE SHARED TERM, WHICH IS THE POINT.
+  //
+  // Round 3 reported "the shared rig has no GROUND BOUNCE term for down-facing
+  // normals" as a shared need and built the local workaround below. lighting.js
+  // shipped the real one this round (`level.groundBounce`), and it is not merely
+  // the same thing in another file - it fixes the defect the workaround CAUSED.
+  //
+  // A shadowless DirectionalLight pointing straight up deposits exactly the same
+  // fill on every down-facing surface in the level, whatever is above, below or
+  // beside it. That is what "the underside is nearly as bright as the top with
+  // no contact darkening" is: not too much light, but light with no gradient in
+  // it anywhere. The shared term is a hoisted irradiance uniform weighted
+  // (0.5 - 0.5 n.y) and gated by `mix(1, skyVisibility, ao)`, so the fill
+  // FALLS OFF under a wing, under a fuselage, inside a wheel bay and against a
+  // wall - which is the contact darkening, arriving from occlusion rather than
+  // from a paint term.
+  //
+  // BOUNCE_UP_I stays at 0.16 rather than going to zero, as insurance and as
+  // physics: the yard is ringed by 200 m of sunlit desert as well as concrete,
+  // and if lighting.js ever fails to build, an underside with no fill at all is
+  // a worse frame than one with a flat fill. BOUNCE_I comes down from 1.15
+  // because groundBounce also puts half its magnitude on a vertical face, which
+  // is what the two flank cards were carrying alone.
   var BOUNCE_ELEV = -3.0 * Math.PI / 180;
   var BOUNCE_SPREAD = 48.0 * Math.PI / 180;
-  var BOUNCE_I = 1.15;
-  var BOUNCE_UP_I = 0.62;
+  var BOUNCE_I = 0.92;
+  var BOUNCE_UP_I = 0.16;
+
+  // ---------------------------------------------------------------------------
+  // WHAT THE LEVEL ASKS THE SHARED LIGHT RIG FOR.
+  //
+  // All of it is declarative - lighting.js adopts `level.groundBounce`,
+  // `level.svBox`, `level.lightRig` and `level.skyOccluders` on its own, so
+  // nothing here is a call into another system's internals and market and harbor
+  // cannot reach any of it (setGroundBounce and setSkyVisBox both refuse on a
+  // non-declarative rig).
+  // ---------------------------------------------------------------------------
+  LevelBoneyard.prototype._buildRig = function () {
+    // ---- THE GROUND BOUNCE --------------------------------------------------
+    // `amount` IS THE GROUND ALBEDO, which is the whole reason this is worth
+    // taking over the local card: the level states a material property it
+    // genuinely knows and lighting.js measures the magnitude off the live rig.
+    // 0.30 is what SURF.hardstand actually is - 0x958a6f resolves to linear
+    // luminance 0.249, and the sand ring either side of it is brighter - so the
+    // term follows the sun down, is zero at night, and cannot be wrong at a
+    // different hour the way a hand-set intensity is.
+    //
+    //   ao 0.55   more than the 0.35 default. 0 is the physically exact answer
+    //             for a wing standing over open tarmac and it is exactly the
+    //             answer that produced the defect: the whole complaint about
+    //             these airframes is that their undersides have no gradient.
+    //             Over half the gate buys a real falloff under a wing root, a
+    //             fuselage belly and a wheel bay while an open wing panel keeps
+    //             most of its fill.
+    //   max 0.62  a ceiling, not a tuning knob, and it is set BELOW the physical
+    //             answer on purpose. 0.30 x (about 5.2 of key plus sky) is 1.6,
+    //             and 1.6 units on every underside in the yard is brighter than
+    //             the local card it replaces by a factor of 2.6 - which would
+    //             have made the exact complaint worse while fixing its cause.
+    //             0.62 keeps the open-underside total (0.16 + 0.62) within a
+    //             quarter of a stop of where round 3 left it and spends the
+    //             whole of the change on the GRADIENT.
+    this.groundBounce = { amount: 0.30, ao: 0.55, max: 0.62, lamps: 0.15 };
+
+    // ---- WHERE THE SKY-VISIBILITY VOLUME'S CELLS GO -------------------------
+    // The fixed 44 x 26 x 76 grid over this level's full bounds gives 6.0 x 1.0
+    // x 2.9 m cells, and a 6 m cell cannot tell an aeroplane from the gap beside
+    // it. Spent on the region the five framings actually use - the pad plus the
+    // water tower and a fence-width of margin - it is 4.9 x 1.0 x 2.5 m, which
+    // is 1.5x the resolution in x and 1.2x in z for nothing. Two cells of margin
+    // are left beyond the last surface that matters, because the shader returns
+    // OPEN SKY over the outer ~9% of the box, which for the desert outside is
+    // the correct answer anyway.
+    this.svBox = { min: [-108, -8, -108], max: [108, 18, 84] };
+
+    // svNormal 1.20 rather than 0.60: the default is half a market cell and this
+    // level's cells are four times that, so a sample taken 0.6 m off a hangar
+    // wall never leaves the cell the wall is standing in.
+    //
+    // practicalsEarly 1 closes a BUILD-ORDER RACE lighting.js found and left
+    // opt-in because closing it moves an already-graded level. It is taken here
+    // deliberately and in the same change as the roof occluders above, because
+    // the two are the same decision: making the shed genuinely sealed is what
+    // costs the interior framing its (wrong) daylight, and adopting the
+    // practicals BEFORE the sky-visibility bake is what pays it back - the six
+    // high bays get their emissive bulbs, their halos, their clearance
+    // clamping, and the enclosure boost of up to 1.55x that a lamp in a sealed
+    // room is entitled to and that a lamp in an accidentally-open one is not.
+    // Costs +2 draw calls out of ~70 spare.
+    this.lightRig = { preset: 'sun', svNormal: 1.20, practicalsEarly: 1 };
+
+    // ---- GEOMETRY THAT BLOCKS LIGHT BUT NOT MOVEMENT ------------------------
+    // The lighting owner measured this level specifically: a probe 5 m off the
+    // floor INSIDE the closed 32 x 32 m hangar returned sky visibility 0.962
+    // while a point 1 m outside its east wall returned 0.719, because the shed
+    // publishes four wall colliders and a floor and builds its roof as geometry
+    // only - nobody walks on a roof, so nobody made it solid. The volume was
+    // reporting the inside of the building as more open than the apron beside
+    // it, which is the precise failure it exists to prevent.
+    //
+    // The wings do NOT need to be here: _addAircraftColliders already publishes
+    // a thin slab per wing panel at wing height, so every airframe in the yard
+    // is in the occupancy grid on the movement side as well.
+    //
+    // THE RIDGE STRIP IS LEFT OPEN WHERE THE MONITORS ARE, and that is
+    // load-bearing rather than tidy. _solveShaft traces DOWN from a declarative
+    // level's published aperture; a continuous roof slab would stop that trace
+    // 0.6 m below the origin and the three monitor shafts - the only reason the
+    // interior framing is not a black box - would be replaced by 3 m stubs
+    // floating above the roof. So the slab is split either side of a 6.4 m ridge
+    // strip, and that strip is filled in only BETWEEN the monitors. Which is
+    // also just true: a roof monitor is a hole in a roof.
+    var mx = (HG_X0 + HG_X1) * 0.5, mz = (HG_Z0 + HG_Z1) * 0.5;
+    var d = HG_Z1 - HG_Z0;
+    var roofY = HG_FLOOR + (HG_EAVE + HG_RIDGE) * 0.5 - 0.4;
+    var occ = [];
+    function slab(cx, cy, cz, hx, hy, hz) {
+      occ.push({
+        type: 'box',
+        center: new THREE.Vector3(cx, cy, cz),
+        halfExtents: new THREE.Vector3(hx, hy, hz),
+        quaternion: new THREE.Quaternion(),
+        material: 'metal'
+      });
+    }
+    var ridgeHalf = 3.2;
+    var wHalf = (mx - ridgeHalf - HG_X0) * 0.5;
+    slab(HG_X0 + wHalf, roofY, mz, wHalf, 1.0, d * 0.5);
+    slab(HG_X1 - wHalf, roofY, mz, wHalf, 1.0, d * 0.5);
+    // the ridge strip, blocked everywhere except a 4.4 m window at each monitor
+    var mons = [HG_Z0 + 7.0, HG_Z0 + 16.5, HG_Z0 + 26.0];
+    var edges = [HG_Z0];
+    for (var i = 0; i < mons.length; i++) { edges.push(mons[i] - 2.2, mons[i] + 2.2); }
+    edges.push(HG_Z1);
+    for (i = 0; i + 1 < edges.length; i += 2) {
+      var z0 = edges[i], z1 = edges[i + 1];
+      if (z1 - z0 < 0.4) continue;
+      slab(mx, roofY + 1.6, (z0 + z1) * 0.5, ridgeHalf, 0.9, (z1 - z0) * 0.5);
+    }
+    // the lean-to over the south elevation, which is what gives that face its
+    // one band of real shade (buildHangar centres it on mx + 1.0)
+    slab(mx + 1.0, HG_FLOOR + 4.6, HG_Z1 + 1.75, 7.0, 0.5, 1.9);
+    this.skyOccluders = occ;
+  };
 
   LevelBoneyard.prototype._buildBounceFill = function () {
     this._bounce = [];
@@ -5014,6 +5707,7 @@
   // that has been painted over.
   // ---------------------------------------------------------------------------
   var _pc = new THREE.Color();
+  var _bay = [0, 0];
   var _pinv = new THREE.Matrix4();
   var _plp = new THREE.Vector3();
   var _pln = new THREE.Vector3();
@@ -5197,7 +5891,58 @@
           // in for cracks it could never resolve.
           var cr = crackField(x, z, noise);
           broad += cr * 0.16;
-          narrow += jointDip(x, z) * 6.0;
+          // ---- THE BAY LATTICE ---------------------------------------------
+          // `narrow += jointDip(x, z) * 6.0` was here, and it was dead code in
+          // everything but principle: jointDip returns non-zero only within
+          // 7.5 cm of a joint and the mesh sampled every 1.5 m, so out of ~16k
+          // slab vertices a handful ever landed inside one. The mesh now puts
+          // four sample lines across every joint (see bayAxis), so the two marks
+          // an airfield apron actually carries can finally be drawn:
+          //
+          //   SEAL   the sawn joint filled with black bitumen. It is the single
+          //          strongest mark on the surface and the only one that reads
+          //          at 5 m AND at 150 m, because it is a CONTINUOUS LINE - the
+          //          eye integrates it along its length long after the width has
+          //          gone sub-pixel. That is exactly what 204 m of concrete with
+          //          nothing on it was missing.
+          //   LIP    the 20 cm either side, where the saw has spalled the arris
+          //          and exposed pale aggregate. It goes into B (edge wear), not
+          //          R, because a chipped edge is bare stone, not dirt - so the
+          //          joint reads as a dark line with a light halo, which is what
+          //          gives it depth instead of making it a drawn stripe.
+          //
+          // The seal gets its OWN multiplier for the same reason the bay tone
+          // does, and it was measured wrong the first time: routed into
+          // `narrow` it vanished exactly where the level most needs it. `narrow`
+          // caps at 0.55 and the taxiway's own tyre ribbons already reach 0.90
+          // there, so along taxiway Alpha - the leading line of the spawn view,
+          // hero1 and hero3, and the one stretch of slab a player is ever within
+          // five metres of - the joints were being added to an accumulator that
+          // was already clipped and printed nothing at all.
+          var jd = jointDist(x, z);
+          var seal = jd < 0.105 ? 1 : (jd < 0.15 ? 1 - (jd - 0.105) / 0.045 : 0);
+          var lip = (jd >= 0.105 && jd < 0.62) ? (1 - (jd - 0.105) / 0.515) : 0;
+          var sealF = 1 - seal * 0.44;
+          // ---- AND EACH BAY IS ITS OWN POUR ---------------------------------
+          // A 7.62 m bay is one truck of concrete placed on one day. Adjacent
+          // bays differ by 6-10% in value - different aggregate, different age,
+          // different amount of traffic since - and from the tower that
+          // patchwork IS the surface. It cannot be a smooth noise field: the
+          // whole point is that the step happens AT the joint and nowhere else,
+          // which is why it had to wait for the mesh to have an edge there.
+          //
+          // It gets its OWN multiplier rather than joining `broad`, and that is
+          // measured rather than tidy: `broad` is capped at 0.18 and sandCover
+          // alone reaches 0.04-0.18 across the open apron, so the accumulator is
+          // AT its ceiling over much of the slab and anything added to it there
+          // is discarded. A bay's value is the concrete's own, not dirt on top
+          // of it, so it belongs outside both dirt accumulators anyway.
+          bayIndex(x, z, _bay);
+          var bh = hash01(_bay[0], _bay[1], 2.3);
+          var bh2 = hash01(_bay[0], _bay[1], 7.9);
+          var bayF = 1 - bh * 0.15;
+          // one bay in six has been ground back or re-topped and is much cleaner
+          if (bh2 > 0.84) bayF = Math.min(1, bayF + 0.11);
           // ---- G: dry, except where something has leaked --------------------
           g = 1.0;
           for (var pi = 0; pi < spills.length; pi++) {
@@ -5222,9 +5967,9 @@
           // 0.75 only reaches 0.59. Broad stays gentle, narrow goes properly
           // black.
           r = (1 - Math.min(M.saturate(broad), 0.18) * 0.72) *
-              (1 - Math.min(M.saturate(narrow), 0.55) * 1.18);
+              (1 - Math.min(M.saturate(narrow), 0.55) * 1.18) * bayF * sealF;
           // ---- B: chipped arrises and spalled crack edges --------------------
-          b = 1 - M.saturate(cr * 0.40 + jointDip(x, z) * 5.0) * 0.55;
+          b = 1 - M.saturate(cr * 0.40 + lip * 0.62 + (bh2 > 0.84 ? 0.18 : 0)) * 0.55;
           b = M.saturate(b + noise.fbm2(x * 0.028 + 40, z * 0.028 - 17, 3) * 0.05);
         } else if (mode === 'sand') {
           // Desert pavement is NOT one tone. Between the pad and the range there
@@ -5327,10 +6072,17 @@
           // 44 m aluminium tube read as a real one.
           var pan = noise.fbm2(x * 0.55 + z * 0.13 + 60, y * 1.7 - z * 0.42, 3);
           var chalk = 1 + pan * 0.048;
-          // sun bleach on up-facing surfaces, grime on down-facing ones
+          // Sun bleach on up-facing surfaces, grime on down-facing ones - and
+          // the down-facing half goes from 0.16 to 0.26, which is the ALBEDO
+          // half of the review's "the underside is nearly as bright as the top".
+          // The LIGHTING half of it is the shared ground-bounce term (see
+          // _buildRig), which supplies the gradient; this supplies the reason
+          // there should be one. An aircraft underside is where forty years of
+          // hydraulic mist, exhaust soot and wheel spray end up, and it is the
+          // one part of an airframe nobody has ever washed.
           var upf = M.saturate(ny);
           var dnf = M.saturate(-ny);
-          var lift = 1 + upf * 0.10 - dnf * 0.16;
+          var lift = 1 + upf * 0.10 - dnf * 0.26;
           // hydraulic and exhaust streaking runs DOWN the sides
           var strk = noise.fbm2(x * 2.1 + z * 0.4, y * 0.16 - 3.0, 2) * 0.5 + 0.5;
           var flank = 1 - M.saturate(1 - Math.abs(ny)) * strk * 0.14;
@@ -5887,10 +6639,27 @@
     // the request here rather than trusting the profile is what stops SUN_EL
     // and the real key drifting apart again (see the SUN_EL header). If the
     // profile already asked for this figure the call returns immediately.
+    // ---------------------------------------------------------------------
+    // AND IT STANDS DOWN FOR ?sunElev=, WHICH IT WAS SILENTLY DEFEATING.
+    //
+    // Measured this round: `python tools/shoot.py lv_hero1 --level boneyard
+    // --extra sunElev=70` returned a frame BYTE-EQUAL in every metric to the
+    // default - flat, edges, grade, shadow tint, highlight tint and mean luma
+    // all identical to four decimal places. sky.js reads the URL hook while it
+    // resolves the env profile, i.e. before the level exists; this call runs on
+    // frame 1, i.e. after it; so the level's constant won every time and the one
+    // QA hook that lets a reviewer photograph a different sun height before
+    // committing it was dead on the only level in the roster whose whole premise
+    // is its sun height. Skipping the call when the URL has asked for an arc
+    // restores it, and changes nothing about a normal capture.
     if (!this._arcSet && ctx && ctx.sky && typeof ctx.sky.setSolarArc === 'function') {
       this._arcSet = true;
-      try { ctx.sky.setSolarArc(SUN_EL_DEG); }
-      catch (e) { GAME.logError('boneyard.solararc', e); }
+      var urlArc = GAME.params && GAME.params.sunElev != null &&
+        isFinite(parseFloat(GAME.params.sunElev));
+      if (!urlArc) {
+        try { ctx.sky.setSolarArc(SUN_EL_DEG); }
+        catch (e) { GAME.logError('boneyard.solararc', e); }
+      }
     }
 
     if (!this._sunChecked && ctx && ctx.sky && ctx.sky.sunDirection) {
