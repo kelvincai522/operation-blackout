@@ -42,10 +42,15 @@
 //     exactly as level_refinery.js does, so the practicals have a diffuse term
 //     to land on.
 //
-//   * lighting.js is at its 24-practical cap and the level owns all 24.  This
-//     file therefore adds NO scene lights - only emissive fixture faces
-//     (beacons, the tanker's marker lamps, the tell-tales on the MCC), which
-//     cost nothing and read as sources under the bloom.
+//   * THE PRACTICAL BUDGET BELONGS TO THE LEVEL FILE, AND IT MOVED.  It used to
+//     be a flat 24 in lighting.js and level_refinery.js owned every one; this
+//     round lighting.js split it into a BUILD count and a per-frame ACTIVE
+//     count, and the level publishes practicals 30 / active 26 through
+//     level.lightRig.  Nothing here changes: a light is a decision about the
+//     SITE and the site is level_refinery.js's, so this file still adds NO
+//     scene lights - only emissive fixture faces (beacons, the tanker's marker
+//     lamps, the tell-tales on the MCC), which cost nothing and read as sources
+//     under the bloom.  If a dressed region needs a fixture, ask for it there.
 //
 //   * Every cross-module call is guarded.  ctx.level, ctx.materials and
 //     ctx.weather may be missing or broken; we degrade, never throw.

@@ -58,31 +58,40 @@
 // refinery is lit by its own plant, and the sky is there to be silhouetted
 // against.
 //
-// So the level publishes 24 practicals - the cap - and they are designed as
-// three families that never overlap in colour:
+// So the level publishes 30 practicals (26 active - lighting.js split the old
+// flat cap into a BUILD count and a per-frame ACTIVE count this round) and they
+// are organised on ONE RULE, stated in full at the head of _buildLamps:
 //
-//   FIRE FROM ABOVE.  The flare tip sits 50 m up and carries 4400 cd at
-//     1900 K with kind 'fire', so lighting.js gives it noise-driven flicker
-//     and a colour that tracks its own intensity. At 50 m that is 1.8 lux
-//     straight down and still 0.35 lux at the far end of the site - a warm,
-//     moving, SITE-WIDE key arriving from overhead. It is the single most
-//     important light in the level and it is the reason nothing here is black.
+//   COLOUR TEMPERATURE IS DECIDED BY WHERE THE LIGHT LANDS IN THE FRAME.
+//   Anything reaching the plant above about 15 m is FIRE, 1900-2400 K.
+//   Anything reaching the ground plane, the plinths, the column skirts and the
+//   bottom third of a tall object is FLOOD, 6400-7600 K.
 //
-//   SODIUM FROM THE MASTS.  Four 13.2 m high masts down the road at 1950 K.
-//     ~4.5 lux in the pool under each, staggered left/right so the road reads
-//     as alternating amber pools rather than a wash.
+// The two meet on the same object at a height, which is the brief stated as a
+// silhouette rather than as a wash. Three families implement it:
 //
-//   COLD FLOODS FROM BELOW.  Mercury-vapour units at 5600 K on the unit
-//     plinths, the rack legs and the bund walls, aimed UP at the columns and
-//     ACROSS the tank shells. These are what model the silhouettes, and their
+//   FIRE FROM ABOVE.  The flare at 61 m carrying 8600 cd at 1950 K with kind
+//     'fire', so lighting.js gives it noise-driven flicker and a colour that
+//     tracks its own intensity; plus the two fixtures that reach where it
+//     cannot - a 2150 K flood off the east rack at C1's mid shell, and a
+//     2200 K bulkhead on C1's own platform 30 m up.  Between them they own
+//     everything above 15 m: the columns, the derrick, the bridges and the
+//     rack tops.  This family is the level and it is why nothing here is black.
+//
+//   SODIUM FROM THE MASTS.  Four 13.2 m high masts down the road at 1950 K,
+//     plus wall packs on the control building's south elevation and the pump
+//     house's gable.  ~4.5 lux in the pool under each, staggered left/right so
+//     the road reads as alternating amber pools rather than a wash.
+//
+//   COLD FLOODS FROM BELOW.  Mercury-vapour units at 6400-7600 K on the unit
+//     plinths, the rack legs, the tank-farm apron and the gate tower.  They own
+//     the SLAB and the bottom third of every tall object, and they stop there:
+//     the column uplights are held to a 34 m reach so they cover the skirt and
+//     the first 16 m of shell and no more, which is both what a ground flood
+//     can physically do and what leaves the fire something to own.  Their
 //     blue-white against the flare's orange is exactly the split postfx's
 //     'sodium' grade is built to print (highlight leg R/B 1.150/0.800 against
-//     a 0.80/1.28 shadow leg). The GATE TOWER at (21, 60) belongs to this
-//     family and is its largest member: a 15.4 m four-head unit at 6600 K over
-//     the weighbridge and the truck park, which is the only source anywhere
-//     south of z = 46 and therefore the only thing lighting the foreground of
-//     the establishing frame. It is paid for out of the old heater flood -
-//     the rig is ON lighting.js's 24-entry cap and nothing here is free.
+//     a 0.80/1.28 shadow leg).
 //
 // The 50:1 rule is held by arithmetic, not by hope: peak pool ~4.7 lux, and
 // the flare alone puts 0.3-1.8 lux on every square metre of the site, so the
@@ -304,8 +313,18 @@
     sandy:     { uv: 0.055, cast: false, recv: true, wear: false,
                  base: 'sand', rough: 0.95, env: 0.55 },
     // ---- concrete structure -------------------------------------------------
+    // meso/grain for the reason given at length on `tank`, and the bund wall is
+    // where it shows: cropped at 2.2x it is the second-largest surface in hero3
+    // and it prints as PEBBLEDASH - a dense sub-pixel stipple with the formwork,
+    // the tie plugs and the pour joints (all real geometry) sitting inside it
+    // rather than on it. materials.js measured mesoScale 0.35 on this exact wall
+    // in this exact frame and reported it BETTER at 2-4 m and WORSE at 8-14 m,
+    // so the scale is a wash here and the AMPLITUDE is the lever, same as on the
+    // shells. The wall keeps its full detail tile, which is what carries it at
+    // the two metres the player walks past it at.
     wall:      { uv: 0.36, cast: true, recv: true, wear: true,
-                 base: 'concrete_wall', ns: 0.42 },
+                 base: 'concrete_wall', ns: 0.42,
+                 meso: 0.40, grain: 0.60 },
     kerb:      { uv: 0.72, cast: true, recv: true, wear: false,
                  base: 'concrete', rough: 0.90, ns: 0.62 },
     // ---- steel --------------------------------------------------------------
@@ -374,9 +393,17 @@
     // cylinder that reading fails on. The panel scale this entry's note is
     // arguing for is carried by the lap seams and the band rings, which are
     // real geometry standing 30-55 mm proud, not by the albedo.
+    // meso/grain for the same measured reason as `tank` below, but only half as
+    // hard: hero2 stands the eye 1-4 m from this surface, where a 4 cm detail
+    // tile is 40-160 px and is doing real work, while hero1 and hero3 read the
+    // same jackets at 45-110 m where it is a fifth of a pixel. One number has to
+    // serve both, so the base map loses an octave and the meso band - which is
+    // 4 mm to 1.7 cm content and therefore sub-pixel at EVERY published
+    // stand-off past about six metres - loses most of its amplitude.
     lag:       { uv: 1.95, cast: true, recv: true, wear: false,
                  base: 'painted_metal', albedoTarget: 0x8b9095,
-                 rough: 0.58, metal: 0.42, env: 1.15, ns: 0.46 },
+                 rough: 0.58, metal: 0.42, env: 1.15, ns: 0.46,
+                 meso: 0.20, grain: 0.70 },
     // ---- TANK SHELL -----------------------------------------------------------
     // THE CAMOUFLAGE WAS THE BASE MAP, and it took three passes to find because
     // the previous two both looked at the wrong layer.
@@ -439,9 +466,37 @@
     // reads as chipped paint when the player walks up to the shell. The value
     // structure that has to survive at 30 m is all authored per vertex and per
     // course in _paint, where the vertex grid can carry it.
+    // ---- FIFTH PASS, AND THIS TIME THE UV IS NOT TOUCHED --------------------
+    // Six changes to `uv` (0.30 / 0.62 / 0.34 / 0.90 / 1.75 / 2.90) and two to
+    // `albedoTarget` all failed the same way, and the reason is that NONE OF THE
+    // OFFENDING SIGNAL IS IN THE BASE MAP. Cropping hero3's T2 at 2.2x shows a
+    // dense, uniform, multi-hue speckle at a ONE-TO-TWO PIXEL period - cream,
+    // pale blue-grey and tan - which is not what a 512 tile mipped down 32:1 can
+    // print. It is what an UNMIPPABLE signal prints.
+    //
+    // materials.js's own numbers name it. painted_metal carries `detail: 0.5`
+    // at `detailCm: 4` and `meso: 0.45` at the default mesoScale 1.82 - and that
+    // scale is a 0.55 m tile whose octaves deliver 4 mm to 1.7 cm features. Both
+    // layers are evaluated procedurally in the fragment shader, so neither has a
+    // mip chain: at the 10-30 m this surface is read at, 4 mm to 4 cm is 0.05 to
+    // 0.2 of a pixel and the result is pure aliasing, at every distance, forever.
+    // That is the cottage cheese, and no uv scale can reach it because the uv
+    // scale does not apply to it.
+    //
+    // The other half of the same finding: materials.js MEASURED mesoScale 0.35
+    // on this exact surface in this exact frame and reported it WORSE (Laplacian
+    // 0.0981 -> 0.1612, isolated specks 10.91% -> 28.77%), because 0.35 is the
+    // right answer for a surface read at a metre and this one is read at twenty.
+    // So the lever is the AMPLITUDE, not the scale: meso and detail come down to
+    // where they stop being sub-pixel noise, and `grain` decimates the base map
+    // set by one octave on top of that. What carries the surface instead is what
+    // was always supposed to - the plate courses, the vertical butt welds, the
+    // wind girder, the nozzle bosses and the sourced weep streaks, all of which
+    // are real geometry or per-vertex value and all of which survive mipping.
     tank:      { uv: 2.90, cast: true, recv: true, wear: false,
                  base: 'painted_metal', albedoTarget: 0x83827c,
-                 rough: 0.72, metal: 0.38, env: 1.20, ns: 0.34 },
+                 rough: 0.72, metal: 0.38, env: 1.20, ns: 0.34,
+                 meso: 0.10, detail: 0.16, grain: 0.55 },
     // The flare derrick, and only the flare derrick. MEASURED: painted in the
     // structural steel palette it was invisible from the hero1 standpoint -
     // 114 m of dry air, thin members and a dark albedo against the dark half of
@@ -4690,7 +4745,8 @@
     // Volumetric cone hints, consumed generically by lighting.js.
     this.lightShafts = [];
     // Full override of lighting.js's built-in lamp table. This level has no sun
-    // worth the name; these 24 entries ARE its lighting.
+    // worth the name; these 30 entries ARE its lighting. (24 until this round -
+    // see THE RIG below for why the cap moved and what the six extra buy.)
     this.practicalLights = [];
     this.litWindows = [];
     this.plumes = [];
@@ -4715,6 +4771,53 @@
     this.bounds = new THREE.Box3(
       new THREE.Vector3(SITE_X0 - 4, -8.0, SITE_Z0 - 4),
       new THREE.Vector3(SITE_X1 + 4, 52.0, SITE_Z1 + 4));
+
+    // ------------------------------------------------------------ THE RIG ----
+    // Scalars merged OVER the 'mixed' preset main.js already selects. Every one
+    // of these was a constant in lighting.js until this round and every one is
+    // MEASURED against this level rather than chosen.
+    //
+    //   practicals / active - the 24-entry cap was the binding constraint on
+    //     this file for three rounds and its own comments say so four times
+    //     ("the rig is ON lighting.js's 24-entry cap and nothing here is free").
+    //     lighting.js has now measured what the 24 protected: not uniforms
+    //     (24 spots is 168 of 1024 vectors) and not samplers (every rig
+    //     practical is castShadow:false), only the per-fragment light loop at
+    //     ~0.05 ms each. 30 built / 26 active buys the six fixtures the
+    //     measured dead regions need for ~0.1 ms and ZERO draw calls - both the
+    //     bulb and the halo are instances in a mesh that is drawn anyway.
+    //
+    //   shadowFill - lighting.js published a measurement taken on THIS level's
+    //     lv_overview at 0.25: the control building's shaded face median
+    //     0.0088 -> 0.0154 (+75%) with lit paving unchanged. The cast shadow of
+    //     the plant is what puts the establishing frame's bottom-right corner
+    //     under the dead-cell floor, so this is the cheapest half of that fix.
+    //
+    //   svNormal - the sky-visibility volume spends its fixed 44x26x76 cells on
+    //     a 200 x 26 x 200 m box, i.e. 4.55 x 1.00 x 2.63 m per cell. The
+    //     default 0.60 m sample offset does not leave the cell a wall is
+    //     standing in, so a bund wall in the open reads as if it were roofed.
+    //     2.2 m is a little under half the X cell, which is the rule the shared
+    //     module states.
+    //
+    //   groundBounce - `amount` IS the ground albedo and this site is not one
+    //     material: 156 m of grey hardstanding at ~0.30, a 15 m asphalt
+    //     carriageway at ~0.10 and an oiled gravel margin at ~0.15. 0.22 is the
+    //     area weight. `lamps` 0.40 rather than the 0.25 default because the
+    //     illuminated part of this floor really is a large continuous surface -
+    //     four mast pools, a gate tower and two rack floods all land on the
+    //     same slab - and `ao` stays low because a refinery underside stands
+    //     over bright paving, which is the physical case the shared note names.
+    this.lightRig = {
+      practicals: 30,
+      active: 26,
+      shadowFill: 0.24,
+      svNormal: 2.20,
+      svGamma: 0.78,
+      svFloor: 0.075
+    };
+    this.groundBounce = { amount: 0.22, ao: 0.30, lamps: 0.40, max: 1.10 };
+
     this.anchors = buildAnchors(this.noise);
     this.sunDir = new THREE.Vector3(SUN_X, SUN_Y, SUN_Z).normalize();
   }
@@ -4880,6 +4983,17 @@
       // apron, cladding) and materials.js already exposes the dial that fixes
       // it locally, per request, without touching anyone else's level.
       if (surf.ns !== undefined) opts.normalScale = surf.ns;
+      // ---- THE THREE SURFACE-FREQUENCY DIALS --------------------------------
+      // `meso` and `detail` are the amplitudes of the two PROCEDURAL bands
+      // materials.js evaluates in the fragment shader; `grain` decimates the
+      // sampled base map set by whole octaves on the CPU. All three existed;
+      // only `grain` is new, and only `grain` was documented before this round.
+      // They are the only way to reach a signal that has no mip chain - see the
+      // note on SURF.tank for the measurement that made this necessary.
+      if (surf.meso !== undefined) opts.meso = surf.meso;
+      if (surf.detail !== undefined) opts.detail = surf.detail;
+      if (surf.grain !== undefined) opts.grain = surf.grain;
+      if (surf.mesoScale !== undefined) opts.mesoScale = surf.mesoScale;
       if (surf.side !== undefined) opts.side = surf.side;
       if (surf.alphaTest !== undefined) opts.alphaTest = surf.alphaTest;
       if (surf.emissive !== undefined) {
@@ -5149,9 +5263,9 @@
   };
 
   // ============================================================= THE LAMP RIG ==
-  // 24 entries, which is exactly lighting.js's cap for a declarative level, so
-  // the ORDER matters: if anything is ever dropped it must be dropped off the
-  // end. They are listed most-important first.
+  // 30 entries against a published `practicals: 30` (see THE RIG in the
+  // constructor). The ORDER still matters - if the budget is ever lowered,
+  // lighting.js drops off the END - so they are listed most-important first.
   //
   // Calibration is taken from the one measured number in the build: level 1's
   // street sodium puts 8.6 lux on the pavement under it, against an ambient
@@ -5160,12 +5274,12 @@
   // I = E * d^2 for the surface the fixture actually aims at:
   //
   //   high mast   13.2 m over the road, want 4.4 lux  ->  760
-  //   column up   22 m to the shell mid-point, 3.1    ->  1500
+  //   column up   17.6 m to the shell FOOT, 2.5       ->  780
   //   tank flood  13 m to the shell, 5.3              ->  900
   //   rack flood  10.8 m to the road, 7.0             ->  820
-  //   derrick up  28 m up the lattice, 1.6            ->  1250
+  //   derrick up  14 m up the lattice, 6.4            ->  1250
   //   fluoro      5.3 m to the pump-house floor, 3.3  ->  92
-  //   flare       50 m to grade, 2.5                  ->  6200
+  //   flare       40 m to C1's head, 5.3              ->  8600
   //
   // ---- THREE THINGS THE FIRST RIG GOT WRONG, ALL MEASURED ------------------
   //
@@ -5188,6 +5302,43 @@
   //    that shell was landing on the objects the cones were meant to reveal -
   //    most damagingly a 62 m cone of warm haze straight up the flare derrick.
   //    Every entry below now states its beam gain explicitly.
+  //
+  // ---- 4. THE PREMISE WAS INVERTED, AND IT IS A RULE, NOT A TASTE ----------
+  // MEASURED on hero1: the top 140 rows of the signature frame came back 17.2%
+  // warm / 35.5% cool at mean R-B +0.0097, and rows 430-560 came back 51.9%
+  // warm / 8.7% cool at +0.0363. LEVELS_ROSTER specifies the exact opposite -
+  // "orange fire from above and cold floods from below" - so the level was
+  // delivering its own sentence upside down.
+  //
+  // The largest cool mass above 15 m is the column row, and it is not marginal:
+  // sampling C1/C2's shells between rows 120 and 290 gives 15.6% warm against
+  // 67.7% cool at R-B -0.0067, i.e. the second-tallest object in the frame is
+  // ACTIVELY BLUE. It is lit that way by three 7600 K uplights aimed 24 m up
+  // the shells and one 6800 K rack flood aimed 12 m up them, all four of which
+  // reach the section the fire is supposed to own.
+  //
+  // FOUR THINGS WERE ELIMINATED BY MEASUREMENT BEFORE THIS WAS CHANGED, because
+  // the same symptom has three innocent explanations on this level:
+  //   ?ltRig=env:0.10      C2 shell 0.0546 -> 0.0542   the sky probe is not it
+  //   ?ltRig=cfill:0.04    C2 shell 0.0546 -> 0.0517   the character fill is not it
+  //   ?ltRig=amb/sky/bnc   tank shell / frame median 11.6 -> 11.5   the fills are not it
+  //   ?ltRig=active:1      tank shell 0.396 -> 0.061    IT IS THE PRACTICALS
+  // (the fog was excluded arithmetically: 0.0040/m over 9-25 m is 3.6-9.5%.)
+  //
+  // So the rig is now organised on ONE RULE, and every entry below states which
+  // side of it the fixture is on:
+  //
+  //   THE FIRE FAMILY, 1900-2400 K, is everything mounted high that throws
+  //     DOWNWARD or ACROSS: the flare itself, the sodium masts, the rack deck
+  //     lamp, the column-row bulkhead. It owns the plant above about 15 m.
+  //   THE FLOOD FAMILY, 6400-7600 K, is everything that throws UPWARD or rakes
+  //     the slab from below 12 m. It owns the ground plane, the plinths, the
+  //     column SKIRTS and the bottom third of every tall object.
+  //
+  // The two families meet ON THE SAME OBJECT at a height, which is the whole
+  // point: a 41 m column with a cold foot and a fire-lit top states the brief in
+  // one silhouette, and a ground flood physically cannot reach 40 m anyway -
+  // holding it to 16 m is the honest answer as well as the composed one.
   //
   // lighting.js gives every entry an emissive bulb and an additive halo for
   // free, so this file builds only the FIXTURES - the masts, the brackets, the
@@ -5250,9 +5401,24 @@
     // mercury and fluorescent units carry the mid-ground on their own. The
     // hero1 mark stands 110 m from it, so the road under the lens is now lit by
     // sodium and mercury only, and photographs as warm grey rather than brick.
+    // ---- 8600 cd / 125 m, NOT 6200 / 110, AND THE RANGE IS STILL THE POINT ---
+    // Round 3 fixed "everything is orange" by winding the range 240 -> 110 and
+    // that finding stands: a 1950 K source reaching every square metre of a
+    // 190 m site is an ambient, not a key. What it also did, unintentionally, is
+    // hand the whole upper plant to the mercury units, because at 6200 cd the
+    // fire puts 3.8 lux on C1's top against 1.3 from an uplight 28 m away and a
+    // 0.56 rad SPOT concentrates its 1.3 while the fire spreads its 3.8.
+    //
+    // Solved, not tuned. 8600 cd puts 5.3 lux on C1's head at 40 m and 14 lux on
+    // the derrick's mid panel at 25 m - which is what a 46 m flame 25 m away
+    // actually does - while 125 m of range still leaves the far apron alone:
+    // three.js windows a point light by (1 - (d/range)^4)^2, so at the 110 m the
+    // hero1 mark stands off the arrival is 8600/12100 x 0.160 = 0.11 lux, i.e.
+    // a hundredth of a mast pool. The fire gets brighter WHERE IT STANDS and no
+    // brighter at all where round 3 measured the damage.
     var fl = this.anchors.flare;
     push('rf_flare', 'fire', fl.flame.x, fl.flame.y + 3.4, fl.flame.z,
-      1950, 6200, 110, 0, null,
+      1950, 8600, 125, 0, null,
       // haloMax 7.0, not 11.0. An additive halo eleven metres across, centred
       // 3.4 m above a flame that sits directly over the derrick, was washing
       // the top third of the very object it is meant to light.
@@ -5383,10 +5549,26 @@
     //
     // Each sightline was checked against the other three columns: none of the
     // three crosses another shell.
+    // ---- AND THE AIM COMES DOWN, WHICH IS THE PREMISE FIX -------------------
+    // The fourth column of each row was +24 / +19 / +15 metres above the
+    // fixture, i.e. these cones were painting the column shells 20-25 m up -
+    // exactly the band the brief assigns to the fire, and exactly where hero1
+    // measured 67.7% cool. It is also not what a ground flood can physically do:
+    // at 28 m the arrival is 1.3 lux and falling as 1/d^2.
+    //
+    // Re-solved for the SKIRT AND THE FOOT, which is the half of the brief these
+    // fixtures are actually for. Aim +11.5 m over a 15.8 m stand-off is 26 deg
+    // of elevation; a 0.42 rad half-angle puts the lower cone edge at 2 deg (so
+    // it rakes the plinth deck on its way in rather than burning the refractory
+    // at 4 m, which is the failure this fixture has already been re-solved for
+    // twice) and the upper edge at 50 deg, which meets the near shell at 16 m of
+    // height. `distance` 34 then hard-stops it: 34 m from a head 15.8 m out is
+    // 30 m of shell, so nothing above that gets a photon from a mercury unit and
+    // the flare owns the top 25 m of a 43 m column outright.
     var UPS = [
-      [20.6, -30.0, 28.0, 24.0, -43.0],
-      [20.6, -10.0, 26.0, 19.0, -24.0],
-      [21.0, 3.5, 28.5, 15.0, -8.0]
+      [20.6, -30.0, 28.0, 11.5, -43.0],
+      [20.6, -10.0, 26.0, 10.5, -24.0],
+      [21.0, 3.5, 28.5, 9.0, -8.0]
     ];
     // ---- THE HEAD HAS TO STAND ABOVE THE SKIRT, AND IT DID NOT --------------
     // MEASURED on hero2, where C1's base fills a fifth of the frame: the column
@@ -5433,7 +5615,11 @@
       // 1050 rather than 1150: with the stand-off tripled the aim-point lux is
       // already up on where it was, and this trims the plinth pool the oblique
       // throw now lays down on its way to the shell.
-      push('rf_colup_' + ui, 'mercury', ux, uy + 3.62, uz, 7600, 1050, 60, 0.56, uaim,
+      // 780 / 34 m / 0.42 rad, not 1050 / 60 / 0.56. The aim-point lux goes UP
+      // (780 over a 17.6 m throw is 2.5 against 1050 over 25.3 m giving 1.6)
+      // because the target moved down the shell toward the fixture; what comes
+      // off is the REACH, which is the whole change.
+      push('rf_colup_' + ui, 'mercury', ux, uy + 3.62, uz, 7600, 780, 34, 0.42, uaim,
         { haloMax: 2.2, haloGain: 0.50, beam: 0.09 });
     }
 
@@ -5519,18 +5705,31 @@
         { haloMax: 2.0, haloGain: 0.48, beam: 0.45 });
     }
 
-    // ---- 14. flood off the east rack, up at the columns --------------------------
+    // ---- 14. flood off the east rack, across at the columns -----------------------
+    // ---- SODIUM, NOT MERCURY, AND IT IS THE FOURTH COLD SOURCE ON THE COLUMNS ----
+    // This was the last of the four fixtures putting 6800 K light on the section
+    // of shell between 14 and 20 m - the transition band where the cold foot has
+    // to hand over to the fire. A cold unit there does not just fail to state
+    // the brief, it CANCELS it: the flare's 1950 K arriving on the same plate
+    // averages to white, which is precisely what round 3 measured as a "dead-even
+    // grey wash" and tried to fix by moving the ratio instead of the geometry.
+    //
+    // At 2150 K on a 7.4 m rack bent throwing ACROSS and slightly UP, it is in
+    // the fire family by the rule at the head of this function, and it is the
+    // one fixture that can put warm light on the column row from a height the
+    // ground cannot reach. Its glass flips warm with it - a cold-lensed fitting
+    // throwing sodium is the tell that a lamp was retuned without its geometry.
     (function () {
       var x = ER_X + ER_HALF - 0.2, z = -46.0;
       var y = gy(x, z) + ER_TIERS[1] + 0.35;
-      var aim = [26.0, y + 12.0, -44.0];
+      var aim = [26.0, y + 10.0, -44.0];
       B.paint = 'steel';
       B.strut('struct', x, y, z, x + 0.8, y + 0.25, z, 0.07, 0.07);
-      floodHead(x + 0.9, y + 0.25, z, aim, 1.30, false);
+      floodHead(x + 0.9, y + 0.25, z, aim, 1.30, true);
       // beam 0.07: same finding as the column uplights. This cone runs 14 m
       // diagonally up across hero2's sky and was one of the four pale wedges.
-      push('rf_rack_e', 'mercury', x + 0.9, y + 0.25, z, 6800, 820, 44, 0.78, aim,
-        { haloMax: 2.0, haloGain: 0.48, beam: 0.07 });
+      push('rf_rack_e', 'sodium', x + 0.9, y + 0.25, z, 2150, 780, 44, 0.78, aim,
+        { haloMax: 2.2, haloGain: 0.70, beam: 0.07 });
     })();
 
     // ---- 15-17. the pump house interior ------------------------------------------
@@ -5737,10 +5936,23 @@
     // object in the level the whole composition depends on, and because it is
     // cold it also does the second job - it is the largest cool mass in hero1,
     // which is the frame that measured 6.0% cool.
+    // ---- AND ITS AIM COMES DOWN FOR THE SAME REASON THE COLUMNS' DID --------
+    // MEASURED, and it is the most legible instance of the inversion in the
+    // whole level: lv_overview shows a 52 m lattice standing directly under a
+    // burning flare tip and reading as a PALE BLUE-WHITE mast. The fire is 10 m
+    // above the derrick head and at 8600 cd puts 86 lux on it; nothing a ground
+    // fixture can do belongs up there, and a 6400 K one is fighting the level's
+    // own subject.
+    //
+    // So the rake stops at 12 m instead of 26. Same fixture, same family, same
+    // job as the column uplights - cold foot under a fire-lit top - and the
+    // shorter throw at the same candela roughly triples the lux on the bottom
+    // three panels and on the flare pad, which is ground the signature frame's
+    // right third had nothing on.
     (function () {
       var x = FL_X + 12.5, z = FL_Z + 7.5;
       var y = gy(x, z) + 5.4;
-      var aim = [FL_X - 1.5, gy(FL_X, FL_Z) + 26.0, FL_Z - 1.0];
+      var aim = [FL_X - 1.5, gy(FL_X, FL_Z) + 12.0, FL_Z - 1.0];
       B.paint = 'steel';
       B.cyl('struct', 0.09, 0.13, 5.2, x, gy(x, z) + 2.6, z, 0, 0, 0, 8);
       floodHead(x, y, z, aim, 1.4, false);
@@ -5751,7 +5963,7 @@
       // straight up the derrick did precisely what the halo was doing: it
       // blanketed the object it was supposed to reveal. Turning the beam off
       // keeps every one of those lumens on the STEEL.
-      push('rf_flarepad', 'mercury', x, y, z, 6400, 1250, 62, 0.46, aim,
+      push('rf_flarepad', 'mercury', x, y, z, 6400, 1250, 30, 0.46, aim,
         { haloMax: 2.2, haloGain: 0.48, beam: 0.04 });
     })();
 
@@ -5792,7 +6004,18 @@
       // 25% cool, i.e. sodium still owns the road and the cold owns the apron
       // and the kerb line, which is what "orange fire from above and cold
       // floods from below" looks like in one frame.
-      push('rf_xroad', 'mercury', x - 1.2, y + 0.2, z, 6800, 400, 42, 0.95, aim,
+      // ---- 560, AND THE 470-THEN-400 TRIM IS NOW MEASURABLY THE WRONG WAY ----
+      // The note above is right about what it saw and wrong about what to do
+      // with it now, and the difference is the whole premise fix. It came down
+      // twice because at parity with the old sodium the near field went "from
+      // too orange to grey" - but that was measured when EVERYTHING ABOVE 15 m
+      // WAS ALSO COLD, so a cold near field could only average with a cold far
+      // field. With the column row, the derrick and the rack tops handed back to
+      // the fire, the same cold on the same slab is now the other half of a
+      // split rather than the second half of a wash: hero1's lower third
+      // measured 56.5% warm against 8.7% cool after the premise change, i.e. the
+      // near field is where the cool has gone missing.
+      push('rf_xroad', 'mercury', x - 1.2, y + 0.2, z, 6800, 560, 42, 0.95, aim,
         { haloMax: 1.8, haloGain: 0.42, beam: 0.25 });
     })();
 
@@ -5881,8 +6104,199 @@
       B.strut('struct', x - 0.90, y, z, x - 0.10, y + 0.10, z, 0.07, 0.07);
       B.tube('rust', x - 0.95, y - 4.9, z + 0.12, x - 0.95, y - 0.1, z + 0.12, 0.030, 5);
       floodHead(x, y + 0.10, z, aim, 1.30, false);
-      push('rf_wapron', 'mercury', x, y + 0.10, z, 6800, 600, 38, 0.86, aim,
+      // 800, not 600, for the same reason rf_xroad went up: this is the other
+      // cold source on the ground the signature frame stands on, and the cool
+      // half of the split now has to live down here.
+      push('rf_wapron', 'mercury', x, y + 0.10, z, 6800, 800, 38, 0.86, aim,
         { haloMax: 2.0, haloGain: 0.48, beam: 0.50 });
+    })();
+
+    // ==========================================================================
+    // 25-30. THE SIX FIXTURES THE RAISED BUDGET BUYS
+    //
+    // Every previous round of this file ends the same way - "re-allocated, not
+    // added: the rig is ON lighting.js's 24-entry cap and nothing here is free" -
+    // and three fixtures in a row were spent by taking one away from somewhere
+    // else. lighting.js has now split that cap into a BUILD count and a per-frame
+    // ACTIVE count and measured what it was protecting (the per-fragment light
+    // loop at ~0.05 ms each, not uniforms and not samplers), so this level
+    // publishes practicals 30 / active 26 and the six below are ADDITIONS.
+    //
+    // None of them is decoration. Each one is placed at a region located by
+    // measurement, not by eye - the 8x8 cell medians of the two framings that
+    // fail the corrected dead-region gate, back-projected through the published
+    // pose to world coordinates:
+    //
+    //   lv_overview  14.06%   cells (5,0) (5,1) (6,0) (7,0) at 0.035-0.041
+    //                         -> x -25..-4, z 66..80, the site's south-west
+    //                            corner, 34-54 m from a camera 30 m up
+    //                and cells (6,5) (6,6) (7,5) (7,6) (7,7) at 0.034-0.037
+    //                         -> x 34..52, z 50..72, the ground south and east
+    //                            of the control building
+    //   lv_hero3     12.50%   cells (1,7) (2,6) (2,7) (3,6) (3,7) (5,6) (5,7)
+    //                         (6,7) at 0.003-0.041
+    //                         -> the WEST RACK'S OUTBOARD FACE at 13-25 m and
+    //                            4-12 m of height, which is the entire right
+    //                            third of that framing and had no fixture on
+    //                            either side of it
+    // ==========================================================================
+
+    // ---- 25. THE RACK'S WEST FACE ---------------------------------------------
+    // hero3's right third is 22 bents of unlit lattice: eight of its sixteen
+    // right-hand cells measure 0.003-0.041 against a 0.045 floor, and three of
+    // them are at 0.003, i.e. black. The rack is lit from the road side (rf_deck,
+    // rf_rack_0) and from ON it (rf_rack_1, rf_wapron, both aimed away), so its
+    // outboard flank has never had a source.
+    //
+    // A mast on the tank-farm apron raking EAST into it is what a plant puts
+    // there - it lights the aisle between the bunds and the rack - and it is the
+    // fixture that makes hero3 a composition instead of two halves: COLD steel
+    // lattice on the right against the warm shells and the twilight band on the
+    // left, which is the same warm/cool split the level's grade is built to
+    // print. 820 cd over a 14 m throw is 4.2 lux on the tier faces.
+    (function () {
+      var x = -25.0, z = -30.0;
+      var g0 = gy(x, z);
+      var y = g0 + 9.10;
+      var aim = [WR_X - WR_HALF - 0.4, g0 + 6.2, -19.0];
+      B.paint = 'wall';
+      B.box('wall', 0.90, 0.52, 0.90, x, g0 + 0.13, z, 0.02);
+      B.paint = 'steel';
+      B.cyl('struct', 0.11, 0.19, 8.90, x, g0 + 4.50, z, 0, 0, 0, 9);
+      B.cyl('struct', 0.30, 0.30, 0.06, x, g0 + 0.42, z, 0, 0, 0, 12);
+      B.box('struct', 1.40, 0.09, 0.11, x, y + 0.26, z, 0.01);
+      B.strut('struct', x, y - 0.5, z, x - 0.58, y + 0.22, z, 0.055, 0.055);
+      B.strut('struct', x, y - 0.5, z, x + 0.58, y + 0.22, z, 0.055, 0.055);
+      floodHead(x - 0.52, y, z, aim, 1.30, false);
+      floodHead(x + 0.52, y, z, [aim[0], aim[1] - 2.0, aim[2] - 13.0], 1.30, false);
+      B.tube('rust', x + 0.22, g0 + 0.5, z, x + 0.22, y - 0.4, z, 0.032, 5);
+      self.addCollider(x, g0 + 4.5, z, 0.28, 4.5, 0.28, 'metal');
+      push('rf_rackw', 'mercury', x, y, z, 6800, 820, 40, 0.92, aim,
+        { haloMax: 2.4, haloGain: 0.50, beam: 0.28 });
+    })();
+
+    // ---- 26. THE CONTROL BUILDING'S SOUTH ELEVATION ---------------------------
+    // rf_control is a porch light on the WEST face aimed further west, so the
+    // 22 m south elevation - which is the face the establishing camera actually
+    // sees, at 60 m - and the apron in front of it have nothing. Two of the
+    // overview's dead cells are that apron and a third is the wall itself.
+    // A pair of wall packs under the eaves is the fixture, and they are SODIUM
+    // because they are 6 m up throwing down: the rule at the head of this
+    // function, applied to a building.
+    (function () {
+      var cb = self.anchors.control;
+      var x = CB_X0 + 6.5, z = CB_Z1 + 0.45;
+      var y = cb.centre.y + 5.90;
+      var aim = [CB_X0 + 2.0, cb.centre.y, CB_Z1 + 13.0];
+      B.paint = 'steel';
+      B.strut('struct', x, y + 0.10, CB_Z1 + 0.06, x, y, z, 0.05, 0.05);
+      floodHead(x, y, z, aim, 1.05, true);
+      floodHead(x + 9.0, y, z, [CB_X0 + 15.0, cb.centre.y, CB_Z1 + 11.0], 1.05, true);
+      push('rf_ctrl_s', 'sodium', x + 4.5, y, z, 2100, 1150, 46, 1.10,
+        [CB_X0 + 8.0, cb.centre.y, CB_Z1 + 12.0],
+        { haloMax: 2.4, haloGain: 0.72, beam: 0.34 });
+    })();
+
+    // ---- 27. THE GATE TOWER'S EAST PAIR ---------------------------------------
+    // The tower at (21, 60) already carries four heads and only one light: the
+    // two heads aimed east at (30, 66) and (38, 52) are geometry with nothing
+    // behind them, and the truck park's east half is two more of the
+    // establishing frame's dead cells. A four-head tower really is four
+    // luminaires, so this costs no new geometry at all - only the practical the
+    // old cap would not allow. Cold, because it is a ground pool.
+    (function () {
+      var x = 21.0, z = 60.0;
+      var headY = gy(x, z) + 15.40;
+      var aim = [37.0, gy(37.0, 62.0), 62.0];
+      push('rf_gate_e', 'mercury', x + 0.9, headY, z, 6600, 1280, 62, 1.22, aim,
+        { haloMax: 2.4, haloGain: 0.50, beam: 0.26 });
+    })();
+
+    // ---- 28. THE SOUTH-WEST CORNER --------------------------------------------
+    // Four of the overview's nine dead cells are one region: x -25..-4, z 66..80,
+    // the gravel margin and the paving west of the road at the south fence.
+    // props_refinery dresses it (a laydown compound, drum stacks, a skip) and
+    // the last fixture of any kind north of it is the pump-house door at z 37.
+    // A high mast throwing north-west across it is the answer.
+    //
+    // MERCURY, and this is the one place the height rule at the head of this
+    // function is deliberately not applied - so it is worth saying exactly why,
+    // because the rule is otherwise the whole organising idea. The rule is about
+    // where light LANDS IN THE FRAME, not where the fixture hangs: a 15 m mast
+    // whose pool is on the slab is "cold floods from below" as the camera reads
+    // it, which is why rf_gate and the near road mast are already 6600-6800 K.
+    // Measured: with this fixture published as sodium the establishing frame's
+    // bottom fifth came back 75.4% warm against 1.4% cool - one orange wash
+    // across the whole foreground of a level whose palette is "orange fire /
+    // steel". Cold here puts a large cool pool between the two sodium road pools
+    // and gives that band a rhythm instead of a dye.
+    (function () {
+      var x = -12.0, z = 66.0;
+      var g0 = gy(x, z);
+      var headY = g0 + 12.40;
+      var aim = [-26.0, gy(-26.0, 74.0), 74.0];
+      B.paint = 'wall';
+      B.box('wall', 1.00, 0.58, 1.00, x, g0 + 0.14, z, 0.02);
+      B.paint = 'steel';
+      B.cyl('struct', 0.13, 0.22, 12.1, x, g0 + 6.20, z, 0, 0, 0, 10);
+      B.cyl('struct', 0.34, 0.34, 0.06, x, g0 + 0.44, z, 0, 0, 0, 12);
+      B.box('struct', 2.10, 0.10, 0.12, x, headY + 0.28, z, 0.01);
+      B.strut('struct', x, headY - 0.6, z, x - 0.92, headY + 0.24, z, 0.06, 0.06);
+      B.strut('struct', x, headY - 0.6, z, x + 0.92, headY + 0.24, z, 0.06, 0.06);
+      floodHead(x - 0.80, headY, z, aim, 1.15, false);
+      floodHead(x + 0.80, headY, z, [-4.0, g0, 76.0], 1.15, false);
+      B.tube('rust', x + 0.26, g0 + 0.5, z, x + 0.26, headY - 0.4, z, 0.035, 5);
+      B.paint = 'paint';
+      B.box('clad', 0.46, 0.85, 0.32, x + 0.55, g0 + 0.44, z + 0.30, 0.012);
+      B.paint = 'flat';
+      decalCard(B, CELL.hazard, x, g0 + 0.05, z, 2.0, 0.55, 'y', 0.9);
+      B.paint = 'steel';
+      self.addCollider(x, g0 + 6.2, z, 0.30, 6.2, 0.30, 'metal');
+      push('rf_swcorner', 'mercury', x, headY, z, 6600, 1120, 48, 1.05, aim,
+        { haloMax: 2.6, haloGain: 0.52, beam: 0.30 });
+    })();
+
+    // ---- 29. THE PUMP HOUSE'S SOUTH GABLE -------------------------------------
+    // The building reads as a dark box from the establishing mark and its own
+    // apron - the ground between it and the south-west corner - is the fourth
+    // dead cell of that group. A bulkhead over the personnel door is what a
+    // pump hall has, it is 5.5 m up throwing down, and its spill joins rf_swcorner
+    // into one continuous lit aisle instead of two isolated pools.
+    (function () {
+      var phc2 = self.anchors.pumpHouse;
+      var x = (PH_X0 + PH_X1) * 0.5 + 3.0, z = PH_Z1 + 0.35;
+      var y = phc2.floorY + 5.40;
+      var aim = [x - 3.0, phc2.floorY, PH_Z1 + 9.5];
+      B.paint = 'steel';
+      B.strut('struct', x, y + 0.14, PH_Z1 - 0.02, x, y, z, 0.05, 0.05);
+      floodHead(x, y, z, aim, 1.05, true);
+      push('rf_ph_south', 'sodium', x, y, z, 2100, 720, 34, 1.05, aim,
+        { haloMax: 2.2, haloGain: 0.75, beam: 0.34 });
+    })();
+
+    // ---- 30. THE COLUMN-ROW BULKHEAD, 30 m UP ---------------------------------
+    // The last piece of the premise fix, and the one that could not be bought by
+    // re-pointing anything: with the four cold uplights held to the bottom 16 m,
+    // the only source above that on the column row is the flare 40 m away. One
+    // fixture is not a lighting scheme for a 41 m can, and a real column carries
+    // a bulkhead on every third platform ring for exactly this reason.
+    //
+    // It stands on C1's upper platform at 30 m and throws DOWN and across at
+    // C2 - fire family by height, by aim and by colour - so the band between
+    // 14 and 30 m, which is where the mercury units used to end and where hero1
+    // measured 67.7% cool, is now warm from a source that is physically above
+    // it. 640 cd over an 18 m throw is 2.0 lux, a fifth of a mast pool: it
+    // MODELS the shells, it does not re-light the level.
+    (function () {
+      var c1 = COLS[0];
+      var x = c1.x - c1.r - 1.05, z = c1.z + 0.6;
+      var y = gy(c1.x, c1.z) + 30.0;
+      var aim = [COLS[1].x, gy(COLS[1].x, COLS[1].z) + 17.0, COLS[1].z];
+      B.paint = 'steel';
+      B.strut('struct', c1.x - c1.r - 0.10, y + 0.30, z, x, y + 0.18, z, 0.06, 0.06);
+      floodHead(x, y, z, aim, 1.05, true);
+      push('rf_colhi', 'sodium', x, y, z, 2200, 640, 40, 1.00, aim,
+        { haloMax: 2.2, haloGain: 0.72, beam: 0.14 });
     })();
 
     this.practicalLights = lamps;
@@ -5917,15 +6331,30 @@
         dir: new THREE.Vector3(0.10, -1.0, 0.05).normalize(),
         width: 3.2, length: 8.0, strength: 0.28, kind: 'hero3',
         always: true, kelvin: 1950, lux: 2.2 },
+      // ---- `land` AND `pool`, NEW THIS ROUND AND BOTH EARNED -----------------
+      // lighting.js fades a shell's last 22% to nothing, so every cone in this
+      // level stopped in mid-air a metre or two above the surface it is aimed
+      // at - which is the one thing that makes a volumetric read as a decal
+      // rather than as light. `land` extends the geometry past the traced floor
+      // so that fade is buried and depth-clipped, and `pool` puts the soft
+      // scattered ellipse where the axis actually meets the slab.
+      //
+      // Only the two that really do end on a surface ask for it. The flare cone
+      // above hangs 8 m under a tip 58 m up and ends in open air, so it stays at
+      // land 0 / pool 0 - a floor ellipse under it would be a lie and would sit
+      // on the derrick. Both pools together are ONE merged additive mesh, so the
+      // whole feature is a single draw call and about 64 triangles.
       { origin: new THREE.Vector3(PH_X1 + 0.05, phy + PH_DOOR_H - 1.1, PH_DOOR_Z),
         dir: new THREE.Vector3(0.62, -1.0, 0.0).normalize(),
         width: 3.6, length: 6.2, strength: 0.78, kind: 'interior',
-        always: true, kelvin: 2200, lux: 4.4 },
+        always: true, kelvin: 2200, lux: 4.4,
+        land: 0.65, pool: 0.85, poolR: 3.4 },
       { origin: new THREE.Vector3((HT_X0 + HT_X1) * 0.5, groundY(HT_X0, HT_Z0, N) + 2.5,
           HT_Z0 - 0.4),
         dir: new THREE.Vector3(-0.20, -1.0, -0.35).normalize(),
         width: 4.6, length: 3.2, strength: 0.30, kind: 'heater',
-        always: true, kelvin: 2200, lux: 2.0 }
+        always: true, kelvin: 2200, lux: 2.0,
+        land: 0.55, pool: 0.55, poolR: 3.0 }
     ];
   };
 
